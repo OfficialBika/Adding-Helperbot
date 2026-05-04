@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import re
+import shlex
 import tempfile
 import unicodedata
 from dataclasses import dataclass
@@ -59,6 +60,11 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "").strip()
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook").strip() or "/webhook"
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 PORT = int(os.getenv("PORT", "8080"))
+
+# Telegram /restart command -> PM2 restart (owner only)
+ENABLE_TELEGRAM_RESTART = os.getenv("ENABLE_TELEGRAM_RESTART", "false").lower() == "true"
+PM2_PROCESS_NAME = os.getenv("PM2_PROCESS_NAME", "adderbotv2").strip() or "adderbotv2"
+PM2_BIN = os.getenv("PM2_BIN", "pm2").strip() or "pm2"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
@@ -1041,6 +1047,29 @@ async def build_status_text() -> str:
     return "\n".join(lines)
 
 
+async def delayed_pm2_restart(delay_seconds: float = 1.5) -> None:
+    await asyncio.sleep(delay_seconds)
+
+    cmd = [PM2_BIN, "restart", PM2_PROCESS_NAME, "--update-env"]
+    logger.warning("Telegram restart requested. Running: %s", " ".join(shlex.quote(x) for x in cmd))
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        logger.warning(
+            "PM2 restart finished | returncode=%s | stdout=%s | stderr=%s",
+            process.returncode,
+            stdout.decode(errors="ignore")[:1000],
+            stderr.decode(errors="ignore")[:1000],
+        )
+    except Exception:
+        logger.exception("PM2 restart command failed")
+
+
 # -----------------------------------------------------
 # Handlers
 # -----------------------------------------------------
@@ -1064,6 +1093,32 @@ async def status_handler(message: Message) -> None:
 @router.message(Command("stats"))
 async def stats_handler(message: Message) -> None:
     await status_handler(message)
+
+
+@router.message(Command("restart"))
+async def restart_handler(message: Message) -> None:
+    await remember_chat(message)
+
+    user_id = message.from_user.id if message.from_user else None
+    if user_id not in OWNER_IDS:
+        return
+
+    if not ENABLE_TELEGRAM_RESTART:
+        await message.reply(
+            "Telegram restart is disabled.\n\n"
+            "Enable with:\n"
+            "<code>ENABLE_TELEGRAM_RESTART=true</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await message.reply(
+        "♻️ Restarting bot with PM2...\n"
+        f"Process: <code>{html_escape(PM2_PROCESS_NAME)}</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    asyncio.create_task(delayed_pm2_restart())
 
 
 @router.message(Command("addsudo"))
@@ -1249,6 +1304,7 @@ async def on_startup(bot: Bot) -> None:
             BotCommand(command="status", description="Show adding bot status"),
             BotCommand(command="stats", description="Show adding bot stats"),
             BotCommand(command="autosave", description="Auto-save on/off/status"),
+            BotCommand(command="restart", description="Restart bot with PM2"),
         ]
     )
     me = await bot.get_me()
