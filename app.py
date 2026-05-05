@@ -240,6 +240,7 @@ OWO_HEADER_RE = re.compile(
 )
 ID_NAME_COLON_RE = re.compile(r"^\s*(?:ID\s*)?(\d+)\s*[:\-]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 ID_NAME_SPACE_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+ID_NAME_LINE_RE = re.compile(r"^\s*(?:🆔|ID|Id|id)?\s*#?\s*(\d+)\s*[:：]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
 SMASH_ID_RE = re.compile(r"^[^\n\r]*?(?:\bID\b|🆔)\s*[:\-]?\s*#?\s*([0-9]+)\s*$", re.IGNORECASE | re.MULTILINE)
 WAIFUX_NAME_RE = re.compile(r"^[^\n\r]*?➤\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -365,6 +366,11 @@ def extract_media_handle(message: Message):
         return "photo", message.photo[-1]
     if message.video:
         return "video", message.video
+    if getattr(message, "animation", None):
+        return "video", message.animation
+    document = getattr(message, "document", None)
+    if document and str(getattr(document, "mime_type", "") or "").startswith("video/"):
+        return "video", document
     return None, None
 
 
@@ -521,11 +527,11 @@ def infer_anime_from_lines(lines: list[str], match_line_index: int) -> Optional[
 def parse_owo_message(message: Message, src: SourceDef, mode: str = "colon") -> ParsedText:
     raw = get_combined_message_text(message)
     lines = lines_from_text(raw)
-    regexes = [ID_NAME_COLON_RE]
+    regexes = [ID_NAME_LINE_RE]
     if mode == "space":
-        regexes = [ID_NAME_SPACE_RE, ID_NAME_COLON_RE]
+        regexes = [ID_NAME_SPACE_RE, ID_NAME_LINE_RE, ID_NAME_COLON_RE]
     else:
-        regexes = [ID_NAME_COLON_RE, ID_NAME_SPACE_RE]
+        regexes = [ID_NAME_LINE_RE, ID_NAME_COLON_RE, ID_NAME_SPACE_RE]
 
     name = None
     card_id = None
@@ -1260,7 +1266,7 @@ async def autosave_media(message: Message, bot: Bot, mode: str) -> None:
         await message.reply(f"auto-save error: {html_escape(str(exc))}", parse_mode=ParseMode.HTML)
 
 
-@router.message(F.photo | F.video)
+@router.message(F.photo | F.video | F.animation | F.document)
 async def media_handler(message: Message, bot: Bot) -> None:
     await remember_chat(message)
     media_type, _media = extract_media_handle(message)
@@ -1411,19 +1417,21 @@ ADD_HELPER_SOURCES: list[AddHelperSource] = [
     AddHelperSource("character_seizer", "Character Seizer", _env_inline("character_seizer", "@Character_Seizer_Bot"), ("/startseizerbot", "/startseizer", "/start_seizer"), ("/resumeseizerbot", "/resumeseizer", "/resume_seizer"), _env_forward("character_seizer", "@Seizer_Database"), ("/startfwseizerbot", "/startfwseizer", "/start_fw_seizer"), ("/resumefwseizerbot", "/resumefwseizer", "/resume_fw_seizer")),
     AddHelperSource("husbando_grabber", "Husbando Grabber", _env_inline("husbando_grabber", "@Husbando_Grabber_Bot"), ("/starthusbandograbberbot", "/starthusbandograbber", "/start_husbando_grabber"), ("/resumehusbandograbberbot", "/resumehusbandograbber", "/resume_husbando_grabber")),
     AddHelperSource("grab_your_waifu", "Grab Your Waifu", _env_inline("grab_your_waifu", "@Grab_Your_Waifu_Bot"), ("/startgrabbot", "/startgrabyourwaifu", "/start_grab_your_waifu"), ("/resumegrabbot", "/resumegrabyourwaifu", "/resume_grab_your_waifu")),
-    AddHelperSource("grab_your_husbando", "Grab Your Husbando", _env_inline("grab_your_husbando", "@Grab_Your_Husbando_Bot"), ("/startgrabyourhusbando", "/start_grab_your_husbando"), ("/resumegrabyourhusbando", "/resume_grab_your_husbando")),
+    AddHelperSource("grab_your_husbando", "Grab Your Husbando", _env_inline("grab_your_husbando", "@Grab_Your_Husbando_Bot"), ("/startgrabyourhusbandobot", "/startgrabyourhusbando", "/start_grab_your_husbando"), ("/resumegrabyourhusbandobot", "/resumegrabyourhusbando", "/resume_grab_your_husbando")),
     AddHelperSource("takers_character", "Takers Character", _env_inline("takers_character", "@Takers_character_bot"), ("/starttakersbot", "/starttakers", "/start_takers"), ("/resumetakersbot", "/resumetakers", "/resume_takers")),
-    AddHelperSource("catch_your_husbando", "Catch Your Husbando", _env_inline("catch_your_husbando", "@Catch_Your_Husbando_Bot"), ("/startcatchyourhusbando", "/start_catch_your_husbando"), ("/resumecatchyourhusbando", "/resume_catch_your_husbando")),
+    AddHelperSource("catch_your_husbando", "Catch Your Husbando", _env_inline("catch_your_husbando", "@Catch_Your_Husbando_Bot"), ("/startcatchyourhusbandobot", "/startcatchyourhusbando", "/start_catch_your_husbando"), ("/resumecatchyourhusbandobot", "/resumecatchyourhusbando", "/resume_catch_your_husbando")),
     AddHelperSource("smash_character", "Smash Character", _env_inline("smash_character", "@Smash_Character_Bot"), ("/startsmashbot", "/startsmash", "/start_smash"), ("/resumesmashbot", "/resumesmash", "/resume_smash")),
-    AddHelperSource("waifux_grab", "Waifux Grab", _env_inline("waifux_grab", "@WaifuxGrabBot"), ("/startwaifuxgrab", "/startwaifux", "/start_waifux"), ("/resumewaifuxgrab", "/resumewaifux", "/resume_waifux")),
-    AddHelperSource("catch_your_waifu", "Catch Your Waifu", _env_inline("catch_your_waifu", "@Catch_Your_Waifu_Bot"), ("/startcatchyourwaifu", "/start_catch_your_waifu"), ("/resumecatchyourwaifu", "/resume_catch_your_waifu")),
-    AddHelperSource("waifu_grabber", "Waifu Grabber", _env_inline("waifu_grabber", "@Waifu_Grabber_Bot"), ("/startwaifugrabber", "/start_waifu_grabber"), ("/resumewaifugrabber", "/resume_waifu_grabber")),
+    AddHelperSource("waifux_grab", "Waifux Grab", _env_inline("waifux_grab", "@WaifuxGrabBot"), ("/startwaifuxgrabbot", "/startwaifuxgrab", "/startwaifux", "/start_waifux"), ("/resumewaifuxgrabbot", "/resumewaifuxgrab", "/resumewaifux", "/resume_waifux")),
+    AddHelperSource("catch_your_waifu", "Catch Your Waifu", _env_inline("catch_your_waifu", "@Catch_Your_Waifu_Bot"), ("/startcatchyourwaifubot", "/startcatchyourwaifu", "/start_catch_your_waifu"), ("/resumecatchyourwaifubot", "/resumecatchyourwaifu", "/resume_catch_your_waifu")),
+    AddHelperSource("waifu_grabber", "Waifu Grabber", _env_inline("waifu_grabber", "@Waifu_Grabber_Bot"), ("/startwaifugrabberbot", "/startwaifugrabber", "/start_waifu_grabber"), ("/resumewaifugrabberbot", "/resumewaifugrabber", "/resume_waifu_grabber")),
 ]
 
 ADD_HELPER_START_COMMANDS: dict[str, AddHelperSource] = {}
 ADD_HELPER_RESUME_COMMANDS: dict[str, AddHelperSource] = {}
 ADD_HELPER_FW_START_COMMANDS: dict[str, AddHelperSource] = {}
 ADD_HELPER_FW_RESUME_COMMANDS: dict[str, AddHelperSource] = {}
+ADD_HELPER_FW_VIDEO_START_COMMANDS: dict[str, AddHelperSource] = {}
+ADD_HELPER_FW_VIDEO_RESUME_COMMANDS: dict[str, AddHelperSource] = {}
 for _src in ADD_HELPER_SOURCES:
     for _cmd in _src.start_aliases:
         ADD_HELPER_START_COMMANDS[_cmd] = _src
@@ -1433,6 +1441,15 @@ for _src in ADD_HELPER_SOURCES:
         ADD_HELPER_FW_START_COMMANDS[_cmd] = _src
     for _cmd in _src.forward_resume_aliases:
         ADD_HELPER_FW_RESUME_COMMANDS[_cmd] = _src
+    if _src.forward_chat and _src.forward_start_aliases:
+        for _cmd in _src.forward_start_aliases:
+            base = _cmd.replace("/startfw", "/startfwvideo", 1)
+            ADD_HELPER_FW_VIDEO_START_COMMANDS[base] = _src
+            ADD_HELPER_FW_VIDEO_START_COMMANDS[_cmd.replace("bot", "videobot")] = _src
+        for _cmd in _src.forward_resume_aliases:
+            base = _cmd.replace("/resumefw", "/resumefwvideo", 1)
+            ADD_HELPER_FW_VIDEO_RESUME_COMMANDS[base] = _src
+            ADD_HELPER_FW_VIDEO_RESUME_COMMANDS[_cmd.replace("bot", "videobot")] = _src
 
 
 def add_helper_clean(value: str) -> str:
@@ -1774,11 +1791,31 @@ class AddHelperService:
         finally:
             self.state.running = False
 
-    async def _collect_forward_media_ids(self, source_chat: str) -> list[int]:
+    async def _collect_forward_media_ids(self, source_chat: str, media_filter: str = "all") -> list[int]:
+        media_filter = (media_filter or "all").lower().strip()
         media_ids: list[int] = []
         async for msg in self.client.get_chat_history(source_chat):
-            if getattr(msg, "photo", None) or getattr(msg, "video", None):
-                media_ids.append(int(msg.id))
+            document = getattr(msg, "document", None)
+            has_photo = bool(getattr(msg, "photo", None))
+            has_video = bool(
+                getattr(msg, "video", None)
+                or getattr(msg, "animation", None)
+                or (
+                    document
+                    and str(getattr(document, "mime_type", "") or "").startswith("video/")
+                )
+            )
+
+            if media_filter == "video":
+                if has_video:
+                    media_ids.append(int(msg.id))
+            elif media_filter == "photo":
+                if has_photo:
+                    media_ids.append(int(msg.id))
+            else:
+                if has_photo or has_video:
+                    media_ids.append(int(msg.id))
+
         media_ids.reverse()
         return media_ids
 
@@ -1803,15 +1840,17 @@ class AddHelperService:
                     await self._sleep_with_stop(self._backoff_delay(attempt))
         raise RuntimeError(f"forward_messages failed: {last_exc}")
 
-    async def start_forward(self, source_chat: str, delay_seconds: int, resume_count: Optional[int] = None):
+    async def start_forward(self, source_chat: str, delay_seconds: int, resume_count: Optional[int] = None, media_filter: str = "all"):
         if self.is_running():
             raise RuntimeError("AddHelper is already running")
         delay_seconds = max(1, min(delay_seconds, ADD_HELPER_MAX_SEND_DELAY))
-        media_ids = await self._collect_forward_media_ids(source_chat)
+        media_filter = (media_filter or "all").lower().strip()
+        media_ids = await self._collect_forward_media_ids(source_chat, media_filter=media_filter)
         if not media_ids:
-            raise RuntimeError(f"No photo/video posts found in {source_chat}")
+            raise RuntimeError(f"No {media_filter if media_filter != 'all' else 'photo/video'} posts found in {source_chat}")
+        progress_mode = f"forward:{media_filter}" if media_filter != "all" else "forward"
         if resume_count is None:
-            _, index, sent_count, target_count = self._load_progress("forward", source_chat)
+            _, index, sent_count, target_count = self._load_progress(progress_mode, source_chat)
         else:
             index = resume_count
             sent_count = resume_count
@@ -1819,7 +1858,7 @@ class AddHelperService:
         if index >= len(media_ids):
             raise RuntimeError(f"Resume index {index} is at/after the end ({len(media_ids)})")
         self.runner_stop_event = asyncio.Event()
-        self.state = AddHelperRunnerState(True, "forward", sent_count, delay_seconds, self.resolved_target_chat, "", index, "", source_chat, target_count)
+        self.state = AddHelperRunnerState(True, f"forward:{media_filter}" if media_filter != "all" else "forward", sent_count, delay_seconds, self.resolved_target_chat, "", index, "", source_chat, target_count)
         self._save_progress(source_chat, "", index)
         self.runner_task = asyncio.create_task(self._worker_forward(source_chat, media_ids))
 
@@ -1861,6 +1900,12 @@ class AddHelperService:
         for src in ADD_HELPER_SOURCES:
             if src.forward_chat and src.forward_start_aliases:
                 lines.append(f"• {src.title}: {src.forward_start_aliases[0]} [delay] | {src.forward_resume_aliases[0]} <count> [delay]")
+        lines += ["", "Forward video-only commands:"]
+        for src in ADD_HELPER_SOURCES:
+            if src.forward_chat and src.forward_start_aliases:
+                video_cmd = src.forward_start_aliases[0].replace("bot", "videobot")
+                video_resume = src.forward_resume_aliases[0].replace("bot", "videobot")
+                lines.append(f"• {src.title}: {video_cmd} [delay] | {video_resume} <count> [delay]")
         lines += ["", "Other: /helperstatus /stophelper /resethelperprogress"]
         return "\n".join(lines)
 
@@ -1909,9 +1954,21 @@ class AddHelperService:
             await self.start_forward(src.forward_chat, delay, resume_count=count)
             await self._reply(f"Force resume forward started.\nSource: {src.forward_chat}\nCount: {count}\nDelay: {delay}s\nResolved index: {self.state.current_index}", reply_to_message_id=msg.id)
             return
+        if cmd in ADD_HELPER_FW_VIDEO_START_COMMANDS:
+            src = ADD_HELPER_FW_VIDEO_START_COMMANDS[cmd]
+            delay = add_helper_parse_delay(text, ADD_HELPER_DEFAULT_SEND_DELAY)
+            await self.start_forward(src.forward_chat, delay, media_filter="video")
+            await self._reply(f"Started forward video-only.\nSource: {src.forward_chat}\nDelay: {delay}s\nResume index: {self.state.current_index}", reply_to_message_id=msg.id)
+            return
+        if cmd in ADD_HELPER_FW_VIDEO_RESUME_COMMANDS:
+            src = ADD_HELPER_FW_VIDEO_RESUME_COMMANDS[cmd]
+            count, delay = add_helper_parse_resume(text, ADD_HELPER_DEFAULT_SEND_DELAY)
+            await self.start_forward(src.forward_chat, delay, resume_count=count, media_filter="video")
+            await self._reply(f"Force resume forward video-only started.\nSource: {src.forward_chat}\nCount: {count}\nDelay: {delay}s\nResolved index: {self.state.current_index}", reply_to_message_id=msg.id)
+            return
 
     async def _control_loop(self) -> None:
-        known = {"/addhelper", "/helper", "/helperstart", "/starthelper", "/helperstatus", "/addhelperstatus", "/stophelper", "/stopinlinebot", "/resethelperprogress", "/resetinlineprogress", *ADD_HELPER_START_COMMANDS.keys(), *ADD_HELPER_RESUME_COMMANDS.keys(), *ADD_HELPER_FW_START_COMMANDS.keys(), *ADD_HELPER_FW_RESUME_COMMANDS.keys()}
+        known = {"/addhelper", "/helper", "/helperstart", "/starthelper", "/helperstatus", "/addhelperstatus", "/stophelper", "/stopinlinebot", "/resethelperprogress", "/resetinlineprogress", *ADD_HELPER_START_COMMANDS.keys(), *ADD_HELPER_RESUME_COMMANDS.keys(), *ADD_HELPER_FW_START_COMMANDS.keys(), *ADD_HELPER_FW_RESUME_COMMANDS.keys(), *ADD_HELPER_FW_VIDEO_START_COMMANDS.keys(), *ADD_HELPER_FW_VIDEO_RESUME_COMMANDS.keys()}
         while not self.stop_event.is_set():
             try:
                 last_seen = add_helper_get_control_last_msg_id()
