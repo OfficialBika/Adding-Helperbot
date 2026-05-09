@@ -588,19 +588,93 @@ def parse_grab_label_message(message: Message, src: SourceDef) -> ParsedText:
     return parse_label_message(message, src)
 
 
+SMASH_LOOK_LINE_RE = re.compile(
+    r"look\s+at\s+this\s+character\s*(?:\n|\s)+(.+?)\s+from\s+(.+?)(?:!|！|\n|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+SMASH_FROM_LINE_RE = re.compile(r"^(.+?)\s+from\s+(.+?)(?:!|！)?$", re.IGNORECASE)
+SMASH_ANIME_COUNT_RE = re.compile(r"\s+\d+\s*/\s*\d+\s*$")
+
+
+def clean_smash_text_value(value: str) -> str:
+    value = strip_leading_symbols(value)
+    value = value.strip(" !！.,;:()[]{}")
+    return clean_value(value)
+
+
+def clean_smash_anime_value(value: str) -> str:
+    value = clean_smash_text_value(value)
+    value = SMASH_ANIME_COUNT_RE.sub("", value).strip()
+    return clean_value(value)
+
+
 def parse_smash_message(message: Message, src: SourceDef) -> ParsedText:
     raw = get_combined_message_text(message)
     lines = lines_from_text(raw)
-    useful: list[str] = []
-    for line in lines:
-        if re.search(r"\b(?:rarity|global\s+owners|owners)\b", line, re.IGNORECASE):
-            continue
-        if re.search(r"(?:\bID\b|🆔)", line, re.IGNORECASE):
-            continue
-        useful.append(strip_leading_symbols(line))
+    name: Optional[str] = None
+    anime_name: Optional[str] = None
+
+    # Smash bot has two common formats:
+    # 1) Normal card format:
+    #    Deon Arut Hart
+    #    📺 I'M Not That Kind Of Talent
+    #    🎭 Rarity: ...
+    #    ID 4704
+    #
+    # 2) "Look at this character" format:
+    #    Look at this character
+    #    Red from Pokemon!
+    #
+    #    Pokemon 0/153
+    #    ID 2945
+    #    (⚪RARITY: Common)
+
+    look_match = SMASH_LOOK_LINE_RE.search(raw)
+    if look_match:
+        name = clean_smash_text_value(look_match.group(1))
+        anime_name = clean_smash_anime_value(look_match.group(2))
+
+    if not name or not anime_name:
+        for line in lines:
+            match = SMASH_FROM_LINE_RE.match(clean_smash_text_value(line))
+            if match:
+                name = name or clean_smash_text_value(match.group(1))
+                anime_name = anime_name or clean_smash_anime_value(match.group(2))
+                break
+
+    if not name or not anime_name:
+        useful: list[str] = []
+        for line in lines:
+            cleaned = clean_smash_text_value(line)
+            if not cleaned:
+                continue
+            if re.search(r"look\s+at\s+this\s+character", cleaned, re.IGNORECASE):
+                continue
+            if re.search(r"\b(?:rarity|global\s+owners|owners)\b", cleaned, re.IGNORECASE):
+                continue
+            if re.search(r"(?:\bID\b|🆔)", cleaned, re.IGNORECASE):
+                continue
+
+            # Lines like "Pokemon 0/153" are anime/series lines, not names.
+            if SMASH_ANIME_COUNT_RE.search(cleaned):
+                anime_candidate = clean_smash_anime_value(cleaned)
+                if anime_candidate and not anime_name:
+                    anime_name = anime_candidate
+                continue
+
+            useful.append(cleaned)
+
+        if not name and useful:
+            name = useful[0]
+        if not anime_name:
+            if len(useful) >= 2:
+                anime_name = clean_smash_anime_value(useful[1])
+            elif len(useful) == 1 and name != useful[0]:
+                anime_name = clean_smash_anime_value(useful[0])
+
     parsed = ParsedText(
-        name=useful[0] if len(useful) >= 1 else None,
-        anime_name=useful[1] if len(useful) >= 2 else None,
+        name=name,
+        anime_name=anime_name,
         rarity=parse_field(raw, RARITY_PATTERNS),
         card_id=parse_field(raw, [SMASH_ID_RE]),
         command_name=src.command,
