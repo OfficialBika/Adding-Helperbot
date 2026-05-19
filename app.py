@@ -9,6 +9,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Optional
 
 import cv2
@@ -61,10 +62,11 @@ WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook").strip() or "/webhook"
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 PORT = int(os.getenv("PORT", "8080"))
 
-# Telegram /restart command -> PM2 restart (owner only)
 ENABLE_TELEGRAM_RESTART = os.getenv("ENABLE_TELEGRAM_RESTART", "false").lower() == "true"
 PM2_PROCESS_NAME = os.getenv("PM2_PROCESS_NAME", "adderbotv2").strip() or "adderbotv2"
 PM2_BIN = os.getenv("PM2_BIN", "pm2").strip() or "pm2"
+
+CHECKINLINE_MAX_PAGES = int(os.getenv("CHECKINLINE_MAX_PAGES", "5000"))
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
@@ -86,8 +88,7 @@ logger = logging.getLogger("adding-bot")
 # -----------------------------------------------------
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DB_NAME]
-# old collection name is kept only for compatibility, new saves use source collections
-items = db.items
+items = db.items  # old collection name kept for compatibility
 sudo_users = db.sudo_users
 known_users = db.known_users
 user_modes = db.user_modes
@@ -169,8 +170,11 @@ def normalize_parse_text(text: Optional[str]) -> str:
 
 def strip_leading_symbols(value: str) -> str:
     value = clean_value(value)
-    # Keep normal letters/numbers and CJK/Japanese/Korean. Remove leading emoji/bullets only.
-    return re.sub(r"^[^\w\u00C0-\u024F\u0400-\u04FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+", "", value).strip()
+    return re.sub(
+        r"^[^\w\u00C0-\u024F\u0400-\u04FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+",
+        "",
+        value,
+    ).strip()
 
 
 def strip_grab_name_suffix(value: str) -> str:
@@ -181,9 +185,7 @@ def strip_grab_name_suffix(value: str) -> str:
 def clean_rarity_value(value: str) -> str:
     value = clean_value(value)
     value = value.strip("()[]{} ")
-    # Remove leading emoji/symbols, keep first text part.
     value = strip_leading_symbols(value)
-    # Remove leftover closing brackets at end.
     value = value.strip("()[]{} ")
     return clean_value(value)
 
@@ -209,35 +211,29 @@ NAME_PATTERNS = [
     re.compile(r"^[^\n\r]*?Character\s*Name\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^[^\n\r]*?\bName\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
 ]
-
 ANIME_PATTERNS = [
     re.compile(r"^[^\n\r]*?Anime\s*Name\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^[^\n\r]*?\bAnime\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^[^\n\r]*?\bSeries\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
 ]
-
 RARITY_PATTERNS = [
     re.compile(r"^[^\n\r]*?\bRarity\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"\bRARITY\b\s*[:\-]?\s*[\(\[]?\s*(.+?)\s*[\)\]]?\s*$", re.IGNORECASE | re.MULTILINE),
 ]
-
 CARD_ID_PATTERNS = [
     re.compile(r"^[^\n\r]*?\bCharacter\s*ID\b\s*[:\-]?\s*#?\s*([0-9]+)\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^[^\n\r]*?\bCard\s*ID\b\s*[:\-]?\s*#?\s*([0-9]+)\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^[^\n\r]*?\bID\b\s*(?:ID)?\s*[:\-]?\s*#?\s*([0-9]+)\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^[^\n\r]*?🆔\s*[:\-]?\s*#?\s*([0-9]+)\s*$", re.IGNORECASE | re.MULTILINE),
 ]
-
 COMMAND_PATTERNS = [
     re.compile(r"(?:using|use|hint|full).*?/\s*([A-Za-z0-9_]+)\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"/\s*([A-Za-z0-9_]+)\s*(?:\[[^\]]*name[^\]]*\]|\([^\)]*name[^\)]*\)|\bname\b)", re.IGNORECASE | re.DOTALL),
     re.compile(r"/\s*([A-Za-z0-9_]+)\b", re.IGNORECASE),
 ]
 
-OWO_HEADER_RE = re.compile(
-    r"OwO!\s*Check\s+out\s+(?:this\s+)?(?:character|husbando|waifu)!!?",
-    re.IGNORECASE,
-)
+OWO_HEADER_RE = re.compile(r"OwO!\s*Check\s+out\s+(?:this\s+)?(?:character|husbando|waifu)!!?", re.IGNORECASE)
+RORONOA_HEADER_RE = re.compile(r"^(?:woah|whoa|wow)!?\s*check\s+out\s+(?:this\s+)?character!?$", re.IGNORECASE)
 ID_NAME_COLON_RE = re.compile(r"^\s*(?:ID\s*)?(\d+)\s*[:\-]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 ID_NAME_SPACE_RE = re.compile(r"^\s*(\d+)\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 ID_NAME_LINE_RE = re.compile(r"^\s*(?:🆔|ID|Id|id)?\s*#?\s*(\d+)\s*[:：]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -298,6 +294,9 @@ SOURCE_CONFIGS: list[SourceDef] = [
     SourceDef("waifux_grab", "items_waifux_grab", "/grab", "@WaifuxGrabBot", ("WaifuxGrabBot", "waifuxgrabbot"), parser="waifux", save_rarity=False),
     SourceDef("catch_your_waifu", "items_catch_your_waifu", "/guess", "@Catch_Your_Waifu_Bot", ("Catch_Your_Waifu_Bot", "catch_your_waifu_bot"), parser="owo_colon"),
     SourceDef("waifu_grabber", "items_waifu_grabber", "/grab", "@Waifu_Grabber_Bot", ("Waifu_Grabber_Bot", "waifu_grabber_bot"), parser="owo_colon"),
+    # New inline sources requested by owner
+    SourceDef("roronoa_zoro", "items_roronoa_zoro", "/zoro", "@roronoa_zoro_robot", ("roronoa_zoro_robot",), parser="name_only", save_rarity=False),
+    SourceDef("character_picker", "items_character_picker", "/picker", "@character_picker_bot", ("character_picker_bot",), parser="owo_colon"),
 ]
 
 SOURCE_BY_KEY = {src.key: src for src in SOURCE_CONFIGS}
@@ -335,8 +334,26 @@ def get_default_source_key_from_command(command_name: str) -> str:
     return DEFAULT_SOURCE_KEY
 
 
-def get_source_bot_key_from_command(command_name: str) -> str:
-    return get_default_source_key_from_command(command_name)
+def resolve_source_from_arg(raw_arg: Optional[str]) -> Optional[SourceDef]:
+    arg = clean_value(raw_arg or "")
+    if not arg:
+        return None
+    first = arg.split()[0]
+    key = first.strip().lstrip("@").casefold().replace("-", "_")
+    if key in SOURCE_BY_KEY:
+        return SOURCE_BY_KEY[key]
+    inline_key = norm_username(first)
+    if inline_key in SOURCE_BY_INLINE_USERNAME:
+        return SOURCE_BY_INLINE_USERNAME[inline_key]
+    cmd = clean_command_name(first) if first.startswith("/") else ""
+    if cmd:
+        for src in SOURCE_CONFIGS:
+            if src.command == cmd:
+                return src
+    for src in SOURCE_CONFIGS:
+        if key == norm_username(src.bot_username):
+            return src
+    return None
 
 
 # -----------------------------------------------------
@@ -372,10 +389,6 @@ def extract_media_handle(message: Message):
     if document and str(getattr(document, "mime_type", "") or "").startswith("video/"):
         return "video", document
     return None, None
-
-
-def is_group_chat(message: Message) -> bool:
-    return bool(message.chat and getattr(message.chat, "type", "") in {"group", "supergroup"})
 
 
 def is_private_chat(message: Message) -> bool:
@@ -459,11 +472,6 @@ def get_forward_source_def(message: Message) -> Optional[SourceDef]:
     return None
 
 
-def get_forward_source_command(message: Message) -> Optional[str]:
-    src = get_forward_source_def(message)
-    return src.command if src else None
-
-
 def is_allowed_forward_source(message: Message) -> bool:
     return is_forwarded_message(message) and bool(get_forward_source_def(message))
 
@@ -507,6 +515,27 @@ def parse_label_message(message: Message, src: SourceDef) -> ParsedText:
     return finalize_parsed_text(parsed)
 
 
+def parse_name_only_message(message: Message, src: SourceDef) -> ParsedText:
+    raw = get_combined_message_text(message)
+    lines = lines_from_text(raw)
+    name: Optional[str] = None
+    for line in lines:
+        cleaned = clean_value(line)
+        if not cleaned:
+            continue
+        if RORONOA_HEADER_RE.search(cleaned):
+            continue
+        if OWO_HEADER_RE.search(cleaned):
+            continue
+        if re.search(r"\b(?:defeat\s+count|rarity|event|id)\b", cleaned, re.IGNORECASE):
+            continue
+        name = strip_leading_symbols(cleaned)
+        break
+    return finalize_parsed_text(
+        ParsedText(name=name, anime_name=None, rarity=None, card_id=None, command_name=src.command, raw_text=raw, source_key=src.key)
+    )
+
+
 def infer_anime_from_lines(lines: list[str], match_line_index: int) -> Optional[str]:
     if match_line_index <= 0:
         return None
@@ -539,19 +568,16 @@ def parse_owo_message(message: Message, src: SourceDef, mode: str = "colon") -> 
     match_line = ""
     for regex in regexes:
         match = regex.search(raw)
-        if match:
-            # Avoid taking pure ID label lines like ID: 100 without name.
-            if len(match.groups()) >= 2:
-                card_id = clean_value(match.group(1))
-                name = clean_value(match.group(2))
-                match_line = clean_value(match.group(0))
-                break
+        if match and len(match.groups()) >= 2:
+            card_id = clean_value(match.group(1))
+            name = clean_value(match.group(2))
+            match_line = clean_value(match.group(0))
+            break
     if match_line in lines:
         anime_name = infer_anime_from_lines(lines, lines.index(match_line))
     else:
-        # fallback: first non-header line before id/name
         for line in lines:
-            if OWO_HEADER_RE.search(line):
+            if OWO_HEADER_RE.search(line) or RORONOA_HEADER_RE.search(line):
                 continue
             if card_id and line.startswith(card_id):
                 break
@@ -560,38 +586,30 @@ def parse_owo_message(message: Message, src: SourceDef, mode: str = "colon") -> 
             anime_name = strip_leading_symbols(line)
             break
 
-    parsed = ParsedText(
-        name=name,
-        anime_name=anime_name,
-        rarity=parse_field(raw, RARITY_PATTERNS) if src.save_rarity else None,
-        card_id=card_id,
-        command_name=src.command,
-        raw_text=raw,
-        source_key=src.key,
+    return finalize_parsed_text(
+        ParsedText(
+            name=name,
+            anime_name=anime_name,
+            rarity=parse_field(raw, RARITY_PATTERNS) if src.save_rarity else None,
+            card_id=card_id,
+            command_name=src.command,
+            raw_text=raw,
+            source_key=src.key,
+        )
     )
-    return finalize_parsed_text(parsed)
 
 
 def parse_capture_or_seizer_message(message: Message, src: SourceDef) -> ParsedText:
-    # First try label style: New Waifu Added / Name Anime Rarity ID.
     label = parse_label_message(message, src)
     if label.name and label.card_id:
         return label
-    # Then try OwO or New Character Added with anime above and ID:name line.
     owo = parse_owo_message(message, src, mode="colon")
     if owo.name and owo.card_id:
         return owo
     return label
 
 
-def parse_grab_label_message(message: Message, src: SourceDef) -> ParsedText:
-    return parse_label_message(message, src)
-
-
-SMASH_LOOK_LINE_RE = re.compile(
-    r"look\s+at\s+this\s+character\s*(?:\n|\s)+(.+?)\s+from\s+(.+?)(?:!|！|\n|$)",
-    re.IGNORECASE | re.DOTALL,
-)
+SMASH_LOOK_LINE_RE = re.compile(r"look\s+at\s+this\s+character\s*(?:\n|\s)+(.+?)\s+from\s+(.+?)(?:!|！|\n|$)", re.IGNORECASE | re.DOTALL)
 SMASH_FROM_LINE_RE = re.compile(r"^(.+?)\s+from\s+(.+?)(?:!|！)?$", re.IGNORECASE)
 SMASH_ANIME_COUNT_RE = re.compile(r"\s+\d+\s*/\s*\d+\s*$")
 
@@ -613,21 +631,6 @@ def parse_smash_message(message: Message, src: SourceDef) -> ParsedText:
     lines = lines_from_text(raw)
     name: Optional[str] = None
     anime_name: Optional[str] = None
-
-    # Smash bot has two common formats:
-    # 1) Normal card format:
-    #    Deon Arut Hart
-    #    📺 I'M Not That Kind Of Talent
-    #    🎭 Rarity: ...
-    #    ID 4704
-    #
-    # 2) "Look at this character" format:
-    #    Look at this character
-    #    Red from Pokemon!
-    #
-    #    Pokemon 0/153
-    #    ID 2945
-    #    (⚪RARITY: Common)
 
     look_match = SMASH_LOOK_LINE_RE.search(raw)
     if look_match:
@@ -654,62 +657,33 @@ def parse_smash_message(message: Message, src: SourceDef) -> ParsedText:
                 continue
             if re.search(r"(?:\bID\b|🆔)", cleaned, re.IGNORECASE):
                 continue
-
-            # Lines like "Pokemon 0/153" are anime/series lines, not names.
             if SMASH_ANIME_COUNT_RE.search(cleaned):
                 anime_candidate = clean_smash_anime_value(cleaned)
                 if anime_candidate and not anime_name:
                     anime_name = anime_candidate
                 continue
-
             useful.append(cleaned)
-
         if not name and useful:
             name = useful[0]
-        if not anime_name:
-            if len(useful) >= 2:
-                anime_name = clean_smash_anime_value(useful[1])
-            elif len(useful) == 1 and name != useful[0]:
-                anime_name = clean_smash_anime_value(useful[0])
+        if not anime_name and len(useful) >= 2:
+            anime_name = clean_smash_anime_value(useful[1])
 
-    parsed = ParsedText(
-        name=name,
-        anime_name=anime_name,
-        rarity=parse_field(raw, RARITY_PATTERNS),
-        card_id=parse_field(raw, [SMASH_ID_RE]),
-        command_name=src.command,
-        raw_text=raw,
-        source_key=src.key,
+    return finalize_parsed_text(
+        ParsedText(name=name, anime_name=anime_name, rarity=parse_field(raw, RARITY_PATTERNS), card_id=parse_field(raw, [SMASH_ID_RE]), command_name=src.command, raw_text=raw, source_key=src.key)
     )
-    return finalize_parsed_text(parsed)
 
 
 def parse_waifux_message(message: Message, src: SourceDef) -> ParsedText:
     raw = get_combined_message_text(message)
-    parsed = ParsedText(
-        name=parse_field(raw, [WAIFUX_NAME_RE]),
-        anime_name=parse_field(raw, [WAIFUX_SERIES_RE]),
-        rarity=None,
-        card_id=parse_field(raw, [WAIFUX_ID_RE]),
-        command_name=src.command,
-        raw_text=raw,
-        source_key=src.key,
+    return finalize_parsed_text(
+        ParsedText(name=parse_field(raw, [WAIFUX_NAME_RE]), anime_name=parse_field(raw, [WAIFUX_SERIES_RE]), rarity=None, card_id=parse_field(raw, [WAIFUX_ID_RE]), command_name=src.command, raw_text=raw, source_key=src.key)
     )
-    return finalize_parsed_text(parsed)
 
 
 def parse_caption_text(text: Optional[str]) -> ParsedText:
     raw = normalize_parse_text(text)
     return finalize_parsed_text(
-        ParsedText(
-            name=parse_field(raw, NAME_PATTERNS),
-            anime_name=parse_field(raw, ANIME_PATTERNS),
-            rarity=parse_field(raw, RARITY_PATTERNS),
-            card_id=parse_field(raw, CARD_ID_PATTERNS),
-            command_name=parse_command_name(raw),
-            raw_text=raw,
-            source_key=None,
-        )
+        ParsedText(name=parse_field(raw, NAME_PATTERNS), anime_name=parse_field(raw, ANIME_PATTERNS), rarity=parse_field(raw, RARITY_PATTERNS), card_id=parse_field(raw, CARD_ID_PATTERNS), command_name=parse_command_name(raw), raw_text=raw, source_key=None)
     )
 
 
@@ -719,8 +693,7 @@ def parse_caption_text_from_message(message: Message) -> ParsedText:
         parsed = parse_caption_text(raw)
         if parsed.name:
             return parsed
-    raw = candidates[0] if candidates else ""
-    return parse_caption_text(raw)
+    return parse_caption_text(candidates[0] if candidates else "")
 
 
 def parse_source_update(message: Message) -> Optional[SourceUpdate]:
@@ -730,23 +703,22 @@ def parse_source_update(message: Message) -> Optional[SourceUpdate]:
     raw = get_combined_message_text(message)
     if not raw:
         return None
-
     old_name = parse_field(raw, [RENAME_OLD_NAME_RE])
     new_name = parse_field(raw, [RENAME_NEW_NAME_RE])
     if old_name and new_name:
         return SourceUpdate(src.key, "rename", old_name=old_name, new_name=new_name, raw_text=raw)
-
     rarity_name = parse_field(raw, [RARITY_UPDATE_NAME_RE])
     new_rarity = parse_field(raw, [RARITY_UPDATE_NEW_RE])
     if rarity_name and new_rarity:
         return SourceUpdate(src.key, "rarity", old_name=rarity_name, new_rarity=new_rarity, raw_text=raw)
-
     return None
 
 
 def get_effective_parsed_message(message: Message) -> ParsedText:
     src = get_inline_source_def(message) or get_forward_source_def(message)
     if src:
+        if src.parser == "name_only":
+            return parse_name_only_message(message, src)
         if src.parser == "smash":
             return parse_smash_message(message, src)
         if src.parser == "waifux":
@@ -836,11 +808,7 @@ async def can_save(message: Message) -> bool:
 
 
 async def set_autosave_mode(user_id: int, enabled: bool) -> None:
-    await user_modes.update_one(
-        {"user_id": user_id},
-        {"$set": {"user_id": user_id, "autosave_enabled": enabled, "updated_at": datetime.now(timezone.utc)}},
-        upsert=True,
-    )
+    await user_modes.update_one({"user_id": user_id}, {"$set": {"user_id": user_id, "autosave_enabled": enabled, "updated_at": datetime.now(timezone.utc)}}, upsert=True)
 
 
 async def get_autosave_mode(user_id: Optional[int]) -> bool:
@@ -875,7 +843,6 @@ async def apply_source_update(update: SourceUpdate) -> tuple[bool, str]:
         if result.modified_count:
             return True, f"Renamed: {update.old_name} → {update.new_name}"
         return False, f"Rename target not found: {update.old_name}"
-
     if update.update_type == "rarity" and update.old_name and update.new_rarity:
         new_rarity = clean_rarity_value(update.new_rarity)
         result = await collection.update_one(
@@ -885,7 +852,6 @@ async def apply_source_update(update: SourceUpdate) -> tuple[bool, str]:
         if result.modified_count:
             return True, f"Rarity updated: {update.old_name} → {new_rarity}"
         return False, f"Rarity update target not found: {update.old_name}"
-
     return False, "Invalid update message"
 
 
@@ -1094,8 +1060,11 @@ def build_start_text() -> str:
         "• /save (reply media)\n"
         "• /status\n"
         "• /stats\n"
+        "• /checkinline @source_bot\n"
         "• /addsudo /rmsudo\n\n"
-        "Target chat မှာ save-only mode သုံးမယ်ဆို /autosave on လုပ်ပါ။"
+        "အသစ်ထည့်ထားသော inline source:\n"
+        "• @roronoa_zoro_robot → name only\n"
+        "• @character_picker_bot → name + id + rarity\n"
     )
 
 
@@ -1129,23 +1098,12 @@ async def build_status_text() -> str:
 
 async def delayed_pm2_restart(delay_seconds: float = 1.5) -> None:
     await asyncio.sleep(delay_seconds)
-
     cmd = [PM2_BIN, "restart", PM2_PROCESS_NAME, "--update-env"]
     logger.warning("Telegram restart requested. Running: %s", " ".join(shlex.quote(x) for x in cmd))
-
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await process.communicate()
-        logger.warning(
-            "PM2 restart finished | returncode=%s | stdout=%s | stderr=%s",
-            process.returncode,
-            stdout.decode(errors="ignore")[:1000],
-            stderr.decode(errors="ignore")[:1000],
-        )
+        logger.warning("PM2 restart finished | returncode=%s | stdout=%s | stderr=%s", process.returncode, stdout.decode(errors="ignore")[:1000], stderr.decode(errors="ignore")[:1000])
     except Exception:
         logger.exception("PM2 restart command failed")
 
@@ -1178,26 +1136,13 @@ async def stats_handler(message: Message) -> None:
 @router.message(Command("restart"))
 async def restart_handler(message: Message) -> None:
     await remember_chat(message)
-
     user_id = message.from_user.id if message.from_user else None
     if user_id not in OWNER_IDS:
         return
-
     if not ENABLE_TELEGRAM_RESTART:
-        await message.reply(
-            "Telegram restart is disabled.\n\n"
-            "Enable with:\n"
-            "<code>ENABLE_TELEGRAM_RESTART=true</code>",
-            parse_mode=ParseMode.HTML,
-        )
+        await message.reply("Telegram restart is disabled.\n\nEnable with:\n<code>ENABLE_TELEGRAM_RESTART=true</code>", parse_mode=ParseMode.HTML)
         return
-
-    await message.reply(
-        "♻️ Restarting bot with PM2...\n"
-        f"Process: <code>{html_escape(PM2_PROCESS_NAME)}</code>",
-        parse_mode=ParseMode.HTML,
-    )
-
+    await message.reply(f"♻️ Restarting bot with PM2...\nProcess: <code>{html_escape(PM2_PROCESS_NAME)}</code>", parse_mode=ParseMode.HTML)
     asyncio.create_task(delayed_pm2_restart())
 
 
@@ -1269,6 +1214,36 @@ async def process_source_update_if_any(message: Message) -> bool:
     return True
 
 
+@router.message(Command("checkinline"))
+async def checkinline_handler(message: Message, command: CommandObject) -> None:
+    await remember_chat(message)
+    if not await can_save(message):
+        return
+    src = resolve_source_from_arg(command.args)
+    if not src:
+        await message.reply("အသုံးပြုပုံ:\n/checkinline @roronoa_zoro_robot\n/checkinline @character_picker_bot\n/checkinline roronoa_zoro\n/checkinline character_picker")
+        return
+    if not ADD_HELPER.enabled or not ADD_HELPER.client:
+        await message.reply("/checkinline သုံးရန် ADD_HELPER_ENABLED=true နှင့် Pyrogram SESSION_STRING လိုပါတယ်။")
+        return
+    notice = await message.reply(f"🔎 Checking inline results...\nSource: <code>{html_escape(src.bot_username)}</code>", parse_mode=ParseMode.HTML)
+    try:
+        total, pages, stopped_reason = await ADD_HELPER.count_inline_results(src.bot_username, max_pages=CHECKINLINE_MAX_PAGES)
+    except Exception as exc:
+        logger.exception("checkinline failed")
+        await notice.edit_text(f"❌ checkinline failed\nSource: <code>{html_escape(src.bot_username)}</code>\nError: {html_escape(str(exc))}", parse_mode=ParseMode.HTML)
+        return
+    await notice.edit_text(
+        f"✅ <b>Inline Result Check</b>\n\n"
+        f"Source: <code>{html_escape(src.bot_username)}</code>\n"
+        f"Key: <code>{html_escape(src.key)}</code>\n"
+        f"Total result: <b>{total}</b>\n"
+        f"Pages checked: <b>{pages}</b>\n"
+        f"Status: <code>{html_escape(stopped_reason)}</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
 @router.message(Command("save"))
 async def save_handler(message: Message, command: CommandObject, bot: Bot) -> None:
     await remember_chat(message)
@@ -1302,6 +1277,7 @@ async def save_handler(message: Message, command: CommandObject, bot: Bot) -> No
     await message.reply(
         f"{status}: <b>{html_escape(doc['name'])}</b>\n"
         f"ID: <b>{html_escape(doc.get('card_id') or '-')}</b>\n"
+        f"Rarity: <b>{html_escape(doc.get('rarity') or '-')}</b>\n"
         f"Type: <b>{doc['media_type']}</b>\n"
         f"Source: <code>{html_escape(doc.get('source_key') or '-')}</code>\n"
         f"Collection: <code>{html_escape(doc.get('source_collection') or '-')}</code>\n"
@@ -1329,6 +1305,7 @@ async def autosave_media(message: Message, bot: Bot, mode: str) -> None:
         await message.reply(
             f"{status}: <b>{html_escape(doc['name'])}</b>\n"
             f"ID: <b>{html_escape(doc.get('card_id') or '-')}</b>\n"
+            f"Rarity: <b>{html_escape(doc.get('rarity') or '-')}</b>\n"
             f"Mode: <b>{html_escape(mode)}</b>\n"
             f"Source: <code>{html_escape(doc.get('source_key') or '-')}</code>\n"
             f"Collection: <code>{html_escape(doc.get('source_collection') or '-')}</code>\n"
@@ -1353,9 +1330,7 @@ async def media_handler(message: Message, bot: Bot) -> None:
 
     if is_default_target_chat(message):
         target_chat_autosave_enabled = await get_target_chat_autosave_mode(message.chat.id)
-        if not target_chat_autosave_enabled:
-            return
-        if not supported_source:
+        if not target_chat_autosave_enabled or not supported_source:
             return
         await autosave_media(message, bot, "target-auto-save")
         return
@@ -1366,7 +1341,6 @@ async def media_handler(message: Message, bot: Bot) -> None:
                 await message.reply("ဒီ forwarded source ကို auto-save ခွင့်မပြုထားသေးပါဘူး။")
             return
         await autosave_media(message, bot, "auto-save")
-        return
 
 
 # -----------------------------------------------------
@@ -1384,6 +1358,8 @@ async def on_startup(bot: Bot) -> None:
             BotCommand(command="status", description="Show adding bot status"),
             BotCommand(command="stats", description="Show adding bot stats"),
             BotCommand(command="autosave", description="Auto-save on/off/status"),
+            BotCommand(command="save", description="Save replied media"),
+            BotCommand(command="checkinline", description="Check source inline total result"),
             BotCommand(command="restart", description="Restart bot with PM2"),
         ]
     )
@@ -1407,32 +1383,24 @@ async def start_web_app(dp: Dispatcher, bot: Bot):
     app = web.Application()
     app.router.add_get("/", health_handler)
     app.router.add_get("/healthz", health_handler)
-
     if USE_WEBHOOK:
         webhook_path = normalize_webhook_path(WEBHOOK_PATH)
         SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET).register(app, path=webhook_path)
         setup_application(app, dp, bot=bot)
-
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-
     if USE_WEBHOOK:
         webhook_url = f"{PUBLIC_URL.rstrip('/')}{normalize_webhook_path(WEBHOOK_PATH)}"
         await bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=False)
         logger.info("Webhook set to %s", webhook_url)
-
     return runner
 
 
 # -----------------------------------------------------
 # Add Helper Userbot (optional)
 # -----------------------------------------------------
-# Enable with ADD_HELPER_ENABLED=true. It uses a Pyrogram user session to send
-# inline results / forward source-channel posts into DEFAULT_TARGET_CHAT so this
-# adding bot can auto-save them.
-
 ADD_HELPER_ENABLED = os.getenv("ADD_HELPER_ENABLED", "false").lower() == "true"
 ADD_HELPER_API_ID = int(os.getenv("API_ID", "0") or 0)
 ADD_HELPER_API_HASH = os.getenv("API_HASH", "").strip()
@@ -1454,6 +1422,8 @@ ADD_HELPER_INLINE_OVERRIDES = {
     "capture_character": os.getenv("CAPTURE_INLINE_BOT", "@CaptureCharacterBot"),
     "takers_character": os.getenv("TAKERS_INLINE_BOT", "@Takers_character_bot"),
     "grab_your_waifu": os.getenv("GRAB_INLINE_BOT", "@Grab_Your_Waifu_Bot"),
+    "roronoa_zoro": os.getenv("RORONOA_ZORO_INLINE_BOT", "@roronoa_zoro_robot"),
+    "character_picker": os.getenv("CHARACTER_PICKER_INLINE_BOT", "@character_picker_bot"),
 }
 ADD_HELPER_FORWARD_OVERRIDES = {
     "character_seizer": os.getenv("FW_SEIZER_SOURCE_CHAT", "@Seizer_Database"),
@@ -1498,6 +1468,8 @@ ADD_HELPER_SOURCES: list[AddHelperSource] = [
     AddHelperSource("waifux_grab", "Waifux Grab", _env_inline("waifux_grab", "@WaifuxGrabBot"), ("/startwaifuxgrabbot", "/startwaifuxgrab", "/startwaifux", "/start_waifux"), ("/resumewaifuxgrabbot", "/resumewaifuxgrab", "/resumewaifux", "/resume_waifux")),
     AddHelperSource("catch_your_waifu", "Catch Your Waifu", _env_inline("catch_your_waifu", "@Catch_Your_Waifu_Bot"), ("/startcatchyourwaifubot", "/startcatchyourwaifu", "/start_catch_your_waifu"), ("/resumecatchyourwaifubot", "/resumecatchyourwaifu", "/resume_catch_your_waifu")),
     AddHelperSource("waifu_grabber", "Waifu Grabber", _env_inline("waifu_grabber", "@Waifu_Grabber_Bot"), ("/startwaifugrabberbot", "/startwaifugrabber", "/start_waifu_grabber"), ("/resumewaifugrabberbot", "/resumewaifugrabber", "/resume_waifu_grabber")),
+    AddHelperSource("roronoa_zoro", "Roronoa Zoro", _env_inline("roronoa_zoro", "@roronoa_zoro_robot"), ("/startzorobot", "/startzoro", "/start_roronoa_zoro"), ("/resumezorobot", "/resumezoro", "/resume_roronoa_zoro")),
+    AddHelperSource("character_picker", "Character Picker", _env_inline("character_picker", "@character_picker_bot"), ("/startpickerbot", "/startpicker", "/start_character_picker"), ("/resumepickerbot", "/resumepicker", "/resume_character_picker")),
 ]
 
 ADD_HELPER_START_COMMANDS: dict[str, AddHelperSource] = {}
@@ -1506,6 +1478,9 @@ ADD_HELPER_FW_START_COMMANDS: dict[str, AddHelperSource] = {}
 ADD_HELPER_FW_RESUME_COMMANDS: dict[str, AddHelperSource] = {}
 ADD_HELPER_FW_VIDEO_START_COMMANDS: dict[str, AddHelperSource] = {}
 ADD_HELPER_FW_VIDEO_RESUME_COMMANDS: dict[str, AddHelperSource] = {}
+ADD_HELPER_BY_KEY = {src.key: src for src in ADD_HELPER_SOURCES}
+ADD_HELPER_BY_INLINE = {norm_username(src.inline_bot): src for src in ADD_HELPER_SOURCES}
+
 for _src in ADD_HELPER_SOURCES:
     for _cmd in _src.start_aliases:
         ADD_HELPER_START_COMMANDS[_cmd] = _src
@@ -1517,12 +1492,10 @@ for _src in ADD_HELPER_SOURCES:
         ADD_HELPER_FW_RESUME_COMMANDS[_cmd] = _src
     if _src.forward_chat and _src.forward_start_aliases:
         for _cmd in _src.forward_start_aliases:
-            base = _cmd.replace("/startfw", "/startfwvideo", 1)
-            ADD_HELPER_FW_VIDEO_START_COMMANDS[base] = _src
+            ADD_HELPER_FW_VIDEO_START_COMMANDS[_cmd.replace("/startfw", "/startfwvideo", 1)] = _src
             ADD_HELPER_FW_VIDEO_START_COMMANDS[_cmd.replace("bot", "videobot")] = _src
         for _cmd in _src.forward_resume_aliases:
-            base = _cmd.replace("/resumefw", "/resumefwvideo", 1)
-            ADD_HELPER_FW_VIDEO_RESUME_COMMANDS[base] = _src
+            ADD_HELPER_FW_VIDEO_RESUME_COMMANDS[_cmd.replace("/resumefw", "/resumefwvideo", 1)] = _src
             ADD_HELPER_FW_VIDEO_RESUME_COMMANDS[_cmd.replace("bot", "videobot")] = _src
 
 
@@ -1547,7 +1520,7 @@ def add_helper_parse_delay(text: str, default_delay: int) -> int:
 def add_helper_parse_resume(text: str, default_delay: int) -> tuple[int, int]:
     parts = add_helper_clean(text).split()
     if len(parts) < 2 or not parts[1].isdigit():
-        raise ValueError("Resume count is required. Example: /resumegrabbot 1000 5")
+        raise ValueError("Resume count is required. Example: /resumepickerbot 1000 5")
     count = int(parts[1])
     delay = default_delay
     if len(parts) >= 3:
@@ -1557,8 +1530,7 @@ def add_helper_parse_resume(text: str, default_delay: int) -> tuple[int, int]:
     return count, delay
 
 
-def add_helper_state_path():
-    from pathlib import Path
+def add_helper_state_path() -> Path:
     return Path(ADD_HELPER_STATE_FILE)
 
 
@@ -1584,7 +1556,7 @@ def add_helper_save_state(data: dict[str, Any]) -> None:
 
 def add_helper_clear_progress() -> None:
     data = add_helper_load_state()
-    for key in ["runner_mode", "source_ref", "target_chat", "current_offset", "current_index", "sent_count", "delay_seconds", "resume_target_count"]:
+    for key in ["runner_mode", "source_ref", "target_chat", "current_offset", "current_index", "sent_count", "skipped_count", "delay_seconds", "resume_target_count"]:
         data.pop(key, None)
     add_helper_save_state(data)
 
@@ -1604,6 +1576,7 @@ class AddHelperRunnerState:
     running: bool = False
     runner_mode: str = "inline"
     sent_count: int = 0
+    skipped_count: int = 0
     delay_seconds: int = ADD_HELPER_DEFAULT_SEND_DELAY
     target_chat: str | int | None = None
     current_offset: str = ""
@@ -1644,7 +1617,6 @@ class AddHelperService:
             logger.info("AddHelper disabled")
             return
         self._validate_config()
-        from pathlib import Path
         from pyrogram import Client as PyroClient
         Path(ADD_HELPER_SESSIONS_DIR).mkdir(parents=True, exist_ok=True)
         self.client = PyroClient(name="addingbot_add_helper_userbot", api_id=ADD_HELPER_API_ID, api_hash=ADD_HELPER_API_HASH, session_string=ADD_HELPER_SESSION_STRING, workdir=ADD_HELPER_SESSIONS_DIR)
@@ -1717,15 +1689,21 @@ class AddHelperService:
             return False
         return msg.from_user.id in OWNER_IDS
 
-    def _load_progress(self, runner_mode: str, source_ref: str) -> tuple[str, int, int, int]:
+    def _load_progress(self, runner_mode: str, source_ref: str) -> tuple[str, int, int, int, int]:
         data = add_helper_load_state()
         if data.get("runner_mode") != runner_mode or data.get("source_ref") != source_ref:
-            return "", 0, 0, 0
-        return str(data.get("current_offset") or ""), int(data.get("current_index") or 0), int(data.get("sent_count") or 0), int(data.get("resume_target_count") or data.get("sent_count") or 0)
+            return "", 0, 0, 0, 0
+        return (
+            str(data.get("current_offset") or ""),
+            int(data.get("current_index") or 0),
+            int(data.get("sent_count") or 0),
+            int(data.get("skipped_count") or 0),
+            int(data.get("resume_target_count") or data.get("sent_count") or 0),
+        )
 
     def _save_progress(self, source_ref: str, offset: str, index: int) -> None:
         data = add_helper_load_state()
-        data.update({"runner_mode": self.state.runner_mode, "source_ref": source_ref, "target_chat": str(self.resolved_target_chat), "current_offset": offset, "current_index": index, "sent_count": self.state.sent_count, "delay_seconds": self.state.delay_seconds, "resume_target_count": self.state.resume_target_count})
+        data.update({"runner_mode": self.state.runner_mode, "source_ref": source_ref, "target_chat": str(self.resolved_target_chat), "current_offset": offset, "current_index": index, "sent_count": self.state.sent_count, "skipped_count": self.state.skipped_count, "delay_seconds": self.state.delay_seconds, "resume_target_count": self.state.resume_target_count})
         add_helper_save_state(data)
 
     async def stop_runner(self) -> bool:
@@ -1765,7 +1743,7 @@ class AddHelperService:
                 self.state.last_error = f"FloodWait(get_results): {wait_for}s"
                 await self._sleep_with_stop(wait_for + 1)
                 last_exc = e
-            except (RPCError, OSError, TimeoutError) as e:
+            except (RPCError, OSError, TimeoutError, ValueError) as e:
                 self.state.last_error = f"get_results retry error: {e}"
                 last_exc = e
                 if attempt < ADD_HELPER_MAX_RETRIES:
@@ -1793,6 +1771,31 @@ class AddHelperService:
                     await self._sleep_with_stop(self._backoff_delay(attempt))
         raise RuntimeError(f"send_inline_bot_result failed: {last_exc}")
 
+    async def count_inline_results(self, source_bot: str, max_pages: int = CHECKINLINE_MAX_PAGES) -> tuple[int, int, str]:
+        if not self.enabled or not self.client:
+            raise RuntimeError("AddHelper client is not running")
+        offset = ""
+        total = 0
+        pages = 0
+        seen_offsets: set[str] = set()
+        while True:
+            if pages >= max_pages:
+                return total, pages, f"stopped at max_pages={max_pages}"
+            offset_key = offset or "<first>"
+            if offset_key in seen_offsets:
+                return total, pages, "stopped because next_offset looped"
+            seen_offsets.add(offset_key)
+            results = await self._get_inline_results(source_bot, offset)
+            page_len = len(getattr(results, "results", []) or [])
+            total += page_len
+            pages += 1
+            next_offset = getattr(results, "next_offset", "") or ""
+            if page_len <= 0:
+                return total, pages, "finished: empty page"
+            if not next_offset:
+                return total, pages, "finished: no next_offset"
+            offset = next_offset
+
     async def _locate_inline_cursor(self, source_bot: str, resume_count: int) -> tuple[str, int]:
         if resume_count <= 0:
             return "", 0
@@ -1815,13 +1818,14 @@ class AddHelperService:
             raise RuntimeError("AddHelper is already running")
         delay_seconds = max(1, min(delay_seconds, ADD_HELPER_MAX_SEND_DELAY))
         if resume_count is None:
-            offset, index, sent_count, target_count = self._load_progress("inline", source_bot)
+            offset, index, sent_count, skipped_count, target_count = self._load_progress("inline", source_bot)
         else:
             offset, index = await self._locate_inline_cursor(source_bot, resume_count)
             sent_count = resume_count
+            skipped_count = 0
             target_count = resume_count
         self.runner_stop_event = asyncio.Event()
-        self.state = AddHelperRunnerState(True, "inline", sent_count, delay_seconds, self.resolved_target_chat, offset, index, "", source_bot, target_count)
+        self.state = AddHelperRunnerState(True, "inline", sent_count, skipped_count, delay_seconds, self.resolved_target_chat, offset, index, "", source_bot, target_count)
         self._save_progress(source_bot, offset, index)
         self.runner_task = asyncio.create_task(self._worker_inline(source_bot))
 
@@ -1840,12 +1844,21 @@ class AddHelperService:
                     if self.runner_stop_event.is_set():
                         break
                     result = results.results[idx]
-                    await self._send_inline_result(source_bot, results, result.id)
-                    self.state.sent_count += 1
-                    self.state.current_offset = offset
-                    self.state.current_index = idx + 1
-                    self._save_progress(source_bot, offset, idx + 1)
-                    logger.info("AddHelper sent #%s inline result from %s", self.state.sent_count, source_bot)
+                    try:
+                        await self._send_inline_result(source_bot, results, result.id)
+                        self.state.sent_count += 1
+                        logger.info("AddHelper sent #%s inline result from %s", self.state.sent_count, source_bot)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        # Auto-skip inline send failures and keep going.
+                        self.state.skipped_count += 1
+                        self.state.last_error = f"Skipped result index={idx}: {e}"
+                        logger.exception("AddHelper skipped inline result from %s index=%s", source_bot, idx)
+                    finally:
+                        self.state.current_offset = offset
+                        self.state.current_index = idx + 1
+                        self._save_progress(source_bot, offset, idx + 1)
                     await self._sleep_with_stop(self.state.delay_seconds)
                 if self.runner_stop_event.is_set():
                     break
@@ -1871,15 +1884,7 @@ class AddHelperService:
         async for msg in self.client.get_chat_history(source_chat):
             document = getattr(msg, "document", None)
             has_photo = bool(getattr(msg, "photo", None))
-            has_video = bool(
-                getattr(msg, "video", None)
-                or getattr(msg, "animation", None)
-                or (
-                    document
-                    and str(getattr(document, "mime_type", "") or "").startswith("video/")
-                )
-            )
-
+            has_video = bool(getattr(msg, "video", None) or getattr(msg, "animation", None) or (document and str(getattr(document, "mime_type", "") or "").startswith("video/")))
             if media_filter == "video":
                 if has_video:
                     media_ids.append(int(msg.id))
@@ -1889,7 +1894,6 @@ class AddHelperService:
             else:
                 if has_photo or has_video:
                     media_ids.append(int(msg.id))
-
         media_ids.reverse()
         return media_ids
 
@@ -1924,15 +1928,16 @@ class AddHelperService:
             raise RuntimeError(f"No {media_filter if media_filter != 'all' else 'photo/video'} posts found in {source_chat}")
         progress_mode = f"forward:{media_filter}" if media_filter != "all" else "forward"
         if resume_count is None:
-            _, index, sent_count, target_count = self._load_progress(progress_mode, source_chat)
+            _, index, sent_count, skipped_count, target_count = self._load_progress(progress_mode, source_chat)
         else:
             index = resume_count
             sent_count = resume_count
+            skipped_count = 0
             target_count = resume_count
         if index >= len(media_ids):
             raise RuntimeError(f"Resume index {index} is at/after the end ({len(media_ids)})")
         self.runner_stop_event = asyncio.Event()
-        self.state = AddHelperRunnerState(True, f"forward:{media_filter}" if media_filter != "all" else "forward", sent_count, delay_seconds, self.resolved_target_chat, "", index, "", source_chat, target_count)
+        self.state = AddHelperRunnerState(True, progress_mode, sent_count, skipped_count, delay_seconds, self.resolved_target_chat, "", index, "", source_chat, target_count)
         self._save_progress(source_chat, "", index)
         self.runner_task = asyncio.create_task(self._worker_forward(source_chat, media_ids))
 
@@ -1943,12 +1948,20 @@ class AddHelperService:
                 if self.runner_stop_event.is_set():
                     break
                 mid = media_ids[idx]
-                await self._forward_message(source_chat, mid)
-                self.state.sent_count += 1
-                self.state.current_index = idx + 1
-                self.state.current_offset = str(mid)
-                self._save_progress(source_chat, str(mid), idx + 1)
-                logger.info("AddHelper forwarded #%s msg_id=%s from %s", self.state.sent_count, mid, source_chat)
+                try:
+                    await self._forward_message(source_chat, mid)
+                    self.state.sent_count += 1
+                    logger.info("AddHelper forwarded #%s msg_id=%s from %s", self.state.sent_count, mid, source_chat)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self.state.skipped_count += 1
+                    self.state.last_error = f"Skipped forward msg_id={mid}: {e}"
+                    logger.exception("AddHelper skipped forward msg_id=%s from %s", mid, source_chat)
+                finally:
+                    self.state.current_index = idx + 1
+                    self.state.current_offset = str(mid)
+                    self._save_progress(source_chat, str(mid), idx + 1)
                 await self._sleep_with_stop(self.state.delay_seconds)
             if not self.runner_stop_event.is_set() and self.state.current_index >= len(media_ids):
                 if ADD_HELPER_CLEAR_STATE_ON_FINISH:
@@ -1962,7 +1975,7 @@ class AddHelperService:
 
     async def _notify_error(self, mode: str, source: str) -> None:
         try:
-            await self._reply("⚠️ AddHelper Stopped\n\n" f"Mode: {mode}\n" f"Source: {source}\n" f"Sent count: {self.state.sent_count}\n" f"Current offset: {self.state.current_offset or '-'}\n" f"Current index: {self.state.current_index}\n" f"Last error: {self.state.last_error or 'unknown'}")
+            await self._reply("⚠️ AddHelper Stopped\n\n" f"Mode: {mode}\n" f"Source: {source}\n" f"Sent count: {self.state.sent_count}\n" f"Skipped count: {self.state.skipped_count}\n" f"Current offset: {self.state.current_offset or '-'}\n" f"Current index: {self.state.current_index}\n" f"Last error: {self.state.last_error or 'unknown'}")
         except Exception:
             logger.exception("AddHelper failed to notify error")
 
@@ -1974,14 +1987,24 @@ class AddHelperService:
         for src in ADD_HELPER_SOURCES:
             if src.forward_chat and src.forward_start_aliases:
                 lines.append(f"• {src.title}: {src.forward_start_aliases[0]} [delay] | {src.forward_resume_aliases[0]} <count> [delay]")
-        lines += ["", "Forward video-only commands:"]
-        for src in ADD_HELPER_SOURCES:
-            if src.forward_chat and src.forward_start_aliases:
-                video_cmd = src.forward_start_aliases[0].replace("bot", "videobot")
-                video_resume = src.forward_resume_aliases[0].replace("bot", "videobot")
-                lines.append(f"• {src.title}: {video_cmd} [delay] | {video_resume} <count> [delay]")
-        lines += ["", "Other: /helperstatus /stophelper /resethelperprogress"]
+        lines += ["", "Other: /helperstatus /stophelper /resethelperprogress /checkinline <source>"]
         return "\n".join(lines)
+
+    def _resolve_control_source(self, raw_arg: str) -> Optional[AddHelperSource]:
+        arg = add_helper_clean(raw_arg)
+        if not arg:
+            return None
+        first = arg.split()[0]
+        key = first.strip().lstrip("@").casefold().replace("-", "_")
+        if key in ADD_HELPER_BY_KEY:
+            return ADD_HELPER_BY_KEY[key]
+        inline_key = norm_username(first)
+        if inline_key in ADD_HELPER_BY_INLINE:
+            return ADD_HELPER_BY_INLINE[inline_key]
+        source_def = resolve_source_from_arg(first)
+        if source_def and source_def.key in ADD_HELPER_BY_KEY:
+            return ADD_HELPER_BY_KEY[source_def.key]
+        return None
 
     async def _execute_control_command(self, msg) -> None:
         text = add_helper_clean(getattr(msg, "text", "") or "")
@@ -1991,7 +2014,7 @@ class AddHelperService:
             return
         if cmd in {"/helperstatus", "/addhelperstatus"}:
             s = self.state
-            await self._reply(f"Running: {'YES' if self.is_running() else 'NO'}\nMode: {s.runner_mode or '-'}\nSource: {s.source_ref or '-'}\nTarget chat: {s.target_chat}\nDelay: {s.delay_seconds}s\nSent count: {s.sent_count}\nCurrent offset: {s.current_offset or '-'}\nCurrent index: {s.current_index}\nResume target count: {s.resume_target_count}\nLast error: {s.last_error or '-'}", reply_to_message_id=msg.id)
+            await self._reply(f"Running: {'YES' if self.is_running() else 'NO'}\nMode: {s.runner_mode or '-'}\nSource: {s.source_ref or '-'}\nTarget chat: {s.target_chat}\nDelay: {s.delay_seconds}s\nSent count: {s.sent_count}\nSkipped count: {s.skipped_count}\nCurrent offset: {s.current_offset or '-'}\nCurrent index: {s.current_index}\nResume target count: {s.resume_target_count}\nLast error: {s.last_error or '-'}", reply_to_message_id=msg.id)
             return
         if cmd in {"/stophelper", "/stopinlinebot"}:
             stopped = await self.stop_runner()
@@ -2003,6 +2026,15 @@ class AddHelperService:
                 return
             add_helper_clear_progress()
             await self._reply("AddHelper progress cleared.", reply_to_message_id=msg.id)
+            return
+        if cmd == "/checkinline":
+            source = self._resolve_control_source(text.partition(" ")[2])
+            if not source:
+                await self._reply("Usage: /checkinline @source_bot\nExample: /checkinline @character_picker_bot", reply_to_message_id=msg.id)
+                return
+            await self._reply(f"🔎 Checking inline results...\nSource: {source.inline_bot}", reply_to_message_id=msg.id)
+            total, pages, reason = await self.count_inline_results(source.inline_bot, max_pages=CHECKINLINE_MAX_PAGES)
+            await self._reply(f"✅ Inline Result Check\n\nSource: {source.inline_bot}\nKey: {source.key}\nTotal result: {total}\nPages checked: {pages}\nStatus: {reason}", reply_to_message_id=msg.id)
             return
         if cmd in ADD_HELPER_START_COMMANDS:
             src = ADD_HELPER_START_COMMANDS[cmd]
@@ -2042,7 +2074,14 @@ class AddHelperService:
             return
 
     async def _control_loop(self) -> None:
-        known = {"/addhelper", "/helper", "/helperstart", "/starthelper", "/helperstatus", "/addhelperstatus", "/stophelper", "/stopinlinebot", "/resethelperprogress", "/resetinlineprogress", *ADD_HELPER_START_COMMANDS.keys(), *ADD_HELPER_RESUME_COMMANDS.keys(), *ADD_HELPER_FW_START_COMMANDS.keys(), *ADD_HELPER_FW_RESUME_COMMANDS.keys(), *ADD_HELPER_FW_VIDEO_START_COMMANDS.keys(), *ADD_HELPER_FW_VIDEO_RESUME_COMMANDS.keys()}
+        known = {
+            "/addhelper", "/helper", "/helperstart", "/starthelper",
+            "/helperstatus", "/addhelperstatus", "/stophelper", "/stopinlinebot",
+            "/resethelperprogress", "/resetinlineprogress", "/checkinline",
+            *ADD_HELPER_START_COMMANDS.keys(), *ADD_HELPER_RESUME_COMMANDS.keys(),
+            *ADD_HELPER_FW_START_COMMANDS.keys(), *ADD_HELPER_FW_RESUME_COMMANDS.keys(),
+            *ADD_HELPER_FW_VIDEO_START_COMMANDS.keys(), *ADD_HELPER_FW_VIDEO_RESUME_COMMANDS.keys(),
+        }
         while not self.stop_event.is_set():
             try:
                 last_seen = add_helper_get_control_last_msg_id()
