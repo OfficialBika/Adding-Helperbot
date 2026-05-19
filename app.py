@@ -295,8 +295,8 @@ SOURCE_CONFIGS: list[SourceDef] = [
     SourceDef("catch_your_waifu", "items_catch_your_waifu", "/guess", "@Catch_Your_Waifu_Bot", ("Catch_Your_Waifu_Bot", "catch_your_waifu_bot"), parser="owo_colon"),
     SourceDef("waifu_grabber", "items_waifu_grabber", "/grab", "@Waifu_Grabber_Bot", ("Waifu_Grabber_Bot", "waifu_grabber_bot"), parser="owo_colon"),
     # New inline sources requested by owner
-    SourceDef("roronoa_zoro", "items_roronoa_zoro", "/zoro", "@roronoa_zoro_robot", ("roronoa_zoro_robot",), parser="name_only", save_rarity=False),
-    SourceDef("character_picker", "items_character_picker", "/picker", "@character_picker_bot", ("character_picker_bot",), parser="owo_colon"),
+    SourceDef("roronoa_zoro", "items_roronoa_zoro", "/challenge", "@roronoa_zoro_robot", ("roronoa_zoro_robot",), parser="name_only", save_rarity=False),
+    SourceDef("character_picker", "items_character_picker", "/pick", "@character_picker_bot", ("character_picker_bot",), parser="owo_colon"),
 ]
 
 SOURCE_BY_KEY = {src.key: src for src in SOURCE_CONFIGS}
