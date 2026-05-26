@@ -108,6 +108,7 @@ class SourceDef:
     inline_usernames: tuple[str, ...] = ()
     forward_usernames: tuple[str, ...] = ()
     forward_titles: tuple[str, ...] = ()
+    forward_chat_ids: tuple[int, ...] = ()
     parser: str = "auto"
     save_rarity: bool = True
 
@@ -297,13 +298,23 @@ SOURCE_CONFIGS: list[SourceDef] = [
     # New inline sources requested by owner
     SourceDef("roronoa_zoro", "items_roronoa_zoro", "/challenge", "@roronoa_zoro_robot", ("roronoa_zoro_robot",), parser="name_only", save_rarity=False),
     SourceDef("character_picker", "items_character_picker", "/pick", "@character_picker_bot", ("character_picker_bot",), parser="owo_colon"),
-    SourceDef("bika_character", "items_bika_character", "/bika", "@BikaCharacterBot", ("bikacharacterbot",), parser="label"),
+    SourceDef(
+        "bika_character",
+        "items_bika_character",
+        "/bika",
+        "@BikaCharacterBot",
+        ("BikaCharacterBot", "bikacharacterbot"),
+        forward_titles=("Bika Waifu Database",),
+        forward_chat_ids=(-1003923540741,),
+        parser="label",
+    ),
 ]
 
 SOURCE_BY_KEY = {src.key: src for src in SOURCE_CONFIGS}
 SOURCE_BY_INLINE_USERNAME: dict[str, SourceDef] = {}
 SOURCE_BY_FORWARD_USERNAME: dict[str, SourceDef] = {}
 SOURCE_BY_FORWARD_TITLE: dict[str, SourceDef] = {}
+SOURCE_BY_FORWARD_CHAT_ID: dict[int, SourceDef] = {}
 
 for src in SOURCE_CONFIGS:
     for username in (src.bot_username, *src.inline_usernames):
@@ -318,6 +329,9 @@ for src in SOURCE_CONFIGS:
         key = normalize_forward_mapping_key(title)
         if key:
             SOURCE_BY_FORWARD_TITLE[key] = src
+    for chat_id in src.forward_chat_ids:
+        if chat_id:
+            SOURCE_BY_FORWARD_CHAT_ID[int(chat_id)] = src
 
 
 def get_source_collection(source_key: Optional[str]):
@@ -463,6 +477,13 @@ def get_forward_source_def(message: Message) -> Optional[SourceDef]:
     info = get_forward_source_info(message)
     username = normalize_forward_mapping_key(info.get("username", ""))
     title = normalize_forward_mapping_key(info.get("title", ""))
+    chat_id = info.get("chat_id")
+    try:
+        chat_id_int = int(chat_id) if chat_id is not None else None
+    except Exception:
+        chat_id_int = None
+    if chat_id_int is not None and chat_id_int in SOURCE_BY_FORWARD_CHAT_ID:
+        return SOURCE_BY_FORWARD_CHAT_ID[chat_id_int]
     if username and username in SOURCE_BY_FORWARD_USERNAME:
         return SOURCE_BY_FORWARD_USERNAME[username]
     if title and title in SOURCE_BY_FORWARD_TITLE:
@@ -514,6 +535,7 @@ def parse_label_message(message: Message, src: SourceDef) -> ParsedText:
         source_key=src.key,
     )
     return finalize_parsed_text(parsed)
+
 
 
 def parse_name_only_message(message: Message, src: SourceDef) -> ParsedText:
@@ -674,10 +696,21 @@ def parse_smash_message(message: Message, src: SourceDef) -> ParsedText:
     )
 
 
+def clean_waifux_name_value(value: Optional[str]) -> Optional[str]:
+    value = clean_value(value or "")
+    if not value:
+        return None
+    # WaifuxGrabBot တစ်ခုတည်းအတွက် event/emoji marker မသိမ်းရန်
+    value = re.sub(r"[\U0001F1E6-\U0001F1FF\U0001F300-\U0001FAFF\u2600-\u27BF]+", "", value)
+    value = re.sub(r"\s*\[\s*\]\s*", " ", value)
+    value = re.sub(r"\s*\(\s*\)\s*", " ", value)
+    return clean_value(value) or None
+
+
 def parse_waifux_message(message: Message, src: SourceDef) -> ParsedText:
     raw = get_combined_message_text(message)
     return finalize_parsed_text(
-        ParsedText(name=parse_field(raw, [WAIFUX_NAME_RE]), anime_name=parse_field(raw, [WAIFUX_SERIES_RE]), rarity=None, card_id=parse_field(raw, [WAIFUX_ID_RE]), command_name=src.command, raw_text=raw, source_key=src.key)
+        ParsedText(name=clean_waifux_name_value(parse_field(raw, [WAIFUX_NAME_RE])), anime_name=parse_field(raw, [WAIFUX_SERIES_RE]), rarity=None, card_id=parse_field(raw, [WAIFUX_ID_RE]), command_name=src.command, raw_text=raw, source_key=src.key)
     )
 
 
@@ -1066,6 +1099,7 @@ def build_start_text() -> str:
         "အသစ်ထည့်ထားသော inline source:\n"
         "• @roronoa_zoro_robot → name only\n"
         "• @character_picker_bot → name + id + rarity\n"
+        "• @BikaCharacterBot → name + id + rarity + anime (/bika)\n"
     )
 
 
@@ -1222,7 +1256,7 @@ async def checkinline_handler(message: Message, command: CommandObject) -> None:
         return
     src = resolve_source_from_arg(command.args)
     if not src:
-        await message.reply("အသုံးပြုပုံ:\n/checkinline @roronoa_zoro_robot\n/checkinline @character_picker_bot\n/checkinline roronoa_zoro\n/checkinline character_picker")
+        await message.reply("အသုံးပြုပုံ:\n/checkinline @roronoa_zoro_robot\n/checkinline @character_picker_bot\n/checkinline @BikaCharacterBot\n/checkinline roronoa_zoro\n/checkinline character_picker\n/checkinline bika_character")
         return
     if not ADD_HELPER.enabled or not ADD_HELPER.client:
         await message.reply("/checkinline သုံးရန် ADD_HELPER_ENABLED=true နှင့် Pyrogram SESSION_STRING လိုပါတယ်။")
@@ -1371,6 +1405,7 @@ async def on_startup(bot: Bot) -> None:
     logger.info("Inline usernames: %s", sorted(SOURCE_BY_INLINE_USERNAME.keys()))
     logger.info("Forward usernames: %s", sorted(SOURCE_BY_FORWARD_USERNAME.keys()))
     logger.info("Forward titles: %s", sorted(SOURCE_BY_FORWARD_TITLE.keys()))
+    logger.info("Forward chat ids: %s", sorted(SOURCE_BY_FORWARD_CHAT_ID.keys()))
     logger.info("Added log channel: %s", ADDED_LOG_CHANNEL or "none")
     logger.info("Default target chat: %s", DEFAULT_TARGET_CHAT if DEFAULT_TARGET_CHAT is not None else "none")
     logger.info("Mode: %s", "WEBHOOK" if USE_WEBHOOK else "POLLING")
@@ -1430,6 +1465,7 @@ ADD_HELPER_FORWARD_OVERRIDES = {
     "character_seizer": os.getenv("FW_SEIZER_SOURCE_CHAT", "@Seizer_Database"),
     "capture_character": os.getenv("FW_CAPTURE_SOURCE_CHAT", "@CaptureDatabase"),
     "characters_hallow": os.getenv("FW_HALLOW_SOURCE_CHAT", "@hallowuploads"),
+    "bika_character": os.getenv("FW_BIKA_SOURCE_CHAT", os.getenv("FW_BIKA_CHARACTER", "-1003923540741")),
 }
 
 
@@ -1471,7 +1507,16 @@ ADD_HELPER_SOURCES: list[AddHelperSource] = [
     AddHelperSource("waifu_grabber", "Waifu Grabber", _env_inline("waifu_grabber", "@Waifu_Grabber_Bot"), ("/startwaifugrabberbot", "/startwaifugrabber", "/start_waifu_grabber"), ("/resumewaifugrabberbot", "/resumewaifugrabber", "/resume_waifu_grabber")),
     AddHelperSource("roronoa_zoro", "Roronoa Zoro", _env_inline("roronoa_zoro", "@roronoa_zoro_robot"), ("/startzorobot", "/startzoro", "/start_roronoa_zoro"), ("/resumezorobot", "/resumezoro", "/resume_roronoa_zoro")),
     AddHelperSource("character_picker", "Character Picker", _env_inline("character_picker", "@character_picker_bot"), ("/startpickerbot", "/startpicker", "/start_character_picker"), ("/resumepickerbot", "/resumepicker", "/resume_character_picker")),
-    AddHelperSource("bika_character", "Bika Character", _env_inline("bika_character", "@BikaCharacterBot"), ("/startbika", "/startbikabot", "/start_bika"), ("/resumebika", "/resumebikabot", "/resume_bika")),
+    AddHelperSource(
+        "bika_character",
+        "Bika Character",
+        _env_inline("bika_character", "@BikaCharacterBot"),
+        ("/startbika", "/startbikabot", "/start_bika"),
+        ("/resumebika", "/resumebikabot", "/resume_bika"),
+        _env_forward("bika_character", "-1003923540741"),
+        ("/startfwbika", "/startfwbikabot", "/start_fw_bika"),
+        ("/resumefwbika", "/resumefwbikabot", "/resume_fw_bika"),
+    ),
 ]
 
 ADD_HELPER_START_COMMANDS: dict[str, AddHelperSource] = {}
