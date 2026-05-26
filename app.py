@@ -297,6 +297,7 @@ SOURCE_CONFIGS: list[SourceDef] = [
     # New inline sources requested by owner
     SourceDef("roronoa_zoro", "items_roronoa_zoro", "/challenge", "@roronoa_zoro_robot", ("roronoa_zoro_robot",), parser="name_only", save_rarity=False),
     SourceDef("character_picker", "items_character_picker", "/pick", "@character_picker_bot", ("character_picker_bot",), parser="owo_colon"),
+    SourceDef("bika_character", "items_bika_character", "/bika", "@BikaCharacterBot", ("bikacharacterbot",), parser="label"),
 ]
 
 SOURCE_BY_KEY = {src.key: src for src in SOURCE_CONFIGS}
@@ -1470,6 +1471,7 @@ ADD_HELPER_SOURCES: list[AddHelperSource] = [
     AddHelperSource("waifu_grabber", "Waifu Grabber", _env_inline("waifu_grabber", "@Waifu_Grabber_Bot"), ("/startwaifugrabberbot", "/startwaifugrabber", "/start_waifu_grabber"), ("/resumewaifugrabberbot", "/resumewaifugrabber", "/resume_waifu_grabber")),
     AddHelperSource("roronoa_zoro", "Roronoa Zoro", _env_inline("roronoa_zoro", "@roronoa_zoro_robot"), ("/startzorobot", "/startzoro", "/start_roronoa_zoro"), ("/resumezorobot", "/resumezoro", "/resume_roronoa_zoro")),
     AddHelperSource("character_picker", "Character Picker", _env_inline("character_picker", "@character_picker_bot"), ("/startpickerbot", "/startpicker", "/start_character_picker"), ("/resumepickerbot", "/resumepicker", "/resume_character_picker")),
+    AddHelperSource("bika_character", "Bika Character", _env_inline("bika_character", "@BikaCharacterBot"), ("/startbika", "/startbikabot", "/start_bika"), ("/resumebika", "/resumebikabot", "/resume_bika")),
 ]
 
 ADD_HELPER_START_COMMANDS: dict[str, AddHelperSource] = {}
