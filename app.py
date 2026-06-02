@@ -244,6 +244,23 @@ WAIFUX_NAME_RE = re.compile(r"^[^\n\r]*?➤\s*(.+?)\s*$", re.IGNORECASE | re.MUL
 WAIFUX_SERIES_RE = re.compile(r"^[^\n\r]*?\bSeries\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 WAIFUX_ID_RE = re.compile(r"^[^\n\r]*?\bID\b\s*[:\-]?\s*#?\s*([0-9]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
+SENPAI_NAME_RE = re.compile(
+    r"^[^\n\r]*?\bName\b\s*[:：\-]\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+SENPAI_ANIME_RE = re.compile(
+    r"^[^\n\r]*?\bAnime\b\s*[:：\-]\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+SENPAI_RARITY_RE = re.compile(
+    r"^[^\n\r]*?\bRarity\b\s*[:：\-]\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+SENPAI_ID_RE = re.compile(
+    r"^[^\n\r]*?(?:🆔|\bID\b)\s*[:：\-]?\s*#?\s*([0-9]+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 RARITY_UPDATE_NAME_RE = re.compile(r"^[^\n\r]*?\bWaifu\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 RARITY_UPDATE_NEW_RE = re.compile(r"^[^\n\r]*?\bNew\s+Rarity\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 RENAME_OLD_NAME_RE = re.compile(r"^[^\n\r]*?\bOld\s+Name\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -298,6 +315,16 @@ SOURCE_CONFIGS: list[SourceDef] = [
     # New inline sources requested by owner
     SourceDef("roronoa_zoro", "items_roronoa_zoro", "/challenge", "@roronoa_zoro_robot", ("roronoa_zoro_robot",), parser="name_only", save_rarity=False),
     SourceDef("character_picker", "items_character_picker", "/pick", "@character_picker_bot", ("character_picker_bot",), parser="owo_colon"),
+    SourceDef(
+        "senpai_catcher",
+        "items_senpai_catcher",
+        "/pick",
+        "@SenpaiCatcherBot",
+        ("SenpaiCatcherBot", "senpaicatcherbot"),
+        forward_usernames=("SenpaiCatcherBot", "senpaicatcherbot"),
+        forward_titles=("SenpaiCatcher", "SenpaiCatcher🎞.", "SenpaiCatcher."),
+        parser="senpai",
+    ),
     SourceDef(
         "bika_character",
         "items_bika_character",
@@ -425,6 +452,16 @@ def get_inline_source_def(message: Message) -> Optional[SourceDef]:
     return SOURCE_BY_INLINE_USERNAME.get(get_inline_source_username(message))
 
 
+def get_sender_source_def(message: Message) -> Optional[SourceDef]:
+    user = getattr(message, "from_user", None)
+    if user is None:
+        return None
+    username = norm_username(getattr(user, "username", "") or "")
+    if not username:
+        return None
+    return SOURCE_BY_INLINE_USERNAME.get(username)
+
+
 def get_inline_source_command(message: Message) -> Optional[str]:
     src = get_inline_source_def(message)
     return src.command if src else None
@@ -509,6 +546,9 @@ def get_autosave_source_label(message: Message) -> str:
 def get_log_source_label(message: Message) -> str:
     if get_inline_source_command(message):
         return get_autosave_source_label(message)
+    sender_src = get_sender_source_def(message)
+    if sender_src:
+        return f"sender {sender_src.bot_username}"
     if is_allowed_forward_source(message):
         return get_autosave_source_label(message)
     if is_forwarded_message(message):
@@ -714,6 +754,26 @@ def parse_waifux_message(message: Message, src: SourceDef) -> ParsedText:
     )
 
 
+def normalize_senpai_text_value(value: Optional[str]) -> Optional[str]:
+    value = clean_value(unicodedata.normalize("NFKC", value or ""))
+    return value or None
+
+
+def parse_senpai_message(message: Message, src: SourceDef) -> ParsedText:
+    raw = get_combined_message_text(message)
+    return finalize_parsed_text(
+        ParsedText(
+            name=normalize_senpai_text_value(parse_field(raw, [SENPAI_NAME_RE])),
+            anime_name=normalize_senpai_text_value(parse_field(raw, [SENPAI_ANIME_RE])),
+            rarity=normalize_senpai_text_value(parse_field(raw, [SENPAI_RARITY_RE])),
+            card_id=parse_field(raw, [SENPAI_ID_RE]),
+            command_name=src.command,
+            raw_text=raw,
+            source_key=src.key,
+        )
+    )
+
+
 def parse_caption_text(text: Optional[str]) -> ParsedText:
     raw = normalize_parse_text(text)
     return finalize_parsed_text(
@@ -749,7 +809,7 @@ def parse_source_update(message: Message) -> Optional[SourceUpdate]:
 
 
 def get_effective_parsed_message(message: Message) -> ParsedText:
-    src = get_inline_source_def(message) or get_forward_source_def(message)
+    src = get_inline_source_def(message) or get_forward_source_def(message) or get_sender_source_def(message)
     if src:
         if src.parser == "name_only":
             return parse_name_only_message(message, src)
@@ -757,6 +817,8 @@ def get_effective_parsed_message(message: Message) -> ParsedText:
             return parse_smash_message(message, src)
         if src.parser == "waifux":
             return parse_waifux_message(message, src)
+        if src.parser == "senpai":
+            return parse_senpai_message(message, src)
         if src.parser == "owo_space":
             return parse_owo_message(message, src, mode="space")
         if src.parser == "label":
@@ -1100,6 +1162,7 @@ def build_start_text() -> str:
         "• @roronoa_zoro_robot → name only\n"
         "• @character_picker_bot → name + id + rarity\n"
         "• @BikaCharacterBot → name + id + rarity + anime (/bika)\n"
+        "• @SenpaiCatcherBot → video/photo + name + id + rarity + anime (/pick)\n"
     )
 
 
@@ -1361,7 +1424,7 @@ async def media_handler(message: Message, bot: Bot) -> None:
     user_can_save = await can_save(message)
     user_id = message.from_user.id if message.from_user else None
     autosave_enabled = await get_autosave_mode(user_id)
-    supported_source = bool(is_allowed_forward_source(message) or get_inline_source_command(message))
+    supported_source = bool(is_allowed_forward_source(message) or get_inline_source_command(message) or get_sender_source_def(message))
 
     if is_default_target_chat(message):
         target_chat_autosave_enabled = await get_target_chat_autosave_mode(message.chat.id)
@@ -2020,6 +2083,54 @@ class AddHelperService:
         finally:
             self.state.running = False
 
+    async def start_senpai_command_loop(self, start_from: int, delay_seconds: int):
+        if self.is_running():
+            raise RuntimeError("AddHelper is already running")
+        start_from = max(1, int(start_from))
+        delay_seconds = max(1, min(int(delay_seconds), ADD_HELPER_MAX_SEND_DELAY))
+        self.runner_stop_event = asyncio.Event()
+        self.state = AddHelperRunnerState(
+            True,
+            "senpai_command",
+            max(0, start_from - 1),
+            0,
+            delay_seconds,
+            self.resolved_target_chat,
+            "",
+            start_from,
+            "",
+            "@SenpaiCatcherBot",
+            start_from,
+        )
+        self._save_progress("@SenpaiCatcherBot", "", start_from)
+        self.runner_task = asyncio.create_task(self._worker_senpai_command_loop(start_from))
+
+    async def _worker_senpai_command_loop(self, start_from: int):
+        current = max(1, int(start_from))
+        try:
+            while not self.runner_stop_event.is_set():
+                try:
+                    await self.client.send_message(self.resolved_target_chat, f"/c {current}")
+                    self.state.sent_count += 1
+                    self.state.current_index = current
+                    self.state.current_offset = str(current)
+                    self._save_progress("@SenpaiCatcherBot", str(current), current)
+                    logger.info("Senpai command sent: /c %s", current)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self.state.skipped_count += 1
+                    self.state.last_error = f"Senpai command /c {current} failed: {e}"
+                    logger.exception("Senpai command send failed")
+                current += 1
+                await self._sleep_with_stop(self.state.delay_seconds)
+        except Exception as e:
+            self.state.last_error = str(e)
+            logger.exception("Senpai command worker failed")
+            await self._notify_error("senpai_command", "@SenpaiCatcherBot")
+        finally:
+            self.state.running = False
+
     async def _notify_error(self, mode: str, source: str) -> None:
         try:
             await self._reply("⚠️ AddHelper Stopped\n\n" f"Mode: {mode}\n" f"Source: {source}\n" f"Sent count: {self.state.sent_count}\n" f"Skipped count: {self.state.skipped_count}\n" f"Current offset: {self.state.current_offset or '-'}\n" f"Current index: {self.state.current_index}\n" f"Last error: {self.state.last_error or 'unknown'}")
@@ -2034,6 +2145,7 @@ class AddHelperService:
         for src in ADD_HELPER_SOURCES:
             if src.forward_chat and src.forward_start_aliases:
                 lines.append(f"• {src.title}: {src.forward_start_aliases[0]} [delay] | {src.forward_resume_aliases[0]} <count> [delay]")
+        lines += ["", "Senpai command loop:", "• SenpaiCatcher: /startsenpaibot [delay] | /resumesenpaibot <start_id> [delay]"]
         lines += ["", "Other: /helperstatus /stophelper /resethelperprogress /checkinline <source>"]
         return "\n".join(lines)
 
@@ -2083,6 +2195,32 @@ class AddHelperService:
             total, pages, reason = await self.count_inline_results(source.inline_bot, max_pages=CHECKINLINE_MAX_PAGES)
             await self._reply(f"✅ Inline Result Check\n\nSource: {source.inline_bot}\nKey: {source.key}\nTotal result: {total}\nPages checked: {pages}\nStatus: {reason}", reply_to_message_id=msg.id)
             return
+        if cmd == "/startsenpaibot":
+            delay = add_helper_parse_delay(text, ADD_HELPER_DEFAULT_SEND_DELAY)
+            await self.start_senpai_command_loop(1, delay)
+            await self._reply(
+                f"Started Senpai command loop.\nSource: @SenpaiCatcherBot\nStart: /c 1\nDelay: {delay}s",
+                reply_to_message_id=msg.id,
+            )
+            return
+        if cmd == "/resumesenpaibot":
+            parts = add_helper_clean(text).split()
+            if len(parts) < 2 or not parts[1].isdigit():
+                await self._reply("Usage: /resumesenpaibot 300 [delay]", reply_to_message_id=msg.id)
+                return
+            start_from = int(parts[1])
+            delay = ADD_HELPER_DEFAULT_SEND_DELAY
+            if len(parts) >= 3:
+                if not parts[2].isdigit():
+                    await self._reply("Delay must be a number", reply_to_message_id=msg.id)
+                    return
+                delay = int(parts[2])
+            await self.start_senpai_command_loop(start_from, delay)
+            await self._reply(
+                f"Resumed Senpai command loop.\nSource: @SenpaiCatcherBot\nStart: /c {start_from}\nDelay: {delay}s",
+                reply_to_message_id=msg.id,
+            )
+            return
         if cmd in ADD_HELPER_START_COMMANDS:
             src = ADD_HELPER_START_COMMANDS[cmd]
             delay = add_helper_parse_delay(text, ADD_HELPER_DEFAULT_SEND_DELAY)
@@ -2125,6 +2263,7 @@ class AddHelperService:
             "/addhelper", "/helper", "/helperstart", "/starthelper",
             "/helperstatus", "/addhelperstatus", "/stophelper", "/stopinlinebot",
             "/resethelperprogress", "/resetinlineprogress", "/checkinline",
+            "/startsenpaibot", "/resumesenpaibot",
             *ADD_HELPER_START_COMMANDS.keys(), *ADD_HELPER_RESUME_COMMANDS.keys(),
             *ADD_HELPER_FW_START_COMMANDS.keys(), *ADD_HELPER_FW_RESUME_COMMANDS.keys(),
             *ADD_HELPER_FW_VIDEO_START_COMMANDS.keys(), *ADD_HELPER_FW_VIDEO_RESUME_COMMANDS.keys(),
