@@ -244,12 +244,6 @@ WAIFUX_NAME_RE = re.compile(r"^[^\n\r]*?➤\s*(.+?)\s*$", re.IGNORECASE | re.MUL
 WAIFUX_SERIES_RE = re.compile(r"^[^\n\r]*?\bSeries\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 WAIFUX_ID_RE = re.compile(r"^[^\n\r]*?\bID\b\s*[:\-]?\s*#?\s*([0-9]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
-# SenpaiCatcher normal bot + SenpaiCatcher / DB channel caption parser.
-# Supported examples:
-#   🆔 CHAR ID: 106
-#   👤 NAME: THORFINN
-#   📺 ANIME: VINLAND SAGA
-#   💎 RARITY: JESUS ✝️
 SENPAI_NAME_RE = re.compile(
     r"^[^\n\r]*?\bName\b\s*[:：\-]\s*(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -327,8 +321,8 @@ SOURCE_CONFIGS: list[SourceDef] = [
         "/pick",
         "@SenpaiCatcherBot",
         ("SenpaiCatcherBot", "senpaicatcherbot"),
-        # Forward from Senpai bot and Senpai database channel.
-        # DB channel examples: @SenpaiBase, title "🦠 SenpaiCatcher / DB".
+        # Senpai DB channel forwards are supported without helper account.
+        # Known channel: t.me/SenpaiBase, display title: 🦠 SenpaiCatcher / DB
         forward_usernames=("SenpaiCatcherBot", "senpaicatcherbot", "SenpaiBase", "senpaibase"),
         forward_titles=(
             "SenpaiCatcher",
@@ -338,6 +332,7 @@ SOURCE_CONFIGS: list[SourceDef] = [
             "SenpaiCatcher DB",
             "🦠 SenpaiCatcher / DB",
             "SenpaiBase",
+            "Senpai Base",
         ),
         parser="senpai",
     ),
@@ -503,12 +498,6 @@ def get_forward_source_info(message: Message) -> dict[str, Any]:
             info["username"] = norm_username(getattr(chat, "username", "") or "")
             info["title"] = normalize_forward_mapping_key(getattr(chat, "title", "") or "")
             return info
-        sender_user = getattr(origin, "sender_user", None)
-        if sender_user is not None:
-            info["username"] = norm_username(getattr(sender_user, "username", "") or "")
-            full_name = clean_value(getattr(sender_user, "full_name", "") or getattr(sender_user, "first_name", "") or "")
-            info["title"] = normalize_forward_mapping_key(full_name)
-            return info
         sender_user_name = norm_username(getattr(origin, "sender_user_name", "") or "")
         if sender_user_name:
             info["username"] = sender_user_name
@@ -519,14 +508,6 @@ def get_forward_source_info(message: Message) -> dict[str, Any]:
         info["username"] = norm_username(getattr(legacy_chat, "username", "") or "")
         info["title"] = normalize_forward_mapping_key(getattr(legacy_chat, "title", "") or "")
         info["origin_type"] = "legacy_forward_chat"
-        return info
-    legacy_user = getattr(message, "forward_from", None)
-    if legacy_user is not None:
-        info["chat_id"] = getattr(legacy_user, "id", None)
-        info["username"] = norm_username(getattr(legacy_user, "username", "") or "")
-        full_name = clean_value(getattr(legacy_user, "full_name", "") or getattr(legacy_user, "first_name", "") or "")
-        info["title"] = normalize_forward_mapping_key(full_name)
-        info["origin_type"] = "legacy_forward_user"
         return info
     sender_chat = getattr(message, "sender_chat", None)
     if sender_chat is not None:
@@ -789,6 +770,33 @@ def normalize_senpai_text_value(value: Optional[str]) -> Optional[str]:
     return value or None
 
 
+def _senpai_field_from_lines(raw: str, labels: tuple[str, ...]) -> Optional[str]:
+    """Extract Senpai DB fields from lines like:
+    🆔 CHAR ID: 106
+    👤 NAME: THORFINN
+    📺 ANIME: VINLAND SAGA
+    💎 RARITY: JESUS ✝️
+
+    This fallback is intentionally line-based so extra header/footer text
+    does not break parsing.
+    """
+    if not raw:
+        return None
+    label_alt = "|".join(re.escape(label) for label in labels)
+    pattern = re.compile(
+        rf"^[^\w0-9\n\r]*?(?:{label_alt})\s*[:：\-]?\s*(.+?)\s*$",
+        re.IGNORECASE,
+    )
+    for line in lines_from_text(raw):
+        line = unicodedata.normalize("NFKC", line)
+        match = pattern.search(line)
+        if match:
+            value = clean_value(match.group(1))
+            if value:
+                return value
+    return None
+
+
 def parse_senpai_message(message: Message, src: SourceDef) -> ParsedText:
     raw = get_combined_message_text(message)
     return parse_senpai_text(raw, src)
@@ -797,12 +805,19 @@ def parse_senpai_message(message: Message, src: SourceDef) -> ParsedText:
 def parse_senpai_text(raw: str, src: Optional[SourceDef] = None) -> ParsedText:
     src = src or SOURCE_BY_KEY["senpai_catcher"]
     raw = normalize_parse_text(raw)
+
+    # First try regex patterns, then robust line-by-line fallback for DB-channel captions.
+    name = parse_field(raw, [SENPAI_NAME_RE]) or _senpai_field_from_lines(raw, ("NAME",))
+    anime_name = parse_field(raw, [SENPAI_ANIME_RE]) or _senpai_field_from_lines(raw, ("ANIME", "ANIME NAME"))
+    rarity = parse_field(raw, [SENPAI_RARITY_RE]) or _senpai_field_from_lines(raw, ("RARITY",))
+    card_id = parse_field(raw, [SENPAI_ID_RE]) or _senpai_field_from_lines(raw, ("CHAR ID", "CHARACTER ID", "CARD ID", "ID"))
+
     return finalize_parsed_text(
         ParsedText(
-            name=normalize_senpai_text_value(parse_field(raw, [SENPAI_NAME_RE])),
-            anime_name=normalize_senpai_text_value(parse_field(raw, [SENPAI_ANIME_RE])),
-            rarity=normalize_senpai_text_value(parse_field(raw, [SENPAI_RARITY_RE])),
-            card_id=parse_field(raw, [SENPAI_ID_RE]),
+            name=normalize_senpai_text_value(name),
+            anime_name=normalize_senpai_text_value(anime_name),
+            rarity=normalize_senpai_text_value(rarity),
+            card_id=clean_value(card_id or "") or None,
             command_name=src.command,
             raw_text=raw,
             source_key=src.key,
@@ -1567,7 +1582,6 @@ ADD_HELPER_FORWARD_OVERRIDES = {
     "capture_character": os.getenv("FW_CAPTURE_SOURCE_CHAT", "@CaptureDatabase"),
     "characters_hallow": os.getenv("FW_HALLOW_SOURCE_CHAT", "@hallowuploads"),
     "bika_character": os.getenv("FW_BIKA_SOURCE_CHAT", os.getenv("FW_BIKA_CHARACTER", "-1003923540741")),
-    "senpai_catcher": os.getenv("FW_SENPAI_SOURCE_CHAT", "@SenpaiBase"),
 }
 
 
