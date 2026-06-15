@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import html as html_lib
 import logging
 import os
 import re
@@ -161,6 +162,10 @@ def normalize_name(name: str) -> str:
 
 def normalize_parse_text(text: Optional[str]) -> str:
     text = text or ""
+    # Some Bot API fields may be HTML escaped/formatted when collected via html_text/model_dump.
+    # Normalize them back to plain text before parser regexes run.
+    text = html_lib.unescape(str(text))
+    text = re.sub(r"<[^>]+>", " ", text)
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("\r", "\n")
     text = text.replace("：", ":").replace("﹕", ":").replace("꞉", ":")
@@ -414,16 +419,57 @@ def resolve_source_from_arg(raw_arg: Optional[str]) -> Optional[SourceDef]:
 # -----------------------------------------------------
 def collect_candidate_texts(message: Message) -> list[str]:
     candidates: list[str] = []
-    for value in [getattr(message, "caption", None), getattr(message, "text", None)]:
-        value = normalize_parse_text(value)
+
+    def add(value: Any) -> None:
+        value = normalize_parse_text(str(value) if value is not None else "")
         if value and value not in candidates:
             candidates.append(value)
-    ext = getattr(message, "external_reply", None)
-    if ext is not None:
-        for value in [getattr(ext, "caption", None), getattr(ext, "text", None)]:
-            value = normalize_parse_text(value)
-            if value and value not in candidates:
-                candidates.append(value)
+
+    # Normal Bot API fields.
+    for value in [
+        getattr(message, "caption", None),
+        getattr(message, "text", None),
+        getattr(message, "html_text", None),
+        getattr(message, "md_text", None),
+    ]:
+        add(value)
+
+    # External/replied objects sometimes carry caption/text depending on how Telegram forwards/posts.
+    for obj in [getattr(message, "external_reply", None), getattr(message, "reply_to_message", None)]:
+        if obj is None:
+            continue
+        for value in [
+            getattr(obj, "caption", None),
+            getattr(obj, "text", None),
+            getattr(obj, "html_text", None),
+            getattr(obj, "md_text", None),
+        ]:
+            add(value)
+
+    # Last-resort: scan the raw aiogram model dump for strings that look like Senpai DB captions.
+    # This protects against client/API variants where caption-like text is stored in a nested field.
+    def walk(obj: Any, depth: int = 0) -> None:
+        if depth > 4:
+            return
+        if isinstance(obj, str):
+            upper = obj.upper()
+            if any(token in upper for token in ("CHAR ID", "NAME:", "ANIME:", "RARITY:")):
+                add(obj)
+            return
+        if isinstance(obj, dict):
+            for v in obj.values():
+                walk(v, depth + 1)
+            return
+        if isinstance(obj, (list, tuple)):
+            for v in obj:
+                walk(v, depth + 1)
+
+    try:
+        if hasattr(message, "model_dump"):
+            walk(message.model_dump(exclude_none=True))
+    except Exception:
+        logger.debug("message model_dump text scan failed", exc_info=True)
+
     return candidates
 
 
@@ -1440,6 +1486,15 @@ async def autosave_media(message: Message, bot: Bot, mode: str) -> None:
         return
     parsed = get_effective_parsed_message(message)
     if not parsed.name:
+        src = get_forward_source_def(message) or get_inline_source_def(message) or get_sender_source_def(message)
+        if src and src.key == "senpai_catcher":
+            raw_debug = get_combined_message_text(message)
+            logger.warning(
+                "Senpai parse failed | forward_info=%s | raw_len=%s | raw_preview=%r",
+                get_forward_source_info(message),
+                len(raw_debug or ""),
+                (raw_debug or "")[:800],
+            )
         await message.reply("name မတွေ့ပါ။ supported post ကို forward / send လုပ်ပါ။")
         return
     try:
