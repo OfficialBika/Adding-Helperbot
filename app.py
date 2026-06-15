@@ -162,6 +162,7 @@ def normalize_name(name: str) -> str:
 def normalize_parse_text(text: Optional[str]) -> str:
     text = text or ""
     text = unicodedata.normalize("NFKC", text)
+    text = normalize_stylized_latin(text)
     text = text.replace("\r", "\n")
     text = text.replace("：", ":").replace("﹕", ":").replace("꞉", ":")
     text = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", text)
@@ -206,6 +207,27 @@ def normalize_forward_mapping_key(value: str) -> str:
 
 def norm_username(value: str) -> str:
     return clean_value(value).lstrip("@").lower()
+
+
+# Telegram channel captions sometimes use Unicode small-cap Latin letters
+# (example: ɴᴀᴍᴇ, ᴄʜᴀʀ ɪᴅ). NFKC does not convert these characters,
+# so we transliterate them before parsing labels and values.
+STYLIZED_LATIN_TRANSLATION = str.maketrans({
+    "ᴀ": "A", "ʙ": "B", "ᴄ": "C", "ᴅ": "D", "ᴇ": "E",
+    "ꜰ": "F", "ɢ": "G", "ʜ": "H", "ɪ": "I", "ᴊ": "J",
+    "ᴋ": "K", "ʟ": "L", "ᴍ": "M", "ɴ": "N", "ᴏ": "O",
+    "ᴘ": "P", "ʀ": "R", "ꜱ": "S", "ᴛ": "T", "ᴜ": "U",
+    "ᴠ": "V", "ᴡ": "W", "ʏ": "Y", "ᴢ": "Z",
+    "ᵃ": "A", "ᵇ": "B", "ᶜ": "C", "ᵈ": "D", "ᵉ": "E",
+    "ᶠ": "F", "ᵍ": "G", "ʰ": "H", "ᶦ": "I", "ʲ": "J",
+    "ᵏ": "K", "ˡ": "L", "ᵐ": "M", "ⁿ": "N", "ᵒ": "O",
+    "ᵖ": "P", "ʳ": "R", "ˢ": "S", "ᵗ": "T", "ᵘ": "U",
+    "ᵛ": "V", "ʷ": "W", "ˣ": "X", "ʸ": "Y", "ᶻ": "Z",
+})
+
+
+def normalize_stylized_latin(value: str) -> str:
+    return (value or "").translate(STYLIZED_LATIN_TRANSLATION)
 
 
 NAME_PATTERNS = [
@@ -261,9 +283,8 @@ SENPAI_ID_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# SenpaiCatcher / DB captions can arrive as multiline caption, flattened one-line
-# text, or nested inside Bot API model_dump(). These hints and label boundaries
-# make both source detection and parsing robust for forwarded DB posts.
+# SenpaiCatcher / DB captions may use Unicode small caps and may arrive as
+# multiline caption, flattened one-line text, or nested inside Bot API dump.
 SENPAI_DB_HINT_RE = re.compile(
     r"new\s+character\s+added\s+to\s+the\s+bot|char\s*id\s*[:：\-]|\bname\b\s*[:：\-].*\banime\b\s*[:：\-].*\brarity\b\s*[:：\-]",
     re.IGNORECASE | re.DOTALL,
@@ -423,9 +444,7 @@ def collect_candidate_texts(message: Message) -> list[str]:
     candidates: list[str] = []
 
     def add_candidate(value: Any, *, require_hint: bool = False) -> None:
-        if value is None:
-            return
-        if not isinstance(value, str):
+        if value is None or not isinstance(value, str):
             return
         value = normalize_parse_text(value)
         if not value:
@@ -444,7 +463,7 @@ def collect_candidate_texts(message: Message) -> list[str]:
     ]:
         add_candidate(value)
 
-    # Extra/reply fields can contain the forwarded post caption on some Telegram clients.
+    # Extra/reply fields can contain the forwarded post caption on some clients.
     for obj in [
         getattr(message, "external_reply", None),
         getattr(message, "reply_to_message", None),
@@ -459,8 +478,8 @@ def collect_candidate_texts(message: Message) -> list[str]:
         ]:
             add_candidate(value)
 
-    # Last-resort scan: some forwarded messages expose the caption only in nested
-    # model_dump() values. We only keep strings that look like a Senpai DB caption.
+    # Last-resort scan: forwarded captions can be nested inside model_dump().
+    # Keep only strings that look like a Senpai DB caption.
     try:
         dumped = message.model_dump()
     except Exception:
@@ -482,6 +501,7 @@ def collect_candidate_texts(message: Message) -> list[str]:
 
     walk(dumped)
     return candidates
+
 
 def get_combined_message_text(message: Message) -> str:
     return "\n".join(collect_candidate_texts(message)).strip()
@@ -612,6 +632,7 @@ def get_forward_source_def(message: Message) -> Optional[SourceDef]:
     if senpai_src and SENPAI_DB_HINT_RE.search(raw or ""):
         return senpai_src
     return None
+
 
 def is_allowed_forward_source(message: Message) -> bool:
     return is_forwarded_message(message) and bool(get_forward_source_def(message))
@@ -837,10 +858,15 @@ def parse_waifux_message(message: Message, src: SourceDef) -> ParsedText:
 
 
 def normalize_senpai_text_value(value: Optional[str]) -> Optional[str]:
-    value = clean_value(unicodedata.normalize("NFKC", value or ""))
+    value = clean_value(normalize_stylized_latin(unicodedata.normalize("NFKC", value or "")))
     value = re.sub(r"^(?:👤|📺|💎|🆔|➕)+\s*", "", value).strip()
     value = re.sub(r"\s*(?:➕\s*)?ADDED\s+BY\s*[:：\-].*$", "", value, flags=re.IGNORECASE).strip()
-    return clean_value(value) or None
+    value = clean_value(value)
+    # Senpai DB captions are stylized uppercase. Store normalized ASCII uppercase
+    # so lookup/result display stays consistent: THORFINN / VINLAND SAGA / JESUS.
+    if value and re.search(r"[A-Za-z]", value):
+        value = value.upper()
+    return value or None
 
 
 def _senpai_extract_value(raw: str, label_regex: str) -> Optional[str]:
@@ -857,7 +883,7 @@ def _senpai_extract_value(raw: str, label_regex: str) -> Optional[str]:
         return None
     value = match.group(1)
     value = re.split(r"(?:➕\s*)?ADDED\s+BY\s*[:：\-]", value, maxsplit=1, flags=re.IGNORECASE)[0]
-    value = re.sub(r"\s*[-━─]{3,}\s*", " ", value)
+    value = re.sub(r"\s*[-━─➖]{3,}\s*", " ", value)
     return normalize_senpai_text_value(value)
 
 
@@ -872,20 +898,14 @@ def parse_senpai_raw_text(raw: str, src: Optional[SourceDef] = None) -> ParsedTe
     src = src or SOURCE_BY_KEY["senpai_catcher"]
     raw = normalize_parse_text(raw)
 
-    card_id = None
-    name = _senpai_extract_value(raw, r"(?:CHAR\s*)?ID")
-    # If the loose value extractor used the ID label, convert that value to card_id.
-    if name and re.fullmatch(r"#?\d+", name):
-        card_id = re.sub(r"\D+", "", name)
-        name = None
-    else:
-        id_value = _senpai_extract_value(raw, r"(?:CHAR\s*)?ID")
-        if id_value:
-            id_match = re.search(r"\d+", id_value)
-            if id_match:
-                card_id = id_match.group(0)
+    card_id: Optional[str] = None
+    id_value = _senpai_extract_value(raw, r"(?:CHAR\s*)?ID")
+    if id_value:
+        id_match = re.search(r"\d+", id_value)
+        if id_match:
+            card_id = id_match.group(0)
 
-    name = _senpai_extract_value(raw, r"NAME") or name
+    name = _senpai_extract_value(raw, r"NAME")
     anime_name = _senpai_extract_value(raw, r"ANIME")
     rarity = _senpai_extract_value(raw, r"RARITY")
 
@@ -927,6 +947,7 @@ def parse_senpai_message(message: Message, src: SourceDef) -> ParsedText:
             (raw or "")[:700],
         )
     return parsed
+
 
 def parse_caption_text(text: Optional[str]) -> ParsedText:
     raw = normalize_parse_text(text)
