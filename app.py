@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import html as html_lib
 import logging
 import os
 import re
@@ -162,10 +161,6 @@ def normalize_name(name: str) -> str:
 
 def normalize_parse_text(text: Optional[str]) -> str:
     text = text or ""
-    # Some Bot API fields may be HTML escaped/formatted when collected via html_text/model_dump.
-    # Normalize them back to plain text before parser regexes run.
-    text = html_lib.unescape(str(text))
-    text = re.sub(r"<[^>]+>", " ", text)
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("\r", "\n")
     text = text.replace("：", ":").replace("﹕", ":").replace("꞉", ":")
@@ -209,35 +204,6 @@ def normalize_forward_mapping_key(value: str) -> str:
     return clean_value(value).lstrip("@").casefold()
 
 
-def compact_forward_mapping_key(value: str) -> str:
-    """A stronger forward-title key used only for fuzzy source matching.
-
-    Telegram channel titles may contain emoji/punctuation such as
-    "🦠 SenpaiCatcher / DB".  Normal exact mapping is kept for all sources,
-    and this compact key is used as a safe fallback so that cosmetic symbols
-    do not break source detection.
-    """
-    value = unicodedata.normalize("NFKC", value or "")
-    value = value.casefold().lstrip("@")
-    value = re.sub(r"[^0-9a-z]+", "", value)
-    return value
-
-
-def is_senpai_source_hint(value: str) -> bool:
-    key = compact_forward_mapping_key(value)
-    if not key:
-        return False
-    return (
-        key in {
-            "senpaicatcher",
-            "senpaicatcherdb",
-            "senpaibase",
-            "senpaicatcherbot",
-        }
-        or ("senpaicatcher" in key and ("db" in key or "database" in key))
-    )
-
-
 def norm_username(value: str) -> str:
     return clean_value(value).lstrip("@").lower()
 
@@ -279,21 +245,31 @@ WAIFUX_SERIES_RE = re.compile(r"^[^\n\r]*?\bSeries\b\s*[:\-]?\s*(.+?)\s*$", re.I
 WAIFUX_ID_RE = re.compile(r"^[^\n\r]*?\bID\b\s*[:\-]?\s*#?\s*([0-9]+)\s*$", re.IGNORECASE | re.MULTILINE)
 
 SENPAI_NAME_RE = re.compile(
-    r"(?:^|\n)[^\n\r]*?\bName\b\s*[:：\-]\s*([^\n\r]+)",
-    re.IGNORECASE,
+    r"^[^\n\r]*?\bName\b\s*[:：\-]\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 SENPAI_ANIME_RE = re.compile(
-    r"(?:^|\n)[^\n\r]*?\bAnime\b\s*[:：\-]\s*([^\n\r]+)",
-    re.IGNORECASE,
+    r"^[^\n\r]*?\bAnime\b\s*[:：\-]\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 SENPAI_RARITY_RE = re.compile(
-    r"(?:^|\n)[^\n\r]*?\bRarity\b\s*[:：\-]\s*([^\n\r]+)",
-    re.IGNORECASE,
+    r"^[^\n\r]*?\bRarity\b\s*[:：\-]\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 SENPAI_ID_RE = re.compile(
-    r"(?:^|\n)[^\n\r]*?(?:🆔\s*)?(?:CHAR\s*ID|CHARACTER\s*ID|CARD\s*ID|\bID\b)\s*[:：\-]?\s*#?\s*([0-9]+)",
-    re.IGNORECASE,
+    r"^[^\n\r]*?(?:🆔\s*)?(?:\bCHAR\s*)?\bID\b\s*[:：\-]?\s*#?\s*([0-9]+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
+
+# SenpaiCatcher / DB captions can arrive as multiline caption, flattened one-line
+# text, or nested inside Bot API model_dump(). These hints and label boundaries
+# make both source detection and parsing robust for forwarded DB posts.
+SENPAI_DB_HINT_RE = re.compile(
+    r"new\s+character\s+added\s+to\s+the\s+bot|char\s*id\s*[:：\-]|\bname\b\s*[:：\-].*\banime\b\s*[:：\-].*\brarity\b\s*[:：\-]",
+    re.IGNORECASE | re.DOTALL,
+)
+SENPAI_NEXT_LABEL = r"(?:🆔\s*)?(?:CHAR\s*)?ID|(?:👤\s*)?NAME|(?:📺\s*)?ANIME|(?:💎\s*)?RARITY|(?:➕\s*)?ADDED\s+BY|NEW\s+CHARACTER"
+
 
 RARITY_UPDATE_NAME_RE = re.compile(r"^[^\n\r]*?\bWaifu\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 RARITY_UPDATE_NEW_RE = re.compile(r"^[^\n\r]*?\bNew\s+Rarity\b\s*[:\-]?\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -355,18 +331,15 @@ SOURCE_CONFIGS: list[SourceDef] = [
         "/pick",
         "@SenpaiCatcherBot",
         ("SenpaiCatcherBot", "senpaicatcherbot"),
-        # Senpai DB channel forwards are supported without helper account.
-        # Known channel: t.me/SenpaiBase, display title: 🦠 SenpaiCatcher / DB
         forward_usernames=("SenpaiCatcherBot", "senpaicatcherbot", "SenpaiBase", "senpaibase"),
         forward_titles=(
             "SenpaiCatcher",
             "SenpaiCatcher🎞.",
             "SenpaiCatcher.",
             "SenpaiCatcher / DB",
-            "SenpaiCatcher DB",
             "🦠 SenpaiCatcher / DB",
+            "SenpaiCatcher DB",
             "SenpaiBase",
-            "Senpai Base",
         ),
         parser="senpai",
     ),
@@ -449,9 +422,17 @@ def resolve_source_from_arg(raw_arg: Optional[str]) -> Optional[SourceDef]:
 def collect_candidate_texts(message: Message) -> list[str]:
     candidates: list[str] = []
 
-    def add(value: Any) -> None:
-        value = normalize_parse_text(str(value) if value is not None else "")
-        if value and value not in candidates:
+    def add_candidate(value: Any, *, require_hint: bool = False) -> None:
+        if value is None:
+            return
+        if not isinstance(value, str):
+            return
+        value = normalize_parse_text(value)
+        if not value:
+            return
+        if require_hint and not SENPAI_DB_HINT_RE.search(value):
+            return
+        if value not in candidates:
             candidates.append(value)
 
     # Normal Bot API fields.
@@ -461,10 +442,13 @@ def collect_candidate_texts(message: Message) -> list[str]:
         getattr(message, "html_text", None),
         getattr(message, "md_text", None),
     ]:
-        add(value)
+        add_candidate(value)
 
-    # External/replied objects sometimes carry caption/text depending on how Telegram forwards/posts.
-    for obj in [getattr(message, "external_reply", None), getattr(message, "reply_to_message", None)]:
+    # Extra/reply fields can contain the forwarded post caption on some Telegram clients.
+    for obj in [
+        getattr(message, "external_reply", None),
+        getattr(message, "reply_to_message", None),
+    ]:
         if obj is None:
             continue
         for value in [
@@ -473,34 +457,31 @@ def collect_candidate_texts(message: Message) -> list[str]:
             getattr(obj, "html_text", None),
             getattr(obj, "md_text", None),
         ]:
-            add(value)
+            add_candidate(value)
 
-    # Last-resort: scan the raw aiogram model dump for strings that look like Senpai DB captions.
-    # This protects against client/API variants where caption-like text is stored in a nested field.
-    def walk(obj: Any, depth: int = 0) -> None:
-        if depth > 4:
+    # Last-resort scan: some forwarded messages expose the caption only in nested
+    # model_dump() values. We only keep strings that look like a Senpai DB caption.
+    try:
+        dumped = message.model_dump()
+    except Exception:
+        dumped = None
+
+    def walk(obj: Any) -> None:
+        if obj is None:
             return
         if isinstance(obj, str):
-            upper = obj.upper()
-            if any(token in upper for token in ("CHAR ID", "NAME:", "ANIME:", "RARITY:")):
-                add(obj)
+            add_candidate(obj, require_hint=True)
             return
         if isinstance(obj, dict):
-            for v in obj.values():
-                walk(v, depth + 1)
+            for value in obj.values():
+                walk(value)
             return
         if isinstance(obj, (list, tuple)):
-            for v in obj:
-                walk(v, depth + 1)
+            for value in obj:
+                walk(value)
 
-    try:
-        if hasattr(message, "model_dump"):
-            walk(message.model_dump(exclude_none=True))
-    except Exception:
-        logger.debug("message model_dump text scan failed", exc_info=True)
-
+    walk(dumped)
     return candidates
-
 
 def get_combined_message_text(message: Message) -> str:
     return "\n".join(collect_candidate_texts(message)).strip()
@@ -573,21 +554,9 @@ def get_forward_source_info(message: Message) -> dict[str, Any]:
             info["username"] = norm_username(getattr(chat, "username", "") or "")
             info["title"] = normalize_forward_mapping_key(getattr(chat, "title", "") or "")
             return info
-        sender_user = getattr(origin, "sender_user", None)
-        if sender_user is not None:
-            info["username"] = norm_username(getattr(sender_user, "username", "") or "")
-            info["title"] = normalize_forward_mapping_key(
-                getattr(sender_user, "full_name", "")
-                or getattr(sender_user, "first_name", "")
-                or getattr(sender_user, "username", "")
-                or ""
-            )
-            return info
-
         sender_user_name = norm_username(getattr(origin, "sender_user_name", "") or "")
         if sender_user_name:
             info["username"] = sender_user_name
-            info["title"] = normalize_forward_mapping_key(sender_user_name)
             return info
     legacy_chat = getattr(message, "forward_from_chat", None)
     if legacy_chat is not None:
@@ -606,25 +575,6 @@ def get_forward_source_info(message: Message) -> dict[str, Any]:
     return info
 
 
-def is_senpai_forward_info(info: dict[str, Any]) -> bool:
-    username = str(info.get("username") or "")
-    title = str(info.get("title") or "")
-    return is_senpai_source_hint(username) or is_senpai_source_hint(title)
-
-
-def is_senpai_db_caption_message(message: Message) -> bool:
-    raw = get_combined_message_text(message)
-    upper = normalize_parse_text(raw).upper()
-    if not upper:
-        return False
-    return (
-        "NEW CHARACTER ADDED TO THE BOT" in upper
-        and ("CHAR ID" in upper or " ID:" in upper or "🆔" in raw)
-        and "NAME" in upper
-        and "RARITY" in upper
-    )
-
-
 def get_forward_source_def(message: Message) -> Optional[SourceDef]:
     if not is_forwarded_message(message):
         return None
@@ -636,6 +586,16 @@ def get_forward_source_def(message: Message) -> Optional[SourceDef]:
         chat_id_int = int(chat_id) if chat_id is not None else None
     except Exception:
         chat_id_int = None
+
+    # Strong Senpai DB source fallback. Telegram may show the channel as
+    # "🦠 SenpaiCatcher / DB" while usernames/titles vary by forward type.
+    senpai_src = SOURCE_BY_KEY.get("senpai_catcher")
+    if senpai_src:
+        if username in {"senpaicatcherbot", "senpaibase"}:
+            return senpai_src
+        if "senpaicatcher" in title or "senpaibase" in title:
+            return senpai_src
+
     if chat_id_int is not None and chat_id_int in SOURCE_BY_FORWARD_CHAT_ID:
         return SOURCE_BY_FORWARD_CHAT_ID[chat_id_int]
     if username and username in SOURCE_BY_FORWARD_USERNAME:
@@ -646,13 +606,12 @@ def get_forward_source_def(message: Message) -> Optional[SourceDef]:
         if key and title and (key in title or title in key):
             return src
 
-    # Fuzzy fallback for titles like "🦠 SenpaiCatcher / DB".
-    # This does not affect other sources because it only triggers on senpaicatcher/senpaibase hints.
-    if is_senpai_forward_info(info):
-        return SOURCE_BY_KEY.get("senpai_catcher")
-
+    # If forward title is hidden but caption is clearly Senpai DB format, still save
+    # to the Senpai collection instead of treating it as unsupported.
+    raw = get_combined_message_text(message)
+    if senpai_src and SENPAI_DB_HINT_RE.search(raw or ""):
+        return senpai_src
     return None
-
 
 def is_allowed_forward_source(message: Message) -> bool:
     return is_forwarded_message(message) and bool(get_forward_source_def(message))
@@ -663,8 +622,6 @@ def get_autosave_source_label(message: Message) -> str:
     if inline_username:
         return f"inline @{inline_username}"
     source_info = get_forward_source_info(message)
-    if is_senpai_forward_info(source_info) or is_senpai_db_caption_message(message):
-        return "SenpaiCatcher / DB"
     return source_info.get("title") or source_info.get("username") or str(source_info.get("chat_id") or "forwarded source")
 
 
@@ -678,8 +635,6 @@ def get_log_source_label(message: Message) -> str:
         return get_autosave_source_label(message)
     if is_forwarded_message(message):
         return get_autosave_source_label(message)
-    if is_senpai_db_caption_message(message):
-        return "SenpaiCatcher / DB"
     return "manual-save"
 
 
@@ -883,75 +838,95 @@ def parse_waifux_message(message: Message, src: SourceDef) -> ParsedText:
 
 def normalize_senpai_text_value(value: Optional[str]) -> Optional[str]:
     value = clean_value(unicodedata.normalize("NFKC", value or ""))
-    return value or None
-
-
-def _senpai_strip_field_value(value: Optional[str]) -> Optional[str]:
-    value = clean_value(value or "")
-    if not value:
-        return None
-    value = re.split(
-        r"\s+(?:CHAR\s*ID|CHARACTER\s*ID|CARD\s*ID|NAME|ANIME|RARITY|ADDED\s*BY)\s*[:：\-]",
-        value,
-        maxsplit=1,
-        flags=re.IGNORECASE,
-    )[0]
+    value = re.sub(r"^(?:👤|📺|💎|🆔|➕)+\s*", "", value).strip()
+    value = re.sub(r"\s*(?:➕\s*)?ADDED\s+BY\s*[:：\-].*$", "", value, flags=re.IGNORECASE).strip()
     return clean_value(value) or None
 
 
-def _senpai_field_from_lines(raw: str, labels: tuple[str, ...]) -> Optional[str]:
-    """Robust Senpai DB field extractor."""
+def _senpai_extract_value(raw: str, label_regex: str) -> Optional[str]:
+    """Extract a Senpai label value from multiline or flattened caption text."""
+    raw = normalize_parse_text(raw)
     if not raw:
         return None
-    label_alt = "|".join(re.escape(label).replace("\\ ", r"\s+") for label in labels)
     pattern = re.compile(
-        rf"(?:^|\\n)[^\\n\\r]*?(?:{label_alt})\s*[:：\-]?\s*([^\\n\\r]+)",
-        re.IGNORECASE,
+        rf"(?:^|[\s\n\r])(?:[^\w\n\r:：\-]{{0,8}}\s*)?(?:{label_regex})\s*[:：\-]\s*(.+?)(?=(?:[\s\n\r]+(?:[^\w\n\r:：\-]{{0,8}}\s*)?(?:{SENPAI_NEXT_LABEL})\s*[:：\-]?)|$)",
+        re.IGNORECASE | re.DOTALL,
     )
     match = pattern.search(raw)
-    if match:
-        return _senpai_strip_field_value(match.group(1))
-
-    for line in lines_from_text(raw):
-        clean_line = unicodedata.normalize("NFKC", line)
-        clean_line = re.sub(r"^[^A-Za-z0-9]+", "", clean_line).strip()
-        match = re.match(rf"(?:{label_alt})\s*[:：\-]?\s*(.+)$", clean_line, re.IGNORECASE)
-        if match:
-            return _senpai_strip_field_value(match.group(1))
-    return None
+    if not match:
+        return None
+    value = match.group(1)
+    value = re.split(r"(?:➕\s*)?ADDED\s+BY\s*[:：\-]", value, maxsplit=1, flags=re.IGNORECASE)[0]
+    value = re.sub(r"\s*[-━─]{3,}\s*", " ", value)
+    return normalize_senpai_text_value(value)
 
 
-def parse_senpai_message(message: Message, src: SourceDef) -> ParsedText:
-    raw = get_combined_message_text(message)
-    return parse_senpai_text(raw, src)
+def _senpai_split_line_value(line: str, label_regex: str) -> Optional[str]:
+    match = re.search(rf"(?:[^\w\n\r:：\-]{{0,8}}\s*)?(?:{label_regex})\s*[:：\-]\s*(.+)$", line, re.IGNORECASE)
+    if not match:
+        return None
+    return normalize_senpai_text_value(match.group(1))
 
 
-def parse_senpai_text(raw: str, src: Optional[SourceDef] = None) -> ParsedText:
+def parse_senpai_raw_text(raw: str, src: Optional[SourceDef] = None) -> ParsedText:
     src = src or SOURCE_BY_KEY["senpai_catcher"]
     raw = normalize_parse_text(raw)
 
-    name = parse_field(raw, [SENPAI_NAME_RE]) or _senpai_field_from_lines(raw, ("NAME",))
-    anime_name = parse_field(raw, [SENPAI_ANIME_RE]) or _senpai_field_from_lines(raw, ("ANIME", "ANIME NAME"))
-    rarity = parse_field(raw, [SENPAI_RARITY_RE]) or _senpai_field_from_lines(raw, ("RARITY",))
-    card_id = parse_field(raw, [SENPAI_ID_RE]) or _senpai_field_from_lines(raw, ("CHAR ID", "CHARACTER ID", "CARD ID", "ID"))
+    card_id = None
+    name = _senpai_extract_value(raw, r"(?:CHAR\s*)?ID")
+    # If the loose value extractor used the ID label, convert that value to card_id.
+    if name and re.fullmatch(r"#?\d+", name):
+        card_id = re.sub(r"\D+", "", name)
+        name = None
+    else:
+        id_value = _senpai_extract_value(raw, r"(?:CHAR\s*)?ID")
+        if id_value:
+            id_match = re.search(r"\d+", id_value)
+            if id_match:
+                card_id = id_match.group(0)
 
-    if not card_id:
-        m = re.search(r"(?:CHAR\s*ID|CHARACTER\s*ID|CARD\s*ID|\bID\b)\s*[:：\-]?\s*#?\s*(\d+)", raw, re.IGNORECASE)
-        if m:
-            card_id = m.group(1)
+    name = _senpai_extract_value(raw, r"NAME") or name
+    anime_name = _senpai_extract_value(raw, r"ANIME")
+    rarity = _senpai_extract_value(raw, r"RARITY")
+
+    # Line-by-line fallback for exact channel captions.
+    for line in lines_from_text(raw):
+        if not card_id and re.search(r"(?:CHAR\s*)?ID\s*[:：\-]", line, re.IGNORECASE):
+            match = re.search(r"\d+", line)
+            if match:
+                card_id = match.group(0)
+        if not name:
+            name = _senpai_split_line_value(line, r"NAME")
+        if not anime_name:
+            anime_name = _senpai_split_line_value(line, r"ANIME")
+        if not rarity:
+            rarity = _senpai_split_line_value(line, r"RARITY")
 
     return finalize_parsed_text(
         ParsedText(
-            name=normalize_senpai_text_value(name),
-            anime_name=normalize_senpai_text_value(anime_name),
-            rarity=normalize_senpai_text_value(rarity),
-            card_id=clean_value(card_id or "") or None,
+            name=name,
+            anime_name=anime_name,
+            rarity=rarity,
+            card_id=card_id,
             command_name=src.command,
             raw_text=raw,
             source_key=src.key,
         )
     )
 
+
+def parse_senpai_message(message: Message, src: SourceDef) -> ParsedText:
+    raw = get_combined_message_text(message)
+    parsed = parse_senpai_raw_text(raw, src)
+    if not parsed.name:
+        info = get_forward_source_info(message)
+        logger.warning(
+            "Senpai parse failed | forward_info=%s | raw_len=%s | raw_preview=%s",
+            info,
+            len(raw or ""),
+            (raw or "")[:700],
+        )
+    return parsed
 
 def parse_caption_text(text: Optional[str]) -> ParsedText:
     raw = normalize_parse_text(text)
@@ -989,12 +964,6 @@ def parse_source_update(message: Message) -> Optional[SourceUpdate]:
 
 def get_effective_parsed_message(message: Message) -> ParsedText:
     src = get_inline_source_def(message) or get_forward_source_def(message) or get_sender_source_def(message)
-
-    # If Telegram does not expose the forward title/username but the caption is clearly
-    # a Senpai DB post, still parse and save it into items_senpai_catcher.
-    if not src and is_senpai_db_caption_message(message):
-        src = SOURCE_BY_KEY.get("senpai_catcher")
-
     if src:
         if src.parser == "name_only":
             return parse_name_only_message(message, src)
@@ -1015,12 +984,11 @@ def get_effective_parsed_message(message: Message) -> ParsedText:
             return parse_capture_or_seizer_message(message, src)
         return parse_owo_message(message, src, mode="colon")
 
-    raw_text = get_combined_message_text(message)
-    raw_l = normalize_parse_text(raw_text).lower()
-    if raw_text and (("senpai" in raw_l) or ("char id" in raw_l and "rarity" in raw_l and "anime" in raw_l and "name" in raw_l)):
-        senpai = parse_senpai_text(raw_text)
-        if senpai.name or senpai.card_id:
-            return senpai
+    raw = get_combined_message_text(message)
+    if SENPAI_DB_HINT_RE.search(raw or ""):
+        parsed = parse_senpai_raw_text(raw, SOURCE_BY_KEY["senpai_catcher"])
+        if parsed.name:
+            return parsed
 
     parsed = parse_caption_text_from_message(message)
     if parsed.command_name:
@@ -1581,15 +1549,6 @@ async def autosave_media(message: Message, bot: Bot, mode: str) -> None:
         return
     parsed = get_effective_parsed_message(message)
     if not parsed.name:
-        src = get_forward_source_def(message) or get_inline_source_def(message) or get_sender_source_def(message)
-        if src and src.key == "senpai_catcher":
-            raw_debug = get_combined_message_text(message)
-            logger.warning(
-                "Senpai parse failed | forward_info=%s | raw_len=%s | raw_preview=%r",
-                get_forward_source_info(message),
-                len(raw_debug or ""),
-                (raw_debug or "")[:800],
-            )
         await message.reply("name မတွေ့ပါ။ supported post ကို forward / send လုပ်ပါ။")
         return
     try:
@@ -1625,12 +1584,7 @@ async def media_handler(message: Message, bot: Bot) -> None:
     user_can_save = await can_save(message)
     user_id = message.from_user.id if message.from_user else None
     autosave_enabled = await get_autosave_mode(user_id)
-    supported_source = bool(
-        is_allowed_forward_source(message)
-        or get_inline_source_command(message)
-        or get_sender_source_def(message)
-        or is_senpai_db_caption_message(message)
-    )
+    supported_source = bool(is_allowed_forward_source(message) or get_inline_source_command(message) or get_sender_source_def(message))
 
     if is_default_target_chat(message):
         target_chat_autosave_enabled = await get_target_chat_autosave_mode(message.chat.id)
@@ -1720,8 +1674,6 @@ ADD_HELPER_STATE_FILE = os.getenv("STATE_FILE", "seeder_state.json").strip() or 
 ADD_HELPER_CLEAR_STATE_ON_FINISH = os.getenv("CLEAR_STATE_ON_FINISH", "true").lower() == "true"
 ADD_HELPER_SESSIONS_DIR = os.getenv("SESSIONS_DIR", "sessions").strip() or "sessions"
 ADD_HELPER_STARTUP_MESSAGE = os.getenv("ADD_HELPER_STARTUP_MESSAGE", "true").lower() == "true"
-SENPAI_RESPONSE_TIMEOUT = int(os.getenv("SENPAI_RESPONSE_TIMEOUT", "15"))
-SENPAI_SAVE_NOTICE = os.getenv("SENPAI_SAVE_NOTICE", "true").lower() == "true"
 
 ADD_HELPER_INLINE_OVERRIDES = {
     "character_catcher": os.getenv("CATCHER_INLINE_BOT", "@Character_Catcher_Bot"),
@@ -1914,7 +1866,6 @@ class AddHelperService:
         self.runner_stop_event = asyncio.Event()
         self.state = AddHelperRunnerState(target_chat=DEFAULT_TARGET_CHAT)
         self.resolved_target_chat: str | int | None = DEFAULT_TARGET_CHAT
-        self.client_user_id: int = 0
 
     def is_running(self) -> bool:
         return self.runner_task is not None and not self.runner_task.done()
@@ -1950,7 +1901,6 @@ class AddHelperService:
         self.stop_event = asyncio.Event()
         self.control_task = asyncio.create_task(self._control_loop())
         me = await self.client.get_me()
-        self.client_user_id = int(getattr(me, "id", 0) or 0)
         logger.info("AddHelper user session started as %s (%s)", me.first_name, me.id)
 
     async def stop(self) -> None:
@@ -2293,105 +2243,6 @@ class AddHelperService:
         finally:
             self.state.running = False
 
-    def _pyro_has_supported_media(self, msg) -> bool:
-        document = getattr(msg, "document", None)
-        return bool(
-            getattr(msg, "photo", None)
-            or getattr(msg, "video", None)
-            or getattr(msg, "animation", None)
-            or (document and str(getattr(document, "mime_type", "") or "").startswith("video/"))
-        )
-
-    def _pyro_media_type_and_file(self, msg) -> tuple[Optional[str], Any]:
-        if getattr(msg, "photo", None):
-            return "photo", msg.photo
-        if getattr(msg, "video", None):
-            return "video", msg.video
-        if getattr(msg, "animation", None):
-            return "video", msg.animation
-        document = getattr(msg, "document", None)
-        if document and str(getattr(document, "mime_type", "") or "").startswith("video/"):
-            return "video", document
-        return None, None
-
-    async def _download_pyro_message_bytes(self, msg) -> bytes:
-        tmp_path = ""
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".media") as tmp:
-                tmp_path = tmp.name
-            downloaded = await self.client.download_media(msg, file_name=tmp_path)
-            if not downloaded:
-                raise RuntimeError("Pyrogram did not return downloaded file path")
-            data = Path(downloaded).read_bytes()
-            return data
-        finally:
-            for candidate in {tmp_path, tmp_path + ".mp4", tmp_path + ".jpg", tmp_path + ".jpeg", tmp_path + ".png"}:
-                if candidate:
-                    try:
-                        Path(candidate).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-
-    async def _get_pyro_media_meta(self, msg) -> MediaMeta:
-        media_type, media = self._pyro_media_type_and_file(msg)
-        if not media_type or not media:
-            raise ValueError("Senpai response does not contain supported media")
-        raw = await self._download_pyro_message_bytes(msg)
-        digest = sha256_hex(raw)
-        file_id = getattr(media, "file_id", "") or ""
-        file_unique_id = getattr(media, "file_unique_id", "") or ""
-        if media_type == "photo":
-            return MediaMeta(
-                media_type="photo",
-                file_id=file_id,
-                file_unique_id=file_unique_id,
-                sha256=digest,
-                phash=compute_photo_phash(raw),
-            )
-        return MediaMeta(
-            media_type="video",
-            file_id=file_id,
-            file_unique_id=file_unique_id,
-            sha256=digest,
-            frame_hashes=compute_video_hashes(raw),
-        )
-
-    def _is_senpai_bot_message(self, msg) -> bool:
-        user = getattr(msg, "from_user", None)
-        username = norm_username(getattr(user, "username", "") or "") if user else ""
-        return username == "senpaicatcherbot"
-
-    async def _find_senpai_response(self, after_message_id: int, expected_id: int):
-        deadline = asyncio.get_running_loop().time() + max(3, SENPAI_RESPONSE_TIMEOUT)
-        while not self.runner_stop_event.is_set() and asyncio.get_running_loop().time() < deadline:
-            candidates = []
-            async for msg in self.client.get_chat_history(self.resolved_target_chat, limit=15):
-                if int(getattr(msg, "id", 0) or 0) <= int(after_message_id):
-                    break
-                candidates.append(msg)
-
-            candidates.reverse()
-            for msg in candidates:
-                if not self._is_senpai_bot_message(msg):
-                    continue
-                if not self._pyro_has_supported_media(msg):
-                    continue
-
-                raw = normalize_parse_text(getattr(msg, "caption", "") or getattr(msg, "text", "") or "")
-                parsed = parse_senpai_text(raw)
-                if not parsed.name:
-                    continue
-                if parsed.card_id and str(parsed.card_id) != str(expected_id):
-                    continue
-                return msg, parsed
-
-            await self._sleep_with_stop(1)
-        return None, None
-
-    async def _save_senpai_pyro_response(self, msg, parsed: ParsedText) -> tuple[dict[str, Any], bool]:
-        meta = await self._get_pyro_media_meta(msg)
-        return await upsert_item(meta=meta, parsed=parsed, saved_by=self.client_user_id or 0)
-
     async def start_senpai_command_loop(self, start_from: int, delay_seconds: int):
         if self.is_running():
             raise RuntimeError("AddHelper is already running")
@@ -2419,38 +2270,12 @@ class AddHelperService:
         try:
             while not self.runner_stop_event.is_set():
                 try:
-                    sent_msg = await self.client.send_message(self.resolved_target_chat, f"/c {current}")
+                    await self.client.send_message(self.resolved_target_chat, f"/c {current}")
                     self.state.sent_count += 1
                     self.state.current_index = current
                     self.state.current_offset = str(current)
                     self._save_progress("@SenpaiCatcherBot", str(current), current)
                     logger.info("Senpai command sent: /c %s", current)
-
-                    senpai_msg, parsed = await self._find_senpai_response(int(sent_msg.id), current)
-                    if senpai_msg and parsed:
-                        doc, created = await self._save_senpai_pyro_response(senpai_msg, parsed)
-                        status = "Saved" if created else "Updated"
-                        logger.info(
-                            "Senpai %s | id=%s name=%s collection=%s",
-                            status.lower(),
-                            doc.get("card_id"),
-                            doc.get("name"),
-                            doc.get("source_collection"),
-                        )
-                        if SENPAI_SAVE_NOTICE:
-                            await self._reply(
-                                f"✅ Senpai {status}\n"
-                                f"Name: {doc.get('name') or '-'}\n"
-                                f"ID: {doc.get('card_id') or '-'}\n"
-                                f"Rarity: {doc.get('rarity') or '-'}\n"
-                                f"Collection: {doc.get('source_collection') or '-'}\n"
-                                f"Cmd: {doc.get('command_name') or '/pick'}",
-                                reply_to_message_id=getattr(senpai_msg, "id", None),
-                            )
-                    else:
-                        self.state.skipped_count += 1
-                        self.state.last_error = f"Senpai response /c {current} not found before timeout"
-                        logger.warning("Senpai response not found for /c %s", current)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
