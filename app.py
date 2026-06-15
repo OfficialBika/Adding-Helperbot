@@ -362,6 +362,7 @@ SOURCE_CONFIGS: list[SourceDef] = [
             "SenpaiCatcher DB",
             "SenpaiBase",
         ),
+        forward_chat_ids=(-1003218799804,),
         parser="senpai",
     ),
     SourceDef(
@@ -1705,11 +1706,18 @@ ADD_HELPER_INLINE_OVERRIDES = {
     "roronoa_zoro": os.getenv("RORONOA_ZORO_INLINE_BOT", "@roronoa_zoro_robot"),
     "character_picker": os.getenv("CHARACTER_PICKER_INLINE_BOT", "@character_picker_bot"),
 }
+# Senpai DB forward source is built in, so VPS env does NOT need FW_SENPAI_SOURCE_CHAT.
+# Env override is still supported if you ever change the channel later.
+SENPAI_FORWARD_CHAT_ID = -1003218799804
+SENPAI_FORWARD_CHAT_USERNAME = "@SenpaiBase"
+SENPAI_FORWARD_CHAT_DEFAULT = str(SENPAI_FORWARD_CHAT_ID)
+
 ADD_HELPER_FORWARD_OVERRIDES = {
     "character_seizer": os.getenv("FW_SEIZER_SOURCE_CHAT", "@Seizer_Database"),
     "capture_character": os.getenv("FW_CAPTURE_SOURCE_CHAT", "@CaptureDatabase"),
     "characters_hallow": os.getenv("FW_HALLOW_SOURCE_CHAT", "@hallowuploads"),
     "bika_character": os.getenv("FW_BIKA_SOURCE_CHAT", os.getenv("FW_BIKA_CHARACTER", "-1003923540741")),
+    "senpai_catcher": os.getenv("FW_SENPAI_SOURCE_CHAT", os.getenv("FW_SENPAI_SOURCE", SENPAI_FORWARD_CHAT_DEFAULT)),
 }
 
 
@@ -1752,6 +1760,16 @@ ADD_HELPER_SOURCES: list[AddHelperSource] = [
     AddHelperSource("roronoa_zoro", "Roronoa Zoro", _env_inline("roronoa_zoro", "@roronoa_zoro_robot"), ("/startzorobot", "/startzoro", "/start_roronoa_zoro"), ("/resumezorobot", "/resumezoro", "/resume_roronoa_zoro")),
     AddHelperSource("character_picker", "Character Picker", _env_inline("character_picker", "@character_picker_bot"), ("/startpickerbot", "/startpicker", "/start_character_picker"), ("/resumepickerbot", "/resumepicker", "/resume_character_picker")),
     AddHelperSource(
+        "senpai_catcher",
+        "SenpaiCatcher DB",
+        _env_inline("senpai_catcher", "@SenpaiCatcherBot"),
+        ("/startsenpaibot", "/start_senpai_bot"),
+        ("/resumesenpaibot", "/resume_senpai_bot"),
+        _env_forward("senpai_catcher", SENPAI_FORWARD_CHAT_DEFAULT),
+        ("/startfwsenpaibot", "/startfwsenpai", "/start_fw_senpai"),
+        ("/resumefwsenpaibot", "/resumefwsenpai", "/resume_fw_senpai"),
+    ),
+    AddHelperSource(
         "bika_character",
         "Bika Character",
         _env_inline("bika_character", "@BikaCharacterBot"),
@@ -1792,6 +1810,16 @@ for _src in ADD_HELPER_SOURCES:
 
 def add_helper_clean(value: str) -> str:
     return " ".join((value or "").split()).strip()
+
+
+def add_helper_chat_ref(value):
+    """Pyrogram accepts usernames and integer chat ids. Convert numeric strings."""
+    if isinstance(value, int):
+        return value
+    value = add_helper_clean(str(value or ""))
+    if value.lstrip("-").isdigit():
+        return int(value)
+    return value
 
 
 def add_helper_command_name(text: str) -> str:
@@ -2172,7 +2200,8 @@ class AddHelperService:
     async def _collect_forward_media_ids(self, source_chat: str, media_filter: str = "all") -> list[int]:
         media_filter = (media_filter or "all").lower().strip()
         media_ids: list[int] = []
-        async for msg in self.client.get_chat_history(source_chat):
+        source_chat_ref = add_helper_chat_ref(source_chat)
+        async for msg in self.client.get_chat_history(source_chat_ref):
             document = getattr(msg, "document", None)
             has_photo = bool(getattr(msg, "photo", None))
             has_video = bool(getattr(msg, "video", None) or getattr(msg, "animation", None) or (document and str(getattr(document, "mime_type", "") or "").startswith("video/")))
@@ -2195,7 +2224,7 @@ class AddHelperService:
             if self.runner_stop_event.is_set():
                 raise asyncio.CancelledError()
             try:
-                await self.client.forward_messages(chat_id=self.resolved_target_chat, from_chat_id=source_chat, message_ids=message_id)
+                await self.client.forward_messages(chat_id=self.resolved_target_chat, from_chat_id=add_helper_chat_ref(source_chat), message_ids=message_id)
                 return
             except FloodWait as e:
                 wait_for = int(getattr(e, "value", getattr(e, "x", 5)))
@@ -2327,6 +2356,7 @@ class AddHelperService:
             if src.forward_chat and src.forward_start_aliases:
                 lines.append(f"• {src.title}: {src.forward_start_aliases[0]} [delay] | {src.forward_resume_aliases[0]} <count> [delay]")
         lines += ["", "Senpai command loop:", "• SenpaiCatcher: /startsenpaibot [delay] | /resumesenpaibot <start_id> [delay]"]
+        lines += ["Senpai DB forward:", "• SenpaiBase: /startfwsenpaibot [delay] | /resumefwsenpaibot <count> [delay]"]
         lines += ["", "Other: /helperstatus /stophelper /resethelperprogress /checkinline <source>"]
         return "\n".join(lines)
 
