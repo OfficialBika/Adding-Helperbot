@@ -340,7 +340,22 @@ SOURCE_CONFIGS: list[SourceDef] = [
     SourceDef("takers_character", "items_takers_character", "/take", "@Takers_character_bot", ("Takers_character_bot", "takers_character_bot"), parser="owo_space"),
     SourceDef("catch_your_husbando", "items_catch_your_husbando", "/guess", "@Catch_Your_Husbando_Bot", ("Catch_Your_Husbando_Bot", "catch_your_husbando_bot"), parser="owo_colon"),
     SourceDef("smash_character", "items_smash_character", "/smash", "@Smash_Character_Bot", ("Smash_Character_Bot", "smash_character_bot"), parser="smash"),
-    SourceDef("waifux_grab", "items_waifux_grab", "/grab", "@WaifuxGrabBot", ("WaifuxGrabBot", "waifuxgrabbot"), parser="waifux", save_rarity=False),
+    SourceDef(
+        "waifux_grab",
+        "items_waifux_grab",
+        "/grab",
+        "@WaifuxGrabBot",
+        ("WaifuxGrabBot", "waifuxgrabbot"),
+        forward_usernames=("WAIFUXGRAB_DATABASE", "waifuxgrab_database"),
+        forward_titles=(
+            "WAIFUXGRAB",
+            "WAIFUXGRAB DATABASE",
+            "WAIFUXGRAB_DATABASE",
+            "WaifuxGrab Database",
+        ),
+        parser="waifux",
+        save_rarity=True,
+    ),
     SourceDef("catch_your_waifu", "items_catch_your_waifu", "/guess", "@Catch_Your_Waifu_Bot", ("Catch_Your_Waifu_Bot", "catch_your_waifu_bot"), parser="owo_colon"),
     SourceDef("waifu_grabber", "items_waifu_grabber", "/grab", "@Waifu_Grabber_Bot", ("Waifu_Grabber_Bot", "waifu_grabber_bot"), parser="owo_colon"),
     # New inline sources requested by owner
@@ -853,8 +868,33 @@ def clean_waifux_name_value(value: Optional[str]) -> Optional[str]:
 
 def parse_waifux_message(message: Message, src: SourceDef) -> ParsedText:
     raw = get_combined_message_text(message)
+
+    # WAIFUXGRAB_DATABASE forwarded captions use label format:
+    # NEW WAIFU ADDED
+    # ⋆ Item ID : 2263
+    # ⋆ Name : Isabel
+    # ⋆ Rarity : Classy 👠
+    # ⋆ Category : Legendary 🔵
+    # ⋆ Media : Photo
+    # This label parser keeps name/card_id/rarity while still forcing
+    # source_key=waifux_grab, collection=items_waifux_grab and command=/grab.
+    label = parse_label_message(message, src)
+    if label.name or label.card_id:
+        label.command_name = src.command
+        label.source_key = src.key
+        return finalize_parsed_text(label)
+
+    # Backward compatibility for older Waifux inline/caption style.
     return finalize_parsed_text(
-        ParsedText(name=clean_waifux_name_value(parse_field(raw, [WAIFUX_NAME_RE])), anime_name=parse_field(raw, [WAIFUX_SERIES_RE]), rarity=None, card_id=parse_field(raw, [WAIFUX_ID_RE]), command_name=src.command, raw_text=raw, source_key=src.key)
+        ParsedText(
+            name=clean_waifux_name_value(parse_field(raw, [WAIFUX_NAME_RE])),
+            anime_name=parse_field(raw, [WAIFUX_SERIES_RE]),
+            rarity=parse_field(raw, RARITY_PATTERNS) if src.save_rarity else None,
+            card_id=parse_field(raw, [WAIFUX_ID_RE]),
+            command_name=src.command,
+            raw_text=raw,
+            source_key=src.key,
+        )
     )
 
 
@@ -1716,6 +1756,7 @@ ADD_HELPER_FORWARD_OVERRIDES = {
     "character_seizer": os.getenv("FW_SEIZER_SOURCE_CHAT", "@Seizer_Database"),
     "capture_character": os.getenv("FW_CAPTURE_SOURCE_CHAT", "@CaptureDatabase"),
     "characters_hallow": os.getenv("FW_HALLOW_SOURCE_CHAT", "@hallowuploads"),
+    "waifux_grab": os.getenv("FW_WAIFUX_SOURCE_CHAT", os.getenv("FW_WAIFUX_GRAB_SOURCE_CHAT", "@WAIFUXGRAB_DATABASE")),
     "bika_character": os.getenv("FW_BIKA_SOURCE_CHAT", os.getenv("FW_BIKA_CHARACTER", "-1003923540741")),
     "senpai_catcher": os.getenv("FW_SENPAI_SOURCE_CHAT", os.getenv("FW_SENPAI_SOURCE", SENPAI_FORWARD_CHAT_DEFAULT)),
 }
@@ -1754,7 +1795,16 @@ ADD_HELPER_SOURCES: list[AddHelperSource] = [
     AddHelperSource("takers_character", "Takers Character", _env_inline("takers_character", "@Takers_character_bot"), ("/starttakersbot", "/starttakers", "/start_takers"), ("/resumetakersbot", "/resumetakers", "/resume_takers")),
     AddHelperSource("catch_your_husbando", "Catch Your Husbando", _env_inline("catch_your_husbando", "@Catch_Your_Husbando_Bot"), ("/startcatchyourhusbandobot", "/startcatchyourhusbando", "/start_catch_your_husbando"), ("/resumecatchyourhusbandobot", "/resumecatchyourhusbando", "/resume_catch_your_husbando")),
     AddHelperSource("smash_character", "Smash Character", _env_inline("smash_character", "@Smash_Character_Bot"), ("/startsmashbot", "/startsmash", "/start_smash"), ("/resumesmashbot", "/resumesmash", "/resume_smash")),
-    AddHelperSource("waifux_grab", "Waifux Grab", _env_inline("waifux_grab", "@WaifuxGrabBot"), ("/startwaifuxgrabbot", "/startwaifuxgrab", "/startwaifux", "/start_waifux"), ("/resumewaifuxgrabbot", "/resumewaifuxgrab", "/resumewaifux", "/resume_waifux")),
+    AddHelperSource(
+        "waifux_grab",
+        "Waifux Grab",
+        _env_inline("waifux_grab", "@WaifuxGrabBot"),
+        ("/startwaifuxgrabbot", "/startwaifuxgrab", "/startwaifux", "/start_waifux"),
+        ("/resumewaifuxgrabbot", "/resumewaifuxgrab", "/resumewaifux", "/resume_waifux"),
+        _env_forward("waifux_grab", "@WAIFUXGRAB_DATABASE"),
+        ("/startfwwaifuxgrabbot", "/startfwwaifuxgrab", "/startfwwaifux", "/start_fw_waifux"),
+        ("/resumefwwaifuxgrabbot", "/resumefwwaifuxgrab", "/resumefwwaifux", "/resume_fw_waifux"),
+    ),
     AddHelperSource("catch_your_waifu", "Catch Your Waifu", _env_inline("catch_your_waifu", "@Catch_Your_Waifu_Bot"), ("/startcatchyourwaifubot", "/startcatchyourwaifu", "/start_catch_your_waifu"), ("/resumecatchyourwaifubot", "/resumecatchyourwaifu", "/resume_catch_your_waifu")),
     AddHelperSource("waifu_grabber", "Waifu Grabber", _env_inline("waifu_grabber", "@Waifu_Grabber_Bot"), ("/startwaifugrabberbot", "/startwaifugrabber", "/start_waifu_grabber"), ("/resumewaifugrabberbot", "/resumewaifugrabber", "/resume_waifu_grabber")),
     AddHelperSource("roronoa_zoro", "Roronoa Zoro", _env_inline("roronoa_zoro", "@roronoa_zoro_robot"), ("/startzorobot", "/startzoro", "/start_roronoa_zoro"), ("/resumezorobot", "/resumezoro", "/resume_roronoa_zoro")),
