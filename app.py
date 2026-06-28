@@ -1000,12 +1000,21 @@ def parse_senpai_message(message: Message, src: SourceDef) -> ParsedText:
     return parsed
 
 
+MYANMAR_CHARACTER_HINT_RE = re.compile(
+    r"(?:added\s+new\s+character|artwork\s+updated|rarity\s+updated|role\s+updated|character\s+updated|တင်ပြီးပြီ|uploaded\s*\(/?li\)|\buploaded\b|\bmovie\b|\bname\b|\brarity\b|🆔|📛|⭐)",
+    re.IGNORECASE,
+)
 MYANMAR_CHARACTER_HEADERS_RE = re.compile(
-    r"(?:added\s+new\s+character|artwork\s+updated|rarity\s+updated|role\s+updated|character\s+updated)",
+    r"(?:added\s+new\s+character|artwork\s+updated|rarity\s+updated|role\s+updated|character\s+updated|တင်ပြီးပြီ|uploaded\s*\(/?li\)|\buploaded\b)",
+    re.IGNORECASE,
+)
+MYANMAR_SEPARATOR_LINE_RE = re.compile(r"^[\s╔╗╚╝═─━┄┅┈┉\-_|╭╮╰╯┌┐└┘]+$")
+MYANMAR_NOTICE_RE = re.compile(
+    r"(?:သတိပြု|အလိုအလျောက်|drop\s+ကျ|mission\s+လုပ်|leave\s+a\s+comment|comments?\b)",
     re.IGNORECASE,
 )
 MYANMAR_FIELD_SKIP_RE = re.compile(
-    r"\b(?:anime|role|rarity|id|uploaded\s+by)\b|leave\s+a\s+comment|comments?\b",
+    r"\b(?:anime|movie|role|rarity|id|uploaded\s+by|uploader)\b|photo\s+updated|leave\s+a\s+comment|comments?\b",
     re.IGNORECASE,
 )
 
@@ -1014,54 +1023,193 @@ def clean_myanmar_character_field(value: Optional[str], *, keep_symbols: bool = 
     value = clean_value(normalize_stylized_latin(unicodedata.normalize("NFKC", value or "")))
     if not value:
         return None
-    # In this source fields use a middle bullet as separator: "Rarity • 💮 Common 💮".
-    # Keep surrounding rarity emojis exactly as the source caption shows them.
+    value = value.replace("•", " • ")
+    value = clean_value(value)
     if not keep_symbols:
         value = strip_leading_symbols(value)
     return clean_value(value) or None
 
 
-def parse_myanmar_bullet_field(raw: str, label: str, *, keep_symbols: bool = True) -> Optional[str]:
-    # Supports lines like:
-    #   🎬 Anime   •  Battle Through The Heavens
-    #   💠 Rarity  •  💮 Common 💮
-    #   🆔 ID      •  1469
+def clean_myanmar_name_value(value: Optional[str]) -> Optional[str]:
+    value = clean_myanmar_character_field(value, keep_symbols=True)
+    if not value:
+        return None
+    # Supports:
+    #   📛 Name: Gojo
+    #   📛 Suguru Geto
+    #   𝗡𝗶𝗹𝗼𝘂 [☃]
+    value = re.sub(r"^\s*📛\s*", "", value).strip()
+    value = re.sub(r"^\s*(?:Name|NAME)\s*[:：•\-]\s*", "", value, flags=re.IGNORECASE).strip()
+    value = re.sub(r"\s*(?:\||•)\s*(?:anime|movie|rarity|role|id)\b.*$", "", value, flags=re.IGNORECASE).strip()
+    return clean_value(value) or None
+
+
+def clean_myanmar_rarity_value(value: Optional[str]) -> Optional[str]:
+    value = clean_myanmar_character_field(value, keep_symbols=True)
+    if not value:
+        return None
+    # Supports:
+    #   💠 Rarity • 💮 Common 💮
+    #   ⭐ Rarity: 💎 Celestial
+    #   ⭐ 🧬 Infinity
+    value = re.sub(r"^\s*[⭐💠]+\s*", "", value).strip()
+    value = re.sub(r"^\s*(?:Rarity|RARITY)\s*[:：•\-]?\s*", "", value, flags=re.IGNORECASE).strip()
+    value = re.sub(r"\s*(?:🎭|Role\b).*$", "", value, flags=re.IGNORECASE).strip()
+    return clean_value(value) or None
+
+
+def parse_myanmar_line_field(raw: str, label_regex: str, *, keep_symbols: bool = True) -> Optional[str]:
+    # Line-by-line parser for captions with preserved newlines.
+    # Allows emoji before label and separators ':', '•', '-'.
     pattern = re.compile(
-        rf"^[^\n\r]*?\b{re.escape(label)}\b\s*(?:[:：\-]|•)\s*(.+?)\s*$",
+        rf"^[^\n\r]*?(?:{label_regex})\s*(?:[:：•\-])\s*(.+?)\s*$",
         re.IGNORECASE | re.MULTILINE,
     )
     match = pattern.search(raw or "")
     if not match:
         return None
     value = match.group(1)
-    if label.lower() == "id":
-        id_match = re.search(r"\d+", value)
-        return id_match.group(0) if id_match else None
     return clean_myanmar_character_field(value, keep_symbols=keep_symbols)
 
 
+def parse_myanmar_inline_field(raw: str, label_regex: str, *, keep_symbols: bool = True) -> Optional[str]:
+    # Fallback for rare flattened captions where labels are in one long line.
+    next_label = r"(?:🆔\s*)?ID|(?:📛\s*)?NAME|(?:🎬\s*)?(?:ANIME|MOVIE)|(?:💠|⭐)?\s*RARITY|(?:🎭\s*)?ROLE|(?:👤|📤)\s*(?:UPLOADED\s+BY|UPLOADER)|PHOTO\s+UPDATED|ARTWORK\s+UPDATED"
+    pattern = re.compile(
+        rf"(?:^|[\s\n\r])[^\w\n\r:：•\-]{{0,8}}(?:{label_regex})\s*(?:[:：•\-])\s*(.+?)(?=(?:\s+[^\w\n\r:：•\-]{{0,8}}(?:{next_label})\s*(?:[:：•\-])?)|$)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(raw or "")
+    if not match:
+        return None
+    value = match.group(1)
+    return clean_myanmar_character_field(value, keep_symbols=keep_symbols)
+
+
+def parse_myanmar_field(raw: str, label_regex: str, *, keep_symbols: bool = True) -> Optional[str]:
+    return parse_myanmar_line_field(raw, label_regex, keep_symbols=keep_symbols) or parse_myanmar_inline_field(raw, label_regex, keep_symbols=keep_symbols)
+
+
+def extract_myanmar_character_id(raw: str) -> Optional[str]:
+    # Supports both:
+    #   🆔 ID: 20
+    #   🆔 ID         • 1469
+    value = parse_myanmar_field(raw, r"(?:🆔\s*)?ID", keep_symbols=False)
+    if value:
+        match = re.search(r"\d+", value)
+        if match:
+            return match.group(0)
+    # fallback: line begins with ID emoji and number directly
+    match = re.search(r"(?:^|\n)\s*🆔[^\n\r]*?#?\s*(\d+)\b", raw or "", flags=re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def extract_myanmar_character_rarity(raw: str) -> Optional[str]:
+    value = parse_myanmar_field(raw, r"(?:💠\s*)?Rarity", keep_symbols=True)
+    if value:
+        return clean_myanmar_rarity_value(value)
+
+    # Box format:
+    #   ⭐ 🧬 Infinity
+    #   🎭 🎴 Normal
+    for line in lines_from_text(raw):
+        cleaned = clean_myanmar_character_field(line, keep_symbols=True) or ""
+        if not cleaned:
+            continue
+        if re.search(r"\b(?:anime|movie|name|id|role|uploaded|uploader)\b", cleaned, re.IGNORECASE):
+            continue
+        if cleaned.strip().startswith("⭐"):
+            rarity = clean_myanmar_rarity_value(cleaned)
+            if rarity:
+                return rarity
+    return None
+
+
+def extract_myanmar_character_anime(raw: str) -> Optional[str]:
+    value = parse_myanmar_field(raw, r"(?:🎬\s*)?(?:Anime|Movie)", keep_symbols=False)
+    if value:
+        return strip_leading_symbols(value) or value
+
+    # Box format: anime is usually the line starting with 🎬 without a label.
+    for line in lines_from_text(raw):
+        cleaned = clean_myanmar_character_field(line, keep_symbols=True) or ""
+        if cleaned.strip().startswith("🎬"):
+            value = re.sub(r"^\s*🎬\s*", "", cleaned).strip()
+            value = re.sub(r"^\s*(?:Anime|Movie)\s*[:：•\-]?\s*", "", value, flags=re.IGNORECASE).strip()
+            return strip_leading_symbols(value) or value
+    return None
+
+
+def is_myanmar_noise_line(line: str) -> bool:
+    cleaned = clean_myanmar_character_field(line, keep_symbols=True) or ""
+    if not cleaned:
+        return True
+    if MYANMAR_SEPARATOR_LINE_RE.match(cleaned):
+        return True
+    if MYANMAR_CHARACTER_HEADERS_RE.search(cleaned):
+        return True
+    if MYANMAR_NOTICE_RE.search(cleaned):
+        return True
+    if MYANMAR_FIELD_SKIP_RE.search(cleaned):
+        return True
+    if cleaned.startswith(("✅", "⚠️", "╔", "╚", "║")):
+        return True
+    return False
+
+
 def extract_myanmar_character_name(raw: str) -> Optional[str]:
+    # Priority 1: explicit label.
+    value = parse_myanmar_field(raw, r"(?:📛\s*)?Name", keep_symbols=True)
+    name = clean_myanmar_name_value(value)
+    if name:
+        return name
+
     lines = lines_from_text(raw)
+
+    # Priority 2: icon-only name line used by Uploaded (/li) format.
+    for line in lines:
+        cleaned = clean_myanmar_character_field(line, keep_symbols=True) or ""
+        if cleaned.strip().startswith("📛") and not re.search(r"\bname\b\s*[:：•\-]", cleaned, re.IGNORECASE):
+            name = clean_myanmar_name_value(cleaned)
+            if name:
+                return name
+
+    # Priority 3: line immediately after a source header, used by Added New Character / Artwork Updated.
     seen_header = False
     fallback: Optional[str] = None
-
     for line in lines:
-        line = clean_myanmar_character_field(line, keep_symbols=True) or ""
-        if not line:
+        cleaned = clean_myanmar_character_field(line, keep_symbols=True) or ""
+        if not cleaned:
             continue
-        if MYANMAR_CHARACTER_HEADERS_RE.search(line):
+        if MYANMAR_CHARACTER_HEADERS_RE.search(cleaned):
             seen_header = True
             continue
-        if MYANMAR_FIELD_SKIP_RE.search(line):
+        if is_myanmar_noise_line(cleaned):
             continue
-        if re.search(r"^[-━─➖]+$", line):
+        candidate = clean_myanmar_name_value(cleaned)
+        if not candidate:
             continue
         if seen_header:
-            return line
+            return candidate
         if fallback is None:
-            fallback = line
+            fallback = candidate
 
     return fallback
+
+
+def looks_like_myanmar_character_source(message: Message) -> bool:
+    raw = get_combined_message_text(message)
+    if not raw:
+        return False
+    raw = normalize_parse_text(raw)
+    return bool(
+        SOURCE_BY_KEY.get("super_zeko")
+        and MYANMAR_CHARACTER_HINT_RE.search(raw)
+        and (
+            extract_myanmar_character_id(raw)
+            or extract_myanmar_character_name(raw)
+        )
+    )
 
 
 def parse_myanmar_character_message(message: Message, src: SourceDef) -> ParsedText:
@@ -1069,15 +1217,14 @@ def parse_myanmar_character_message(message: Message, src: SourceDef) -> ParsedT
     raw = normalize_parse_text(raw)
 
     name = extract_myanmar_character_name(raw)
-    anime_name = parse_myanmar_bullet_field(raw, "Anime", keep_symbols=False)
-    # Keep emoji markers as requested: "💮 Common 💮", "🫧 Uncommon 🫧", etc.
-    rarity = parse_myanmar_bullet_field(raw, "Rarity", keep_symbols=True) if src.save_rarity else None
-    card_id = parse_myanmar_bullet_field(raw, "ID", keep_symbols=False)
+    anime_name = extract_myanmar_character_anime(raw)
+    rarity = extract_myanmar_character_rarity(raw) if src.save_rarity else None
+    card_id = extract_myanmar_character_id(raw)
 
     parsed = ParsedText(
-        name=clean_myanmar_character_field(name, keep_symbols=True),
-        anime_name=anime_name,
-        rarity=rarity,
+        name=clean_myanmar_name_value(name),
+        anime_name=clean_myanmar_character_field(anime_name, keep_symbols=False),
+        rarity=clean_myanmar_rarity_value(rarity) if rarity else None,
         card_id=clean_value(card_id or "") or None,
         command_name=src.command,
         raw_text=raw,
@@ -1085,7 +1232,6 @@ def parse_myanmar_character_message(message: Message, src: SourceDef) -> ParsedT
     )
     parsed.command_name = clean_command_name(parsed.command_name or src.command)
     return parsed
-
 
 def parse_caption_text(text: Optional[str]) -> ParsedText:
     raw = normalize_parse_text(text)
@@ -1149,6 +1295,12 @@ def get_effective_parsed_message(message: Message) -> ParsedText:
     if SENPAI_DB_HINT_RE.search(raw or ""):
         parsed = parse_senpai_raw_text(raw, SOURCE_BY_KEY["senpai_catcher"])
         if parsed.name:
+            return parsed
+
+    super_zeko_src = SOURCE_BY_KEY.get("super_zeko")
+    if super_zeko_src and MYANMAR_CHARACTER_HINT_RE.search(raw or ""):
+        parsed = parse_myanmar_character_message(message, super_zeko_src)
+        if parsed.name or parsed.card_id:
             return parsed
 
     parsed = parse_caption_text_from_message(message)
@@ -1746,7 +1898,12 @@ async def media_handler(message: Message, bot: Bot) -> None:
     user_can_save = await can_save(message)
     user_id = message.from_user.id if message.from_user else None
     autosave_enabled = await get_autosave_mode(user_id)
-    supported_source = bool(is_allowed_forward_source(message) or get_inline_source_command(message) or get_sender_source_def(message))
+    supported_source = bool(
+        is_allowed_forward_source(message)
+        or get_inline_source_command(message)
+        or get_sender_source_def(message)
+        or looks_like_myanmar_character_source(message)
+    )
 
     if is_default_target_chat(message):
         target_chat_autosave_enabled = await get_target_chat_autosave_mode(message.chat.id)
