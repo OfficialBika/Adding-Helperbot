@@ -390,6 +390,16 @@ SOURCE_CONFIGS: list[SourceDef] = [
         forward_chat_ids=(-1003923540741,),
         parser="label",
     ),
+    SourceDef(
+        "super_zeko",
+        "items_super_zeko",
+        "/ziceko",
+        "@Super_zeko_bot",
+        ("Super_zeko_bot", "super_zeko_bot"),
+        forward_usernames=("zicekodata_1",),
+        forward_titles=("Myanmar Character Logs", "Myanmar Character", "Myanmar Character Log"),
+        parser="myanmar_character",
+    ),
 ]
 
 SOURCE_BY_KEY = {src.key: src for src in SOURCE_CONFIGS}
@@ -990,6 +1000,93 @@ def parse_senpai_message(message: Message, src: SourceDef) -> ParsedText:
     return parsed
 
 
+MYANMAR_CHARACTER_HEADERS_RE = re.compile(
+    r"(?:added\s+new\s+character|artwork\s+updated|rarity\s+updated|role\s+updated|character\s+updated)",
+    re.IGNORECASE,
+)
+MYANMAR_FIELD_SKIP_RE = re.compile(
+    r"\b(?:anime|role|rarity|id|uploaded\s+by)\b|leave\s+a\s+comment|comments?\b",
+    re.IGNORECASE,
+)
+
+
+def clean_myanmar_character_field(value: Optional[str], *, keep_symbols: bool = True) -> Optional[str]:
+    value = clean_value(normalize_stylized_latin(unicodedata.normalize("NFKC", value or "")))
+    if not value:
+        return None
+    # In this source fields use a middle bullet as separator: "Rarity • 💮 Common 💮".
+    # Keep surrounding rarity emojis exactly as the source caption shows them.
+    if not keep_symbols:
+        value = strip_leading_symbols(value)
+    return clean_value(value) or None
+
+
+def parse_myanmar_bullet_field(raw: str, label: str, *, keep_symbols: bool = True) -> Optional[str]:
+    # Supports lines like:
+    #   🎬 Anime   •  Battle Through The Heavens
+    #   💠 Rarity  •  💮 Common 💮
+    #   🆔 ID      •  1469
+    pattern = re.compile(
+        rf"^[^\n\r]*?\b{re.escape(label)}\b\s*(?:[:：\-]|•)\s*(.+?)\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    match = pattern.search(raw or "")
+    if not match:
+        return None
+    value = match.group(1)
+    if label.lower() == "id":
+        id_match = re.search(r"\d+", value)
+        return id_match.group(0) if id_match else None
+    return clean_myanmar_character_field(value, keep_symbols=keep_symbols)
+
+
+def extract_myanmar_character_name(raw: str) -> Optional[str]:
+    lines = lines_from_text(raw)
+    seen_header = False
+    fallback: Optional[str] = None
+
+    for line in lines:
+        line = clean_myanmar_character_field(line, keep_symbols=True) or ""
+        if not line:
+            continue
+        if MYANMAR_CHARACTER_HEADERS_RE.search(line):
+            seen_header = True
+            continue
+        if MYANMAR_FIELD_SKIP_RE.search(line):
+            continue
+        if re.search(r"^[-━─➖]+$", line):
+            continue
+        if seen_header:
+            return line
+        if fallback is None:
+            fallback = line
+
+    return fallback
+
+
+def parse_myanmar_character_message(message: Message, src: SourceDef) -> ParsedText:
+    raw = get_combined_message_text(message)
+    raw = normalize_parse_text(raw)
+
+    name = extract_myanmar_character_name(raw)
+    anime_name = parse_myanmar_bullet_field(raw, "Anime", keep_symbols=False)
+    # Keep emoji markers as requested: "💮 Common 💮", "🫧 Uncommon 🫧", etc.
+    rarity = parse_myanmar_bullet_field(raw, "Rarity", keep_symbols=True) if src.save_rarity else None
+    card_id = parse_myanmar_bullet_field(raw, "ID", keep_symbols=False)
+
+    parsed = ParsedText(
+        name=clean_myanmar_character_field(name, keep_symbols=True),
+        anime_name=anime_name,
+        rarity=rarity,
+        card_id=clean_value(card_id or "") or None,
+        command_name=src.command,
+        raw_text=raw,
+        source_key=src.key,
+    )
+    parsed.command_name = clean_command_name(parsed.command_name or src.command)
+    return parsed
+
+
 def parse_caption_text(text: Optional[str]) -> ParsedText:
     raw = normalize_parse_text(text)
     return finalize_parsed_text(
@@ -1035,6 +1132,8 @@ def get_effective_parsed_message(message: Message) -> ParsedText:
             return parse_waifux_message(message, src)
         if src.parser == "senpai":
             return parse_senpai_message(message, src)
+        if src.parser == "myanmar_character":
+            return parse_myanmar_character_message(message, src)
         if src.parser == "owo_space":
             return parse_owo_message(message, src, mode="space")
         if src.parser == "label":
@@ -1385,6 +1484,7 @@ def build_start_text() -> str:
         "• @character_picker_bot → name + id + rarity\n"
         "• @BikaCharacterBot → name + id + rarity + anime (/bika)\n"
         "• @SenpaiCatcherBot → video/photo + name + id + rarity + anime (/pick)\n"
+        "• @Super_zeko_bot → photo/video + name + id + rarity + anime (/ziceko)\n"
     )
 
 
@@ -1745,6 +1845,7 @@ ADD_HELPER_INLINE_OVERRIDES = {
     "grab_your_waifu": os.getenv("GRAB_INLINE_BOT", "@Grab_Your_Waifu_Bot"),
     "roronoa_zoro": os.getenv("RORONOA_ZORO_INLINE_BOT", "@roronoa_zoro_robot"),
     "character_picker": os.getenv("CHARACTER_PICKER_INLINE_BOT", "@character_picker_bot"),
+    "super_zeko": os.getenv("SUPER_ZEKO_INLINE_BOT", "@Super_zeko_bot"),
 }
 # Senpai DB forward source is built in, so VPS env does NOT need FW_SENPAI_SOURCE_CHAT.
 # Env override is still supported if you ever change the channel later.
@@ -1759,6 +1860,7 @@ ADD_HELPER_FORWARD_OVERRIDES = {
     "waifux_grab": os.getenv("FW_WAIFUX_SOURCE_CHAT", os.getenv("FW_WAIFUX_GRAB_SOURCE_CHAT", "@WAIFUXGRAB_DATABASE")),
     "bika_character": os.getenv("FW_BIKA_SOURCE_CHAT", os.getenv("FW_BIKA_CHARACTER", "-1003923540741")),
     "senpai_catcher": os.getenv("FW_SENPAI_SOURCE_CHAT", os.getenv("FW_SENPAI_SOURCE", SENPAI_FORWARD_CHAT_DEFAULT)),
+    "super_zeko": os.getenv("FW_SUPER_ZEKO_SOURCE_CHAT", os.getenv("FW_ZICEKO_SOURCE_CHAT", "@zicekodata_1")),
 }
 
 
@@ -1828,6 +1930,16 @@ ADD_HELPER_SOURCES: list[AddHelperSource] = [
         _env_forward("bika_character", "-1003923540741"),
         ("/startfwbika", "/startfwbikabot", "/start_fw_bika"),
         ("/resumefwbika", "/resumefwbikabot", "/resume_fw_bika"),
+    ),
+    AddHelperSource(
+        "super_zeko",
+        "Super Zeko / Myanmar Character Logs",
+        _env_inline("super_zeko", "@Super_zeko_bot"),
+        ("/startzicekobot", "/startziceko", "/start_super_zeko"),
+        ("/resumezicekobot", "/resumeziceko", "/resume_super_zeko"),
+        _env_forward("super_zeko", "@zicekodata_1"),
+        ("/startfwzicekobot", "/startfwziceko", "/start_fw_ziceko"),
+        ("/resumefwzicekobot", "/resumefwziceko", "/resume_fw_ziceko"),
     ),
 ]
 
