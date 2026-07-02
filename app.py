@@ -391,6 +391,24 @@ SOURCE_CONFIGS: list[SourceDef] = [
         parser="label",
     ),
     SourceDef(
+        "orinx_waifu",
+        "items_orinx_waifu",
+        "/orin",
+        "@orinx_catcher_waifu_bot",
+        ("orinx_catcher_waifu_bot", "Orinx_Catcher_Waifu_Bot"),
+        forward_usernames=("timunagalaya",),
+        forward_titles=(
+            "-1003598338404",
+            "OrinX Waifu Bot",
+            "OrinX Waifu",
+            "OrinX Waifu Database",
+            "CHARACTER DATABASE",
+        ),
+        forward_chat_ids=(-1003598338404,),
+        parser="label",
+        save_rarity=True,
+    ),
+    SourceDef(
         "super_zeko",
         "items_super_zeko",
         "/ziceko",
@@ -1637,6 +1655,7 @@ def build_start_text() -> str:
         "• @BikaCharacterBot → name + id + rarity + anime (/bika)\n"
         "• @SenpaiCatcherBot → video/photo + name + id + rarity + anime (/pick)\n"
         "• @Super_zeko_bot → photo/video + name + id + rarity + anime (/ziceko)\n"
+        "• @orinx_catcher_waifu_bot → photo/video + name + id + rarity + series (/orin)\n"
     )
 
 
@@ -1793,7 +1812,7 @@ async def checkinline_handler(message: Message, command: CommandObject) -> None:
         return
     src = resolve_source_from_arg(command.args)
     if not src:
-        await message.reply("အသုံးပြုပုံ:\n/checkinline @roronoa_zoro_robot\n/checkinline @character_picker_bot\n/checkinline @BikaCharacterBot\n/checkinline roronoa_zoro\n/checkinline character_picker\n/checkinline bika_character")
+        await message.reply("အသုံးပြုပုံ:\n/checkinline @roronoa_zoro_robot\n/checkinline @character_picker_bot\n/checkinline @BikaCharacterBot\n/checkinline @orinx_catcher_waifu_bot\n/checkinline roronoa_zoro\n/checkinline character_picker\n/checkinline bika_character\n/checkinline orinx_waifu")
         return
     if not ADD_HELPER.enabled or not ADD_HELPER.client:
         await message.reply("/checkinline သုံးရန် ADD_HELPER_ENABLED=true နှင့် Pyrogram SESSION_STRING လိုပါတယ်။")
@@ -2003,6 +2022,7 @@ ADD_HELPER_INLINE_OVERRIDES = {
     "roronoa_zoro": os.getenv("RORONOA_ZORO_INLINE_BOT", "@roronoa_zoro_robot"),
     "character_picker": os.getenv("CHARACTER_PICKER_INLINE_BOT", "@character_picker_bot"),
     "super_zeko": os.getenv("SUPER_ZEKO_INLINE_BOT", "@Super_zeko_bot"),
+    "orinx_waifu": os.getenv("ORINX_INLINE_BOT", "@orinx_catcher_waifu_bot"),
 }
 # Senpai DB forward source is built in, so VPS env does NOT need FW_SENPAI_SOURCE_CHAT.
 # Env override is still supported if you ever change the channel later.
@@ -2018,6 +2038,7 @@ ADD_HELPER_FORWARD_OVERRIDES = {
     "bika_character": os.getenv("FW_BIKA_SOURCE_CHAT", os.getenv("FW_BIKA_CHARACTER", "-1003923540741")),
     "senpai_catcher": os.getenv("FW_SENPAI_SOURCE_CHAT", os.getenv("FW_SENPAI_SOURCE", SENPAI_FORWARD_CHAT_DEFAULT)),
     "super_zeko": os.getenv("FW_SUPER_ZEKO_SOURCE_CHAT", os.getenv("FW_ZICEKO_SOURCE_CHAT", "@zicekodata_1")),
+    "orinx_waifu": os.getenv("FW_ORINX_SOURCE_CHAT", os.getenv("FW_ORIN_SOURCE_CHAT", "@timunagalaya")),
 }
 
 
@@ -2097,6 +2118,16 @@ ADD_HELPER_SOURCES: list[AddHelperSource] = [
         _env_forward("super_zeko", "@zicekodata_1"),
         ("/startfwzicekobot", "/startfwziceko", "/start_fw_ziceko"),
         ("/resumefwzicekobot", "/resumefwziceko", "/resume_fw_ziceko"),
+    ),
+    AddHelperSource(
+        "orinx_waifu",
+        "OrinX Waifu / OrinX Logs",
+        _env_inline("orinx_waifu", "@orinx_catcher_waifu_bot"),
+        ("/startorinbot", "/startorin", "/start_orin", "/start_orinx"),
+        ("/resumeorinbot", "/resumeorin", "/resume_orin", "/resume_orinx"),
+        _env_forward("orinx_waifu", "@timunagalaya"),
+        ("/startfworinbot", "/startfworin", "/start_fw_orin", "/startfworinx"),
+        ("/resumefworinbot", "/resumefworin", "/resume_fw_orin", "/resumefworinx"),
     ),
 ]
 
