@@ -6,7 +6,7 @@ import re
 import shlex
 import tempfile
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -23,7 +23,7 @@ from aiogram.types import BotCommand, Message
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
-from PIL import Image
+from PIL import Image, ImageOps
 
 load_dotenv()
 
@@ -49,6 +49,35 @@ DEFAULT_COMMAND = os.getenv("DEFAULT_COMMAND", "/hallow").strip() or "/hallow"
 DEFAULT_SOURCE_KEY = os.getenv("DEFAULT_SOURCE_KEY", "characters_hallow").strip() or "characters_hallow"
 ADDED_LOG_CHANNEL = os.getenv("ADDED_LOG_CHANNEL", "@WaifuAddedList").strip()
 
+# Source-specific log/archive channels.
+# Sources not listed here continue using ADDED_LOG_CHANNEL.
+def parse_chat_ref(value: str):
+    value = (value or "").strip()
+    if value and value.lstrip("-").isdigit():
+        return int(value)
+    return value
+
+
+SOURCE_LOG_CHANNELS = {
+    "character_catcher": parse_chat_ref(
+        os.getenv("LOG_CHANNEL_CHARACTER_CATCHER", "-1004399932601")
+    ),
+    "takers_character": parse_chat_ref(
+        os.getenv("LOG_CHANNEL_TAKERS_CHARACTER", "-1004497919582")
+    ),
+    "characters_hallow": parse_chat_ref(
+        os.getenv("LOG_CHANNEL_CHARACTERS_HALLOW", "-1003592722414")
+    ),
+    "waifux_grab": parse_chat_ref(
+        os.getenv("LOG_CHANNEL_WAIFUX_GRAB", "-1003914166607")
+    ),
+    "senpai_catcher": parse_chat_ref(
+        os.getenv("LOG_CHANNEL_SENPAI_CATCHER", "-1004453629279")
+    ),
+}
+
+SENPAI_BOT_ID = int(os.getenv("SENPAI_BOT_ID", "8532697507") or 8532697507)
+
 DEFAULT_TARGET_CHAT_RAW = os.getenv("DEFAULT_TARGET_CHAT", "").strip()
 DEFAULT_TARGET_CHAT = (
     int(DEFAULT_TARGET_CHAT_RAW)
@@ -66,7 +95,19 @@ ENABLE_TELEGRAM_RESTART = os.getenv("ENABLE_TELEGRAM_RESTART", "false").lower() 
 PM2_PROCESS_NAME = os.getenv("PM2_PROCESS_NAME", "adderbotv2").strip() or "adderbotv2"
 PM2_BIN = os.getenv("PM2_BIN", "pm2").strip() or "pm2"
 
+
 CHECKINLINE_MAX_PAGES = int(os.getenv("CHECKINLINE_MAX_PAGES", "5000"))
+
+# Media fingerprint schema shared with Lookup V3.
+MEDIA_SCHEMA_VERSION = 3
+MEDIA_FINGERPRINT_VERSION = "media-fp-v3"
+PHOTO_HASH_VERSION = "photo-v3.1"
+VIDEO_HASH_VERSION = "video-v3.1"
+
+# Keep the old 3-point frame hashes for backward compatibility, while also
+# storing a denser V3 fingerprint for more robust video lookup.
+VIDEO_LEGACY_SAMPLE_POINTS = (0.20, 0.50, 0.80)
+VIDEO_V3_SAMPLE_POINTS = (0.05, 0.15, 0.30, 0.50, 0.70, 0.85, 0.95)
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
@@ -109,8 +150,10 @@ class SourceDef:
     forward_usernames: tuple[str, ...] = ()
     forward_titles: tuple[str, ...] = ()
     forward_chat_ids: tuple[int, ...] = ()
+    forward_user_ids: tuple[int, ...] = ()
     parser: str = "auto"
     save_rarity: bool = True
+
 
 
 @dataclass
@@ -121,7 +164,10 @@ class MediaMeta:
     sha256: str
     phash: Optional[str] = None
     frame_hashes: Optional[list[str]] = None
-
+    media_geometry: dict[str, Any] = field(default_factory=dict)
+    photo_fingerprint: Optional[dict[str, Any]] = None
+    video_fingerprint: Optional[dict[str, Any]] = None
+    fingerprint_version: str = MEDIA_FINGERPRINT_VERSION
 
 @dataclass
 class ParsedText:
@@ -367,7 +413,11 @@ SOURCE_CONFIGS: list[SourceDef] = [
         "/pick",
         "@SenpaiCatcherBot",
         ("SenpaiCatcherBot", "senpaicatcherbot"),
-        forward_usernames=("SenpaiCatcherBot", "senpaicatcherbot", "SenpaiBase", "senpaibase"),
+        forward_usernames=(
+            "SenpaiCatcherBot",
+            "senpaicatcherbot",
+            "fafafawfawfa",
+        ),
         forward_titles=(
             "SenpaiCatcher",
             "SenpaiCatcher🎞.",
@@ -375,9 +425,9 @@ SOURCE_CONFIGS: list[SourceDef] = [
             "SenpaiCatcher / DB",
             "🦠 SenpaiCatcher / DB",
             "SenpaiCatcher DB",
-            "SenpaiBase",
+            "senpai database",
         ),
-        forward_chat_ids=(-1003218799804,),
+        forward_user_ids=(SENPAI_BOT_ID,),
         parser="senpai",
     ),
     SourceDef(
@@ -440,6 +490,7 @@ SOURCE_BY_INLINE_USERNAME: dict[str, SourceDef] = {}
 SOURCE_BY_FORWARD_USERNAME: dict[str, SourceDef] = {}
 SOURCE_BY_FORWARD_TITLE: dict[str, SourceDef] = {}
 SOURCE_BY_FORWARD_CHAT_ID: dict[int, SourceDef] = {}
+SOURCE_BY_FORWARD_USER_ID: dict[int, SourceDef] = {}
 
 for src in SOURCE_CONFIGS:
     for username in (src.bot_username, *src.inline_usernames):
@@ -457,6 +508,9 @@ for src in SOURCE_CONFIGS:
     for chat_id in src.forward_chat_ids:
         if chat_id:
             SOURCE_BY_FORWARD_CHAT_ID[int(chat_id)] = src
+    for user_id in src.forward_user_ids:
+        if user_id:
+            SOURCE_BY_FORWARD_USER_ID[int(user_id)] = src
 
 
 def get_source_collection(source_key: Optional[str]):
@@ -622,28 +676,67 @@ def is_forwarded_message(message: Message) -> bool:
     )
 
 
+
 def get_forward_source_info(message: Message) -> dict[str, Any]:
-    info: dict[str, Any] = {"chat_id": None, "username": "", "title": "", "origin_type": ""}
+    info: dict[str, Any] = {
+        "chat_id": None,
+        "message_id": None,
+        "user_id": None,
+        "username": "",
+        "title": "",
+        "origin_type": "",
+    }
+
     origin = getattr(message, "forward_origin", None)
     if origin:
         info["origin_type"] = origin.__class__.__name__
+        info["message_id"] = getattr(origin, "message_id", None)
+
         chat = getattr(origin, "chat", None) or getattr(origin, "sender_chat", None)
         if chat is not None:
             info["chat_id"] = getattr(chat, "id", None)
             info["username"] = norm_username(getattr(chat, "username", "") or "")
             info["title"] = normalize_forward_mapping_key(getattr(chat, "title", "") or "")
             return info
-        sender_user_name = norm_username(getattr(origin, "sender_user_name", "") or "")
-        if sender_user_name:
-            info["username"] = sender_user_name
+
+        sender_user = getattr(origin, "sender_user", None)
+        if sender_user is not None:
+            info["user_id"] = getattr(sender_user, "id", None)
+            info["username"] = norm_username(getattr(sender_user, "username", "") or "")
+            info["title"] = normalize_forward_mapping_key(
+                getattr(sender_user, "full_name", "")
+                or getattr(sender_user, "first_name", "")
+                or ""
+            )
             return info
+
+        sender_user_name = clean_value(getattr(origin, "sender_user_name", "") or "")
+        if sender_user_name:
+            info["title"] = normalize_forward_mapping_key(sender_user_name)
+            info["username"] = norm_username(sender_user_name)
+            return info
+
     legacy_chat = getattr(message, "forward_from_chat", None)
     if legacy_chat is not None:
         info["chat_id"] = getattr(legacy_chat, "id", None)
+        info["message_id"] = getattr(message, "forward_from_message_id", None)
         info["username"] = norm_username(getattr(legacy_chat, "username", "") or "")
         info["title"] = normalize_forward_mapping_key(getattr(legacy_chat, "title", "") or "")
         info["origin_type"] = "legacy_forward_chat"
         return info
+
+    legacy_user = getattr(message, "forward_from", None)
+    if legacy_user is not None:
+        info["user_id"] = getattr(legacy_user, "id", None)
+        info["username"] = norm_username(getattr(legacy_user, "username", "") or "")
+        info["title"] = normalize_forward_mapping_key(
+            getattr(legacy_user, "full_name", "")
+            or getattr(legacy_user, "first_name", "")
+            or ""
+        )
+        info["origin_type"] = "legacy_forward_user"
+        return info
+
     sender_chat = getattr(message, "sender_chat", None)
     if sender_chat is not None:
         info["chat_id"] = getattr(sender_chat, "id", None)
@@ -651,8 +744,8 @@ def get_forward_source_info(message: Message) -> dict[str, Any]:
         info["title"] = normalize_forward_mapping_key(getattr(sender_chat, "title", "") or "")
         info["origin_type"] = "sender_chat"
         return info
-    return info
 
+    return info
 
 def get_forward_source_def(message: Message) -> Optional[SourceDef]:
     if not is_forwarded_message(message):
@@ -661,18 +754,28 @@ def get_forward_source_def(message: Message) -> Optional[SourceDef]:
     username = normalize_forward_mapping_key(info.get("username", ""))
     title = normalize_forward_mapping_key(info.get("title", ""))
     chat_id = info.get("chat_id")
+    user_id = info.get("user_id")
     try:
         chat_id_int = int(chat_id) if chat_id is not None else None
     except Exception:
         chat_id_int = None
+    try:
+        user_id_int = int(user_id) if user_id is not None else None
+    except Exception:
+        user_id_int = None
+
+    if user_id_int is not None and user_id_int in SOURCE_BY_FORWARD_USER_ID:
+        return SOURCE_BY_FORWARD_USER_ID[user_id_int]
 
     # Strong Senpai DB source fallback. Telegram may show the channel as
     # "🦠 SenpaiCatcher / DB" while usernames/titles vary by forward type.
     senpai_src = SOURCE_BY_KEY.get("senpai_catcher")
     if senpai_src:
-        if username in {"senpaicatcherbot", "senpaibase"}:
+        if user_id_int == SENPAI_BOT_ID:
             return senpai_src
-        if "senpaicatcher" in title or "senpaibase" in title:
+        if username in {"senpaicatcherbot", "fafafawfawfa"}:
+            return senpai_src
+        if "senpaicatcher" in title or "senpai database" in title:
             return senpai_src
 
     if chat_id_int is not None and chat_id_int in SOURCE_BY_FORWARD_CHAT_ID:
@@ -1345,17 +1448,37 @@ def get_effective_parsed_message(message: Message) -> ParsedText:
 # -----------------------------------------------------
 # DB logic
 # -----------------------------------------------------
+
 async def ensure_item_indexes(collection) -> None:
+    # Legacy exact indexes remain for current Lookup compatibility.
     await collection.create_index("file_unique_id", unique=True, sparse=True)
     await collection.create_index("sha256", unique=True, sparse=True)
+
+    # V3 alias / identity indexes.
+    await collection.create_index("file_unique_ids")
+    await collection.create_index("sha256_aliases")
+    await collection.create_index("item_key")
+
     await collection.create_index("media_type")
     await collection.create_index("normalized_name")
+    await collection.create_index("name_aliases")
     await collection.create_index("command_name")
     await collection.create_index("source_key")
     await collection.create_index("source_bot_key")
     await collection.create_index("card_id")
-    await collection.create_index("created_at")
 
+    # Fingerprint lookup helpers.
+    await collection.create_index("photo_fingerprint.phash")
+    await collection.create_index("photo_fingerprint.pixel_sha256")
+    await collection.create_index("video_fingerprint.video_signature")
+
+    # Forward origin / archive exact lookup helpers.
+    await collection.create_index(
+        [("source_origin.chat_id", 1), ("source_origin.message_id", 1)],
+        sparse=True,
+    )
+    await collection.create_index("archive.message_id", sparse=True)
+    await collection.create_index("created_at")
 
 async def ensure_indexes() -> None:
     for src in SOURCE_CONFIGS:
@@ -1437,58 +1560,177 @@ async def get_target_chat_autosave_mode(chat_id: Optional[int]) -> bool:
 
 async def apply_source_update(update: SourceUpdate) -> tuple[bool, str]:
     collection = get_source_collection(update.source_key)
+
     if update.update_type == "rename" and update.old_name and update.new_name:
+        old_name = clean_value(update.old_name)
+        new_name = clean_value(update.new_name)
         result = await collection.update_one(
-            {"normalized_name": normalize_name(update.old_name)},
-            {"$set": {"name": clean_value(update.new_name), "normalized_name": normalize_name(update.new_name), "updated_at": datetime.now(timezone.utc), "last_source_update": update.raw_text}},
+            {"normalized_name": normalize_name(old_name)},
+            {
+                "$set": {
+                    "name": new_name,
+                    "normalized_name": normalize_name(new_name),
+                    "updated_at": datetime.now(timezone.utc),
+                    "last_source_update": update.raw_text,
+                },
+                "$addToSet": {"name_aliases": old_name},
+            },
         )
         if result.modified_count:
             return True, f"Renamed: {update.old_name} → {update.new_name}"
         return False, f"Rename target not found: {update.old_name}"
+
     if update.update_type == "rarity" and update.old_name and update.new_rarity:
         new_rarity = clean_rarity_value(update.new_rarity)
         result = await collection.update_one(
             {"normalized_name": normalize_name(update.old_name)},
-            {"$set": {"rarity": new_rarity, "updated_at": datetime.now(timezone.utc), "last_source_update": update.raw_text}},
+            {
+                "$set": {
+                    "rarity": new_rarity,
+                    "updated_at": datetime.now(timezone.utc),
+                    "last_source_update": update.raw_text,
+                }
+            },
         )
         if result.modified_count:
             return True, f"Rarity updated: {update.old_name} → {new_rarity}"
         return False, f"Rarity update target not found: {update.old_name}"
+
     return False, "Invalid update message"
 
 
-async def upsert_item(*, meta: MediaMeta, parsed: ParsedText, saved_by: int) -> tuple[dict[str, Any], bool]:
+async def upsert_item(
+    *,
+    meta: MediaMeta,
+    parsed: ParsedText,
+    saved_by: int,
+    source_message: Optional[Message] = None,
+) -> tuple[dict[str, Any], bool]:
     command_name = clean_command_name(parsed.command_name or DEFAULT_COMMAND)
     source_key = parsed.source_key or get_default_source_key_from_command(command_name)
     src = SOURCE_BY_KEY.get(source_key)
     collection = get_source_collection(source_key)
+
     rarity_value = clean_value(parsed.rarity or "") if (src is None or src.save_rarity) else ""
+    normalized = normalize_name(parsed.name or "")
+    card_id = clean_value(parsed.card_id or "")
+
+    # Card ID is preferred as stable per-source identity. Name-only sources
+    # fall back to normalized name so media variants of the same card can merge.
+    item_key = (
+        f"{source_key}:{card_id}"
+        if card_id
+        else f"{source_key}:name:{normalized}"
+    )
+
+    source_origin = (
+        get_forward_source_info(source_message)
+        if source_message
+        else {
+            "chat_id": None,
+            "message_id": None,
+            "user_id": None,
+            "username": "",
+            "title": "",
+            "origin_type": "",
+        }
+    )
+
     doc = {
+        "schema_version": MEDIA_SCHEMA_VERSION,
+        "fingerprint_version": meta.fingerprint_version,
+        "photo_hash_version": PHOTO_HASH_VERSION if meta.media_type == "photo" else "",
+        "video_hash_version": VIDEO_HASH_VERSION if meta.media_type == "video" else "",
+        "item_key": item_key,
         "name": clean_value(parsed.name or ""),
-        "normalized_name": normalize_name(parsed.name or ""),
+        "normalized_name": normalized,
         "anime_name": clean_value(parsed.anime_name or ""),
         "rarity": rarity_value,
-        "card_id": clean_value(parsed.card_id or ""),
+        "card_id": card_id,
         "command_name": command_name,
         "source_key": source_key,
         "source_bot_key": source_key,
         "source_collection": collection.name,
+        "source_origin": source_origin,
         "raw_text": parsed.raw_text,
         "media_type": meta.media_type,
+
+        # Legacy single-value fields kept for current Lookup compatibility.
         "file_id": meta.file_id,
         "file_unique_id": meta.file_unique_id,
         "sha256": meta.sha256,
         "phash": meta.phash,
         "frame_hashes": meta.frame_hashes,
+
+        # V3 fields.
+        "media_geometry": meta.media_geometry,
+        "photo_fingerprint": meta.photo_fingerprint,
+        "video_fingerprint": meta.video_fingerprint,
+
         "saved_by": saved_by,
         "updated_at": datetime.now(timezone.utc),
     }
-    existing = await collection.find_one({"$or": [{"file_unique_id": meta.file_unique_id}, {"sha256": meta.sha256}]})
+
+    exact_filters: list[dict[str, Any]] = []
+    if meta.file_unique_id:
+        exact_filters.extend(
+            [
+                {"file_unique_id": meta.file_unique_id},
+                {"file_unique_ids": meta.file_unique_id},
+            ]
+        )
+    if meta.sha256:
+        exact_filters.extend(
+            [
+                {"sha256": meta.sha256},
+                {"sha256_aliases": meta.sha256},
+            ]
+        )
+
+    existing = None
+    if exact_filters:
+        existing = await collection.find_one({"$or": exact_filters})
+
+    # Stable identity fallback solves re-upload/re-compression variants where
+    # both Telegram UID and byte SHA changed.
+    if not existing and item_key:
+        existing = await collection.find_one({"item_key": item_key})
+
+    aliases_to_add: dict[str, Any] = {}
+    if meta.file_id:
+        aliases_to_add["file_ids"] = meta.file_id
+    if meta.file_unique_id:
+        aliases_to_add["file_unique_ids"] = meta.file_unique_id
+    if meta.sha256:
+        aliases_to_add["sha256_aliases"] = meta.sha256
+
     if existing:
-        await collection.update_one({"_id": existing["_id"]}, {"$set": doc})
+        update_doc: dict[str, Any] = {"$set": doc}
+        if aliases_to_add:
+            update_doc["$addToSet"] = dict(aliases_to_add)
+
+        old_name = clean_value(existing.get("name") or "")
+        new_name = clean_value(doc.get("name") or "")
+        if old_name and new_name and normalize_name(old_name) != normalize_name(new_name):
+            update_doc.setdefault("$addToSet", {})["name_aliases"] = old_name
+
+        await collection.update_one({"_id": existing["_id"]}, update_doc)
         existing.update(doc)
+
+        # Keep returned document in sync for reply/log formatting.
+        for key, value in aliases_to_add.items():
+            values = list(existing.get(key) or [])
+            if value and value not in values:
+                values.append(value)
+            existing[key] = values
         return existing, False
+
+    doc["file_ids"] = [meta.file_id] if meta.file_id else []
+    doc["file_unique_ids"] = [meta.file_unique_id] if meta.file_unique_id else []
+    doc["sha256_aliases"] = [meta.sha256] if meta.sha256 else []
+    doc["name_aliases"] = []
     doc["created_at"] = datetime.now(timezone.utc)
+
     result = await collection.insert_one(doc)
     doc["_id"] = result.inserted_id
     return doc, True
@@ -1510,52 +1752,209 @@ async def download_file_bytes(bot: Bot, file_id: str) -> bytes:
     return buffer.getvalue()
 
 
+def _photo_fingerprint(data: bytes) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    with Image.open(BytesIO(data)) as opened:
+        image = ImageOps.exif_transpose(opened).convert("RGB")
+        width, height = image.size
+
+        # Metadata/container differences do not affect this decoded-pixel hash.
+        pixel_material = (
+            width.to_bytes(4, "big")
+            + height.to_bytes(4, "big")
+            + image.tobytes()
+        )
+        pixel_sha256 = hashlib.sha256(pixel_material).hexdigest()
+
+        phash = str(imagehash.phash(image))
+        fingerprint = {
+            "pixel_sha256": pixel_sha256,
+            "phash": phash,
+            "phash_large": str(imagehash.phash(image, hash_size=16)),
+            "dhash": str(imagehash.dhash(image)),
+            "whash": str(imagehash.whash(image)),
+            "colorhash": str(imagehash.colorhash(image)),
+            "crop_hash": str(imagehash.crop_resistant_hash(image)),
+        }
+
+        geometry = {
+            "width": width,
+            "height": height,
+            "aspect_ratio": round(width / height, 8) if height else 0.0,
+            "orientation": (
+                "square"
+                if width == height
+                else ("landscape" if width > height else "portrait")
+            ),
+            "file_size": len(data),
+            "mime_type": (
+                Image.MIME.get(opened.format, "image/jpeg")
+                if opened.format
+                else "image/jpeg"
+            ),
+        }
+        return phash, fingerprint, geometry
+
+
 def compute_photo_phash(data: bytes) -> str:
-    with Image.open(BytesIO(data)) as img:
-        img = img.convert("RGB")
-        return str(imagehash.phash(img))
+    phash, _fingerprint, _geometry = _photo_fingerprint(data)
+    return phash
 
 
-def _frame_to_hash(frame) -> str:
+def _frame_hash_bundle(frame) -> dict[str, str]:
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     image = Image.fromarray(rgb)
-    return str(imagehash.phash(image))
+    return {
+        "phash": str(imagehash.phash(image)),
+        "dhash": str(imagehash.dhash(image)),
+    }
 
 
-def compute_video_hashes(data: bytes) -> list[str]:
+def _read_frame_hash(
+    cap,
+    frame_count: int,
+    position: float,
+) -> Optional[dict[str, Any]]:
+    # Use the same int(total * pct) rule that Lookup uses.
+    idx = max(0, min(frame_count - 1, int(frame_count * position)))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    ok, frame = cap.read()
+    if not ok or frame is None:
+        return None
+
+    bundle = _frame_hash_bundle(frame)
+    return {
+        "position": round(position, 4),
+        "frame_index": idx,
+        **bundle,
+    }
+
+
+def compute_video_fingerprint(
+    data: bytes,
+) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
         tmp.write(data)
         tmp.flush()
+
         cap = cv2.VideoCapture(tmp.name)
         if not cap.isOpened():
             raise RuntimeError("Failed to open video")
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        if frame_count <= 0:
+
+        try:
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+            if frame_count <= 0:
+                raise RuntimeError("Video contains no readable frames")
+
+            legacy_hashes: list[str] = []
+            for position in VIDEO_LEGACY_SAMPLE_POINTS:
+                sample = _read_frame_hash(cap, frame_count, position)
+                if sample:
+                    legacy_hashes.append(sample["phash"])
+
+            samples: list[dict[str, Any]] = []
+            for position in VIDEO_V3_SAMPLE_POINTS:
+                sample = _read_frame_hash(cap, frame_count, position)
+                if sample:
+                    samples.append(sample)
+
+            if not legacy_hashes and not samples:
+                raise RuntimeError("Could not extract frames from video")
+
+            signature_material = "|".join(
+                f"{sample['position']}:{sample['phash']}:{sample['dhash']}"
+                for sample in samples
+            ).encode("utf-8")
+            video_signature = (
+                hashlib.sha256(signature_material).hexdigest()
+                if signature_material
+                else ""
+            )
+
+            duration_ms = (
+                int(round((frame_count / fps) * 1000))
+                if fps > 0
+                else 0
+            )
+
+            fingerprint = {
+                "duration_ms": duration_ms,
+                "fps": round(fps, 6),
+                "frame_count": frame_count,
+                "width": width,
+                "height": height,
+                "sample_hashes": samples,
+                "video_signature": video_signature,
+            }
+
+            geometry = {
+                "width": width,
+                "height": height,
+                "aspect_ratio": round(width / height, 8) if height else 0.0,
+                "orientation": (
+                    "square"
+                    if width == height
+                    else ("landscape" if width > height else "portrait")
+                ),
+                "file_size": len(data),
+                "mime_type": "video/mp4",
+                "duration_ms": duration_ms,
+                "fps": round(fps, 6),
+                "frame_count": frame_count,
+            }
+            return legacy_hashes, fingerprint, geometry
+        finally:
             cap.release()
-            raise RuntimeError("Video contains no readable frames")
-        targets = sorted({max(0, int(frame_count * 0.2) - 1), max(0, int(frame_count * 0.5) - 1), max(0, int(frame_count * 0.8) - 1)})
-        hashes: list[str] = []
-        for idx in targets:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                hashes.append(_frame_to_hash(frame))
-        cap.release()
-        if not hashes:
-            raise RuntimeError("Could not extract frames from video")
-        return hashes
+
+
+def compute_video_hashes(data: bytes) -> list[str]:
+    hashes, _fingerprint, _geometry = compute_video_fingerprint(data)
+    return hashes
 
 
 async def get_media_meta(bot: Bot, message: Message) -> MediaMeta:
     media_type, media = extract_media_handle(message)
     if not media_type or not media:
         raise ValueError("Message does not contain supported media")
+
     raw = await download_file_bytes(bot, media.file_id)
     digest = sha256_hex(raw)
-    if media_type == "photo":
-        return MediaMeta(media_type="photo", file_id=media.file_id, file_unique_id=media.file_unique_id, sha256=digest, phash=compute_photo_phash(raw))
-    return MediaMeta(media_type="video", file_id=media.file_id, file_unique_id=media.file_unique_id, sha256=digest, frame_hashes=compute_video_hashes(raw))
 
+    if media_type == "photo":
+        phash, photo_fingerprint, geometry = _photo_fingerprint(raw)
+        if getattr(media, "file_size", None):
+            geometry["telegram_file_size"] = int(media.file_size)
+
+        return MediaMeta(
+            media_type="photo",
+            file_id=media.file_id,
+            file_unique_id=media.file_unique_id,
+            sha256=digest,
+            phash=phash,
+            media_geometry=geometry,
+            photo_fingerprint=photo_fingerprint,
+        )
+
+    frame_hashes, video_fingerprint, geometry = compute_video_fingerprint(raw)
+
+    mime_type = str(getattr(media, "mime_type", "") or "")
+    if mime_type:
+        geometry["mime_type"] = mime_type
+    if getattr(media, "file_size", None):
+        geometry["telegram_file_size"] = int(media.file_size)
+
+    return MediaMeta(
+        media_type="video",
+        file_id=media.file_id,
+        file_unique_id=media.file_unique_id,
+        sha256=digest,
+        frame_hashes=frame_hashes,
+        media_geometry=geometry,
+        video_fingerprint=video_fingerprint,
+    )
 
 # -----------------------------------------------------
 # User/admin helpers
@@ -1637,18 +2036,99 @@ def build_added_log_caption(*, doc: dict[str, Any], created: bool, mode: str, so
     return "\n".join(lines)
 
 
-async def send_added_log(*, bot: Bot, source_message: Message, doc: dict[str, Any], created: bool, mode: str, source_label: str, added_by_user) -> None:
-    if not ADDED_LOG_CHANNEL:
-        return
+
+def get_log_channel_for_source(source_key: str):
+    return SOURCE_LOG_CHANNELS.get(source_key) or ADDED_LOG_CHANNEL
+
+
+async def send_added_log(
+    *,
+    bot: Bot,
+    source_message: Message,
+    doc: dict[str, Any],
+    created: bool,
+    mode: str,
+    source_label: str,
+    added_by_user,
+) -> Optional[dict[str, Any]]:
+    source_key = clean_value(str(doc.get("source_key") or ""))
+    target_log_channel = get_log_channel_for_source(source_key)
+    if not target_log_channel:
+        return None
+
     media_type, media = extract_media_handle(source_message)
     if not media_type or not media:
-        return
-    caption = build_added_log_caption(doc=doc, created=created, mode=mode, source_label=source_label, added_by_user=added_by_user)
-    if media_type == "photo":
-        await bot.send_photo(chat_id=ADDED_LOG_CHANNEL, photo=media.file_id, caption=caption, parse_mode=ParseMode.HTML)
-    else:
-        await bot.send_video(chat_id=ADDED_LOG_CHANNEL, video=media.file_id, caption=caption, parse_mode=ParseMode.HTML)
+        return None
 
+    caption = build_added_log_caption(
+        doc=doc,
+        created=created,
+        mode=mode,
+        source_label=source_label,
+        added_by_user=added_by_user,
+    )
+
+    if media_type == "photo":
+        archived_message = await bot.send_photo(
+            chat_id=target_log_channel,
+            photo=media.file_id,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        archived_message = await bot.send_video(
+            chat_id=target_log_channel,
+            video=media.file_id,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+        )
+
+    _archive_type, archive_media = extract_media_handle(archived_message)
+    return {
+        "chat_id": int(archived_message.chat.id),
+        "message_id": int(archived_message.message_id),
+        "file_id": getattr(archive_media, "file_id", "") if archive_media else "",
+        "file_unique_id": (
+            getattr(archive_media, "file_unique_id", "")
+            if archive_media
+            else ""
+        ),
+        "archived_at": datetime.now(timezone.utc),
+    }
+
+
+async def persist_archive_pointer(
+    doc: dict[str, Any],
+    archive: Optional[dict[str, Any]],
+) -> None:
+    if not archive or not doc.get("_id") or not doc.get("source_collection"):
+        return
+
+    update: dict[str, Any] = {
+        "$set": {
+            "archive": archive,
+            "archive_chat_id": archive.get("chat_id"),
+            "archive_message_id": archive.get("message_id"),
+            "updated_at": datetime.now(timezone.utc),
+        }
+    }
+
+    add_to_set: dict[str, Any] = {}
+    if archive.get("file_id"):
+        add_to_set["file_ids"] = archive["file_id"]
+    if archive.get("file_unique_id"):
+        add_to_set["file_unique_ids"] = archive["file_unique_id"]
+    if add_to_set:
+        update["$addToSet"] = add_to_set
+
+    await db[str(doc["source_collection"])].update_one(
+        {"_id": doc["_id"]},
+        update,
+    )
+
+    doc["archive"] = archive
+    doc["archive_chat_id"] = archive.get("chat_id")
+    doc["archive_message_id"] = archive.get("message_id")
 
 # -----------------------------------------------------
 # Status / UI text
@@ -1694,7 +2174,8 @@ async def build_status_text() -> str:
         f"‣ Known Users : <b>{users}</b>",
         f"‣ Sudo Users : <b>{sudo_count}</b>",
         f"‣ Target Chat : <code>{html_escape(str(DEFAULT_TARGET_CHAT or '-'))}</code>",
-        f"‣ Added Log Channel : <code>{html_escape(ADDED_LOG_CHANNEL or '-')}</code>",
+        f"‣ Default Log Channel : <code>{html_escape(ADDED_LOG_CHANNEL or '-')}</code>",
+        f"‣ Routed Log Channels : <b>{len(SOURCE_LOG_CHANNELS)}</b>",
         f"‣ Mode : <b>{'WEBHOOK' if USE_WEBHOOK else 'POLLING'}</b>",
         "",
         "🤖 <b>Source Collections</b>",
@@ -1871,13 +2352,14 @@ async def save_handler(message: Message, command: CommandObject, bot: Bot) -> No
         return
     try:
         meta = await get_media_meta(bot, target)
-        doc, created = await upsert_item(meta=meta, parsed=parsed, saved_by=message.from_user.id)
+        doc, created = await upsert_item(meta=meta, parsed=parsed, saved_by=message.from_user.id, source_message=target)
     except Exception as exc:
         logger.exception("save failed")
         await message.reply(f"save မအောင်မြင်ပါ: {html_escape(str(exc))}", parse_mode=ParseMode.HTML)
         return
     try:
-        await send_added_log(bot=bot, source_message=target, doc=doc, created=created, mode="manual-save", source_label=get_log_source_label(target), added_by_user=message.from_user)
+        archive = await send_added_log(bot=bot, source_message=target, doc=doc, created=created, mode="manual-save", source_label=get_log_source_label(target), added_by_user=message.from_user)
+        await persist_archive_pointer(doc, archive)
     except Exception:
         logger.exception("added log send failed")
     status = "Saved" if created else "Updated"
@@ -1902,10 +2384,11 @@ async def autosave_media(message: Message, bot: Bot, mode: str) -> None:
         return
     try:
         meta = await get_media_meta(bot, message)
-        doc, created = await upsert_item(meta=meta, parsed=parsed, saved_by=(message.from_user.id if message.from_user else 0))
+        doc, created = await upsert_item(meta=meta, parsed=parsed, saved_by=(message.from_user.id if message.from_user else 0), source_message=message)
         source_label = get_autosave_source_label(message)
         try:
-            await send_added_log(bot=bot, source_message=message, doc=doc, created=created, mode=mode, source_label=str(source_label), added_by_user=message.from_user)
+            archive = await send_added_log(bot=bot, source_message=message, doc=doc, created=created, mode=mode, source_label=str(source_label), added_by_user=message.from_user)
+            await persist_archive_pointer(doc, archive)
         except Exception:
             logger.exception("added log send failed")
         status = "Saved" if created else "Updated"
@@ -1983,7 +2466,9 @@ async def on_startup(bot: Bot) -> None:
     logger.info("Forward usernames: %s", sorted(SOURCE_BY_FORWARD_USERNAME.keys()))
     logger.info("Forward titles: %s", sorted(SOURCE_BY_FORWARD_TITLE.keys()))
     logger.info("Forward chat ids: %s", sorted(SOURCE_BY_FORWARD_CHAT_ID.keys()))
-    logger.info("Added log channel: %s", ADDED_LOG_CHANNEL or "none")
+    logger.info("Default added log channel: %s", ADDED_LOG_CHANNEL or "none")
+    logger.info("Source log channels: %s", SOURCE_LOG_CHANNELS)
+    logger.info("Senpai forward source: %s | bot_id=%s", SENPAI_FORWARD_CHAT_DEFAULT, SENPAI_BOT_ID)
     logger.info("Default target chat: %s", DEFAULT_TARGET_CHAT if DEFAULT_TARGET_CHAT is not None else "none")
     logger.info("Mode: %s", "WEBHOOK" if USE_WEBHOOK else "POLLING")
 
@@ -2043,9 +2528,8 @@ ADD_HELPER_INLINE_OVERRIDES = {
 }
 # Senpai DB forward source is built in, so VPS env does NOT need FW_SENPAI_SOURCE_CHAT.
 # Env override is still supported if you ever change the channel later.
-SENPAI_FORWARD_CHAT_ID = -1003218799804
-SENPAI_FORWARD_CHAT_USERNAME = "@SenpaiBase"
-SENPAI_FORWARD_CHAT_DEFAULT = str(SENPAI_FORWARD_CHAT_ID)
+SENPAI_FORWARD_CHAT_USERNAME = "@fafafawfawfa"
+SENPAI_FORWARD_CHAT_DEFAULT = SENPAI_FORWARD_CHAT_USERNAME
 
 ADD_HELPER_FORWARD_OVERRIDES = {
     "character_seizer": os.getenv("FW_SEIZER_SOURCE_CHAT", "@Seizer_Database"),
