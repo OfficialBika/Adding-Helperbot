@@ -1403,9 +1403,49 @@ def parse_source_update(message: Message) -> Optional[SourceUpdate]:
     return None
 
 
+def parse_external_source_parser(text: str, src: SourceDef) -> Optional[ParsedText]:
+    """Use isolated parsers package for migrated source bots.
+    Keeps existing ParsedText/media/database pipeline unchanged.
+    """
+    try:
+        from parsers import character_catcher, senpai as senpai_parser, hallow as hallow_parser, takers as takers_parser, grab as grab_parser
+    except Exception:
+        return None
+
+    parser_map = {
+        "character_catcher": character_catcher.parse,
+        "senpai_catcher": senpai_parser.parse,
+        "characters_hallow": hallow_parser.parse,
+        "takers_character": takers_parser.parse,
+        "waifux_grab": grab_parser.parse,
+    }
+
+    fn = parser_map.get(src.key)
+    if not fn:
+        return None
+
+    result = fn(text)
+    if not result:
+        return None
+
+    return finalize_parsed_text(ParsedText(
+        name=result.name,
+        anime_name=None,
+        rarity=result.rarity,
+        card_id=str(result.id) if result.id is not None else None,
+        command_name=src.command,
+        raw_text=result.raw or text,
+        source_key=src.key,
+    ))
+
+
 def get_effective_parsed_message(message: Message) -> ParsedText:
     src = get_inline_source_def(message) or get_forward_source_def(message) or get_sender_source_def(message)
     if src:
+        raw_for_external = get_combined_message_text(message)
+        external = parse_external_source_parser(raw_for_external, src)
+        if external and external.name:
+            return external
         if src.parser == "name_only":
             return parse_name_only_message(message, src)
         if src.parser == "smash":
