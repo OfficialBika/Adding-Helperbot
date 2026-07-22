@@ -10,6 +10,10 @@ class HelperController:
         self.jobs = JobManager()
         self.watcher = ResponseWatcher()
         self.tasks = {}
+        self.sources = SOURCES
+
+    def get_source(self, source_key):
+        return self.sources.get(source_key)
 
     async def start(self, source_key, start_id=1, client=None, target_chat=None):
         source = SOURCES[source_key]

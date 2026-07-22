@@ -1,3 +1,4 @@
+
 import asyncio
 from collections import defaultdict
 
@@ -20,3 +21,12 @@ class ResponseWatcher:
                     return msg
         except asyncio.TimeoutError:
             return None
+
+    def make_checker(self, bot_username=None):
+        def checker(message):
+            if bot_username is None:
+                return True
+            chat = getattr(message, "chat", None)
+            username = getattr(chat, "username", None)
+            return username == bot_username.lstrip("@")
+        return checker
