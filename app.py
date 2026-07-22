@@ -30,6 +30,10 @@ from helper.controller import HelperController
 from helper.commands import COMMANDS, RESUME_PREFIX
 from helper.runtime import HelperRuntime
 
+# DM helper controller (isolated crawler flow)
+from helper.controller import HelperController
+DM_HELPER = HelperController()
+
 
 # -----------------------------------------------------
 # Config
@@ -3477,6 +3481,64 @@ class AddHelperService:
                 await asyncio.wait_for(self.stop_event.wait(), timeout=ADD_HELPER_CONTROL_POLL_INTERVAL)
             except asyncio.TimeoutError:
                 pass
+
+
+
+# ---------------- DM crawler commands ----------------
+async def _dm_start(message: Message, bot: Bot, key: str):
+    try:
+        await DM_HELPER.start(key, 1, client=bot, target_chat=DEFAULT_TARGET_CHAT)
+        await message.answer(f"DM helper started: {key}")
+    except Exception as e:
+        await message.answer(f"DM start error: {e}")
+
+async def _dm_resume(message: Message, bot: Bot, key: str, value: int):
+    try:
+        await DM_HELPER.resume(key, value, client=bot, target_chat=DEFAULT_TARGET_CHAT)
+        await message.answer(f"DM helper resumed: {key} {value}")
+    except Exception as e:
+        await message.answer(f"DM resume error: {e}")
+
+@router.message(Command("startdmcatchbot"))
+async def start_dm_catch(message: Message, bot: Bot):
+    await _dm_start(message, bot, "catch")
+
+@router.message(Command("startdmgrabbot"))
+async def start_dm_grab(message: Message, bot: Bot):
+    await _dm_start(message, bot, "grab")
+
+@router.message(Command("startdmsenpaibot"))
+async def start_dm_senpai(message: Message, bot: Bot):
+    await _dm_start(message, bot, "senpai")
+
+@router.message(Command("startdmhallowbot"))
+async def start_dm_hallow(message: Message, bot: Bot):
+    await _dm_start(message, bot, "hallow")
+
+@router.message(Command("startdmtakersbot"))
+async def start_dm_takers(message: Message, bot: Bot):
+    await _dm_start(message, bot, "takers")
+
+@router.message(Command("stopdm"))
+async def stop_dm(message: Message):
+    await DM_HELPER.stop_all_dm()
+    await message.answer("All DM helpers stopped.")
+
+@router.message()
+async def dm_resume_commands(message: Message, bot: Bot):
+    text = (message.text or "").strip().split()
+    if not text:
+        return
+    cmd = text[0].split("@")[0]
+    mapping = {
+        "/resumedmcatchbot": "catch",
+        "/resumedmgrabbot": "grab",
+        "/resumedmsenpaibot": "senpai",
+        "/resumedmhallowbot": "hallow",
+        "/resumedmtakersbot": "takers",
+    }
+    if cmd in mapping and len(text) > 1 and text[1].isdigit():
+        await _dm_resume(message, bot, mapping[cmd], int(text[1]))
 
 
 ADD_HELPER = AddHelperService()
