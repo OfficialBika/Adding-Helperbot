@@ -28,6 +28,7 @@ from PIL import Image, ImageOps
 load_dotenv()
 from helper.controller import HelperController
 from helper.commands import COMMANDS, RESUME_PREFIX
+from helper.runtime import HelperRuntime
 
 
 # -----------------------------------------------------
@@ -141,6 +142,7 @@ settings_col = db.settings
 router = Router()
 
 HELPER_CONTROLLER = HelperController()
+HELPER_RUNTIME = HelperRuntime()
 
 # -----------------------------------------------------
 # Data models
@@ -2498,35 +2500,35 @@ def _helper_source_from_resume(command: str):
 async def start_fw_catch(message: Message):
     if message.from_user and message.from_user.id not in OWNER_IDS:
         return
-    await HELPER_CONTROLLER.start("catch", 1)
+    await HELPER_CONTROLLER.start("catch", 1, HELPER_RUNTIME.client)
     await message.reply("Helper crawler started: catch from ID 1")
 
 @router.message(Command("startfwgrabbot"))
 async def start_fw_grab(message: Message):
     if message.from_user and message.from_user.id not in OWNER_IDS:
         return
-    await HELPER_CONTROLLER.start("grab", 1)
+    await HELPER_CONTROLLER.start("grab", 1, HELPER_RUNTIME.client)
     await message.reply("Helper crawler started: grab from ID 1")
 
 @router.message(Command("startfwsenpaibot"))
 async def start_fw_senpai(message: Message):
     if message.from_user and message.from_user.id not in OWNER_IDS:
         return
-    await HELPER_CONTROLLER.start("senpai", 1)
+    await HELPER_CONTROLLER.start("senpai", 1, HELPER_RUNTIME.client)
     await message.reply("Helper crawler started: senpai from ID 1")
 
 @router.message(Command("startfwhallowbot"))
 async def start_fw_hallow(message: Message):
     if message.from_user and message.from_user.id not in OWNER_IDS:
         return
-    await HELPER_CONTROLLER.start("hallow", 1)
+    await HELPER_CONTROLLER.start("hallow", 1, HELPER_RUNTIME.client)
     await message.reply("Helper crawler started: hallow from ID 1")
 
 @router.message(Command("startfwtakersbot"))
 async def start_fw_takers(message: Message):
     if message.from_user and message.from_user.id not in OWNER_IDS:
         return
-    await HELPER_CONTROLLER.start("takers", 1)
+    await HELPER_CONTROLLER.start("takers", 1, HELPER_RUNTIME.client)
     await message.reply("Helper crawler started: takers from ID 1")
 
 
@@ -2537,7 +2539,7 @@ async def resume_catch(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.reply("Usage: /resumefwcatchbot ID")
         return
-    await HELPER_CONTROLLER.resume("catch", int(command.args.strip()))
+    await HELPER_CONTROLLER.resume("catch", int(command.args.strip()), HELPER_RUNTIME.client)
     await message.reply("Helper resumed: catch ID " + command.args.strip())
 
 
@@ -2548,7 +2550,7 @@ async def resume_grab(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.reply("Usage: /resumefwgrabbot ID")
         return
-    await HELPER_CONTROLLER.resume("grab", int(command.args.strip()))
+    await HELPER_CONTROLLER.resume("grab", int(command.args.strip()), HELPER_RUNTIME.client)
     await message.reply("Helper resumed: grab ID " + command.args.strip())
 
 
@@ -2559,7 +2561,7 @@ async def resume_senpai(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.reply("Usage: /resumefwsenpaibot ID")
         return
-    await HELPER_CONTROLLER.resume("senpai", int(command.args.strip()))
+    await HELPER_CONTROLLER.resume("senpai", int(command.args.strip()), HELPER_RUNTIME.client)
     await message.reply("Helper resumed: senpai ID " + command.args.strip())
 
 
@@ -2570,7 +2572,7 @@ async def resume_hallow(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.reply("Usage: /resumefwhallowbot ID")
         return
-    await HELPER_CONTROLLER.resume("hallow", int(command.args.strip()))
+    await HELPER_CONTROLLER.resume("hallow", int(command.args.strip()), HELPER_RUNTIME.client)
     await message.reply("Helper resumed: hallow ID " + command.args.strip())
 
 
@@ -2581,7 +2583,7 @@ async def resume_takers(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.reply("Usage: /resumefwtakersbot ID")
         return
-    await HELPER_CONTROLLER.resume("takers", int(command.args.strip()))
+    await HELPER_CONTROLLER.resume("takers", int(command.args.strip()), HELPER_RUNTIME.client)
     await message.reply("Helper resumed: takers ID " + command.args.strip())
 
 
@@ -2593,6 +2595,7 @@ def normalize_webhook_path(path: str) -> str:
 
 
 async def on_startup(bot: Bot) -> None:
+    await HELPER_RUNTIME.start(HELPER_CONTROLLER)
     await ensure_indexes()
     await bot.set_my_commands(
         [
