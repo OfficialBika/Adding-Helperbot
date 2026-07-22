@@ -3,8 +3,6 @@ class HelperForwarder:
         self.target_chat = target_chat
 
     async def forward(self, client, message):
-        return await client.forward_messages(
-            self.target_chat,
-            message.chat.id,
-            message.id
-        )
+        if not message or not self.target_chat:
+            return
+        await message.forward(self.target_chat)

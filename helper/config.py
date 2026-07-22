@@ -1,15 +1,7 @@
-from dataclasses import dataclass
+import os
 
-@dataclass(frozen=True)
-class SourceConfig:
-    key: str
-    bot: str
-    command: str
+API_ID = int(os.getenv("API_ID", "0") or 0)
+API_HASH = os.getenv("API_HASH", "")
+SESSION_STRING = os.getenv("SESSION_STRING", "")
 
-SOURCES = {
-    "catch": SourceConfig("catch", "@Character_Catcher_Bot", "/check"),
-    "grab": SourceConfig("grab", "@GrabGardenBot", "/check"),
-    "senpai": SourceConfig("senpai", "@SenpaiBot", "/see"),
-    "hallow": SourceConfig("hallow", "@Characters_Hallow_bot", "/show"),
-    "takers": SourceConfig("takers", "@Takers_character_bot", "/detect"),
-}
+TARGET_CHAT = os.getenv("HELPER_TARGET_CHAT", "")
