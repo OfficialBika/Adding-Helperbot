@@ -1,26 +1,21 @@
-# Owner command mapping for Helper v1
+# Owner command mapping - DM crawler helper v2
 
 COMMANDS = {
-    "/startfwcatchbot": "catch",
-    "/startfwgrabbot": "grab",
-    "/startfwsenpaibot": "senpai",
-    "/startfwhallowbot": "hallow",
-    "/startfwtakersbot": "takers",
+    "/startdmcatchbot": "catch",
+    "/startdmgrabbot": "grab",
+    "/startdmsenpaibot": "senpai",
+    "/startdmhallowbot": "hallow",
+    "/startdmtakersbot": "takers",
 }
 
 RESUME_PREFIX = {
-    "catch": "/resumefwcatchbot",
-    "grab": "/resumefwgrabbot",
-    "senpai": "/resumefwsenpaibot",
-    "hallow": "/resumefwhallowbot",
-    "takers": "/resumefwtakersbot",
+    "catch": "/resumedmcatchbot",
+    "grab": "/resumedmgrabbot",
+    "senpai": "/resumedmsenpaibot",
+    "hallow": "/resumedmhallowbot",
+    "takers": "/resumedmtakersbot",
 }
 
-
 STOP_COMMANDS = {
-    "/stopfwcatchbot": "catch",
-    "/stopfwgrabbot": "grab",
-    "/stopfwsenpaibot": "senpai",
-    "/stopfwhallowbot": "hallow",
-    "/stopfwtakersbot": "takers",
+    "/stopdm": "all",
 }

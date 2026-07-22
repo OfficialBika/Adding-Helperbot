@@ -11,7 +11,7 @@ SOURCES = {
         "command": "/check",
     },
 
-    "graden": {
+    "grab": {
         "command": "/check",
     },
 

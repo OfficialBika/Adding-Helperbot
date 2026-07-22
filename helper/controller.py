@@ -4,12 +4,14 @@ from .jobs import JobManager
 from .crawler import CommandCrawler
 from .forwarder import HelperForwarder
 from .watcher import ResponseWatcher
+from .dm_manager import DMManager
 
 class HelperController:
     def __init__(self, collection=None):
         self.jobs = JobManager(collection)
         self.tasks = {}
         self.watcher = ResponseWatcher()
+        self.dm = DMManager()
 
     def get_source(self, key):
         return SOURCES.get(key)
