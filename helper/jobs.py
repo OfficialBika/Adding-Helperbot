@@ -1,12 +1,17 @@
 from datetime import datetime, timezone
+import asyncio
 
 class JobManager:
     def __init__(self, collection=None):
         self.collection = collection
         self.jobs = {}
+        self.locks = {}
 
     def get(self, source):
         return self.jobs.get(source)
+
+    def lock(self, source):
+        return self.locks.setdefault(source, asyncio.Lock())
 
     async def create(self, source, start_id):
         data = {
@@ -14,14 +19,15 @@ class JobManager:
             "current_id": int(start_id),
             "status": "running",
             "retry": 0,
-            "updated_at": datetime.now(timezone.utc)
+            "last_message_id": None,
+            "updated_at": datetime.now(timezone.utc),
         }
         self.jobs[source] = data
         if self.collection:
             await self.collection.update_one(
                 {"source": source},
                 {"$set": data},
-                upsert=True
+                upsert=True,
             )
         return data
 
@@ -33,15 +39,15 @@ class JobManager:
             await self.collection.update_one(
                 {"source": source},
                 {"$set": data},
-                upsert=True
+                upsert=True,
             )
+        return data
 
     async def restore_running(self):
         if not self.collection:
             return list(self.jobs.values())
-        cursor = self.collection.find({"status": "running"})
         result = []
-        async for item in cursor:
+        async for item in self.collection.find({"status": "running"}):
             self.jobs[item["source"]] = item
             result.append(item)
         return result

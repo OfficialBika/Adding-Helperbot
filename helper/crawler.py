@@ -12,41 +12,50 @@ class CommandCrawler:
     async def run(self, start_id):
         current_id = int(start_id)
 
-        while True:
-            success = False
+        lock = self.jobs.lock(self.source.key) if self.jobs else None
+        if lock:
+            await lock.acquire()
 
-            for attempt in range(self.max_retry):
-                await self.client.send_message(
-                    self.source.bot,
-                    f"{self.source.command} {current_id}"
-                )
+        try:
+            while True:
+                success = False
 
-                response = await self.watcher.wait(self.source.key)
+                for attempt in range(self.max_retry):
+                    await self.client.send_message(
+                        self.source.bot,
+                        f"{self.source.command} {current_id}",
+                    )
 
-                if response:
-                    await self.forwarder.forward(self.client, response)
-                    current_id += 1
+                    response = await self.watcher.wait(self.source.key)
+
+                    if response:
+                        await self.forwarder.forward(self.client, response)
+                        current_id += 1
+                        if self.jobs:
+                            await self.jobs.update(
+                                self.source.key,
+                                current_id=current_id,
+                                retry=0,
+                                last_message_id=getattr(response, "id", None),
+                            )
+                        success = True
+                        break
+
                     if self.jobs:
                         await self.jobs.update(
                             self.source.key,
-                            current_id=current_id,
-                            retry=0
+                            retry=attempt + 1,
                         )
-                    success = True
+
+                if not success:
+                    if self.jobs:
+                        await self.jobs.update(
+                            self.source.key,
+                            status="paused",
+                        )
                     break
 
-                if self.jobs:
-                    await self.jobs.update(
-                        self.source.key,
-                        retry=attempt + 1
-                    )
-
-            if not success:
-                if self.jobs:
-                    await self.jobs.update(
-                        self.source.key,
-                        status="paused"
-                    )
-                break
-
-            await asyncio.sleep(1)
+                await asyncio.sleep(1)
+        finally:
+            if lock and lock.locked():
+                lock.release()
