@@ -26,6 +26,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from PIL import Image, ImageOps
 
 load_dotenv()
+from helper.controller import HelperController
+from helper.commands import COMMANDS, RESUME_PREFIX
+
 
 # -----------------------------------------------------
 # Config
@@ -136,6 +139,8 @@ user_modes = db.user_modes
 settings_col = db.settings
 
 router = Router()
+
+HELPER_CONTROLLER = HelperController()
 
 # -----------------------------------------------------
 # Data models
@@ -2476,6 +2481,108 @@ async def media_handler(message: Message, bot: Bot) -> None:
                 await message.reply("ဒီ forwarded source ကို auto-save ခွင့်မပြုထားသေးပါဘူး။")
             return
         await autosave_media(message, bot, "auto-save")
+
+
+
+
+# -----------------------------------------------------
+# Helper v1 crawler owner controls
+# -----------------------------------------------------
+def _helper_source_from_resume(command: str):
+    for key, value in RESUME_PREFIX.items():
+        if command == value:
+            return key
+    return None
+
+@router.message(Command("startfwcatchbot"))
+async def start_fw_catch(message: Message):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    await HELPER_CONTROLLER.start("catch", 1)
+    await message.reply("Helper crawler started: catch from ID 1")
+
+@router.message(Command("startfwgrabbot"))
+async def start_fw_grab(message: Message):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    await HELPER_CONTROLLER.start("grab", 1)
+    await message.reply("Helper crawler started: grab from ID 1")
+
+@router.message(Command("startfwsenpaibot"))
+async def start_fw_senpai(message: Message):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    await HELPER_CONTROLLER.start("senpai", 1)
+    await message.reply("Helper crawler started: senpai from ID 1")
+
+@router.message(Command("startfwhallowbot"))
+async def start_fw_hallow(message: Message):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    await HELPER_CONTROLLER.start("hallow", 1)
+    await message.reply("Helper crawler started: hallow from ID 1")
+
+@router.message(Command("startfwtakersbot"))
+async def start_fw_takers(message: Message):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    await HELPER_CONTROLLER.start("takers", 1)
+    await message.reply("Helper crawler started: takers from ID 1")
+
+
+@router.message(Command("resumefwcatchbot"))
+async def resume_catch(message: Message, command: CommandObject):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    if not command.args or not command.args.strip().isdigit():
+        await message.reply("Usage: /resumefwcatchbot ID")
+        return
+    await HELPER_CONTROLLER.resume("catch", int(command.args.strip()))
+    await message.reply("Helper resumed: catch ID " + command.args.strip())
+
+
+@router.message(Command("resumefwgrabbot"))
+async def resume_grab(message: Message, command: CommandObject):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    if not command.args or not command.args.strip().isdigit():
+        await message.reply("Usage: /resumefwgrabbot ID")
+        return
+    await HELPER_CONTROLLER.resume("grab", int(command.args.strip()))
+    await message.reply("Helper resumed: grab ID " + command.args.strip())
+
+
+@router.message(Command("resumefwsenpaibot"))
+async def resume_senpai(message: Message, command: CommandObject):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    if not command.args or not command.args.strip().isdigit():
+        await message.reply("Usage: /resumefwsenpaibot ID")
+        return
+    await HELPER_CONTROLLER.resume("senpai", int(command.args.strip()))
+    await message.reply("Helper resumed: senpai ID " + command.args.strip())
+
+
+@router.message(Command("resumefwhallowbot"))
+async def resume_hallow(message: Message, command: CommandObject):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    if not command.args or not command.args.strip().isdigit():
+        await message.reply("Usage: /resumefwhallowbot ID")
+        return
+    await HELPER_CONTROLLER.resume("hallow", int(command.args.strip()))
+    await message.reply("Helper resumed: hallow ID " + command.args.strip())
+
+
+@router.message(Command("resumefwtakersbot"))
+async def resume_takers(message: Message, command: CommandObject):
+    if message.from_user and message.from_user.id not in OWNER_IDS:
+        return
+    if not command.args or not command.args.strip().isdigit():
+        await message.reply("Usage: /resumefwtakersbot ID")
+        return
+    await HELPER_CONTROLLER.resume("takers", int(command.args.strip()))
+    await message.reply("Helper resumed: takers ID " + command.args.strip())
 
 
 # -----------------------------------------------------
