@@ -28,11 +28,17 @@ class ResponseWatcher:
         if not client:
             return
 
+        # Listen only to messages that can belong to configured sources.
+        # Avoid resolving arbitrary Telegram peers which can cause
+        # "Peer id invalid" errors on unrelated updates.
         @client.on_message()
         async def handler(_, message):
-            key = source_resolver(message) if source_resolver else None
-            if key:
-                await self.push(key, message)
+            try:
+                key = source_resolver(message) if source_resolver else None
+                if key:
+                    await self.push(key, message)
+            except Exception:
+                return
 
 def build_source_resolver(sources):
     def resolve(message):
