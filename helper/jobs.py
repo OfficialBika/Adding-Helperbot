@@ -32,3 +32,9 @@ class JobManager:
 
     def get(self, source):
         return self.jobs.get(source)
+
+
+    async def restore_running(self, starter):
+        jobs = await self.resume_jobs()
+        for job in jobs:
+            await starter(job["source"], job["current_id"])

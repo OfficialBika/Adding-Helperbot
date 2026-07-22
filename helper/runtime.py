@@ -1,6 +1,7 @@
 
 from .client import create_helper_client
-from .watcher import ResponseWatcher
+from .watcher import ResponseWatcher, build_source_resolver
+from .config import SOURCES
 
 class HelperRuntime:
     def __init__(self):
@@ -12,7 +13,7 @@ class HelperRuntime:
         self.controller=controller
         self.client=create_helper_client()
         if self.client:
-            self.watcher.bind_client(self.client)
+            self.watcher.bind_client(self.client, build_source_resolver(SOURCES))
             await self.client.start()
         return self.client
 
