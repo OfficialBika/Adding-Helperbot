@@ -17,35 +17,26 @@ class HelperController:
         return SOURCES.get(key)
 
     async def start(self, source_key, start_id=1, client=None, target_chat=None):
+        if source_key not in SOURCES:
+            raise ValueError(f"Unknown helper source: {source_key}")
         await self.jobs.create(source_key, start_id)
-        if client is None:
-            return self.jobs.get(source_key)
-
+        if not client:
+            return
         source = SOURCES[source_key]
-        crawler = CommandCrawler(
-            client,
-            source,
-            self.watcher,
-            HelperForwarder(target_chat),
-            self.jobs,
-        )
-        task = asyncio.create_task(crawler.run(start_id))
+        task = asyncio.create_task(CommandCrawler(
+            client, source, self.watcher,
+            HelperForwarder(target_chat), self.jobs
+        ).run(start_id))
         self.tasks[source_key] = task
+        self.dm.add(source_key, task)
         return self.jobs.get(source_key)
 
     async def resume(self, source_key, start_id=None, client=None, target_chat=None):
-        job = self.jobs.get(source_key)
-        if start_id is None and job:
-            start_id = job.get("current_id", 1)
-        return await self.start(
-            source_key,
-            start_id or 1,
-            client,
-            target_chat
-        )
+        return await self.start(source_key, start_id or 1, client, target_chat)
+
+    async def stop_all_dm(self):
+        await self.dm.stop_all()
 
     async def stop(self, source_key):
-        task = self.tasks.get(source_key)
-        if task:
-            task.cancel()
+        self.dm.stop(source_key)
         await self.jobs.stop(source_key)
