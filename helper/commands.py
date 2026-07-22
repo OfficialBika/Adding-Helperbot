@@ -15,3 +15,12 @@ RESUME_PREFIX = {
     "hallow": "/resumefwhallowbot",
     "takers": "/resumefwtakersbot",
 }
+
+
+STOP_COMMANDS = {
+    "/stopfwcatchbot": "catch",
+    "/stopfwgrabbot": "grab",
+    "/stopfwsenpaibot": "senpai",
+    "/stopfwhallowbot": "hallow",
+    "/stopfwtakersbot": "takers",
+}
