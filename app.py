@@ -2490,61 +2490,6 @@ async def media_handler(message: Message, bot: Bot) -> None:
 
 
 # -----------------------------------------------------
-# DM crawler owner controls
-# -----------------------------------------------------
-async def _dm_start(message: Message, key: str, command: CommandObject=None):
-    if message.from_user and message.from_user.id not in OWNER_IDS:
-        return
-    await HELPER_CONTROLLER.start(key, 1, HELPER_RUNTIME.client, DEFAULT_TARGET_CHAT)
-    await message.reply(f"DM helper started: {key}")
-
-async def _dm_resume(message: Message, key: str, command: CommandObject):
-    if message.from_user and message.from_user.id not in OWNER_IDS:
-        return
-    if not command.args or not command.args.strip().isdigit():
-        await message.reply("Usage: /resumedm... ID")
-        return
-    await HELPER_CONTROLLER.resume(key, int(command.args), HELPER_RUNTIME.client, DEFAULT_TARGET_CHAT)
-    await message.reply(f"DM helper resumed: {key} ID {command.args}")
-
-@router.message(Command("startdmcatchbot"))
-async def startdmcatch(message: Message): await _dm_start(message, "catch")
-
-@router.message(Command("startdmgrabbot"))
-async def startdmgrab(message: Message): await _dm_start(message, "grab")
-
-@router.message(Command("startdmsenpaibot"))
-async def startdmsenpai(message: Message): await _dm_start(message, "senpai")
-
-@router.message(Command("startdmhallowbot"))
-async def startdmhallow(message: Message): await _dm_start(message, "hallow")
-
-@router.message(Command("startdmtakersbot"))
-async def startdmtakers(message: Message): await _dm_start(message, "takers")
-
-@router.message(Command("resumedmcatchbot"))
-async def resumedmcatch(message: Message, command: CommandObject): await _dm_resume(message,"catch",command)
-
-@router.message(Command("resumedmgrabbot"))
-async def resumedmgrab(message: Message, command: CommandObject): await _dm_resume(message,"grab",command)
-
-@router.message(Command("resumedmsenpaibot"))
-async def resumedmsenpai(message: Message, command: CommandObject): await _dm_resume(message,"senpai",command)
-
-@router.message(Command("resumedmhallowbot"))
-async def resumedmhallow(message: Message, command: CommandObject): await _dm_resume(message,"hallow",command)
-
-@router.message(Command("resumedmtakersbot"))
-async def resumedmtakers(message: Message, command: CommandObject): await _dm_resume(message,"takers",command)
-
-@router.message(Command("stopdm"))
-async def stop_dm(message: Message):
-    if message.from_user and message.from_user.id not in OWNER_IDS:
-        return
-    await HELPER_CONTROLLER.stop_all_dm()
-    await message.reply("All DM helpers stopped.")
-
-# -----------------------------------------------------
 # Webhook / runner
 # -----------------------------------------------------
 def normalize_webhook_path(path: str) -> str:
