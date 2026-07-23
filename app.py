@@ -3487,14 +3487,14 @@ class AddHelperService:
 # ---------------- DM crawler commands ----------------
 async def _dm_start(message: Message, bot: Bot, key: str):
     try:
-        await DM_HELPER.start(key, 1, client=bot, target_chat=DEFAULT_TARGET_CHAT)
+        await DM_HELPER.start(key, 1, client=HELPER_RUNTIME.client, target_chat=DEFAULT_TARGET_CHAT)
         await message.answer(f"DM helper started: {key}")
     except Exception as e:
         await message.answer(f"DM start error: {e}")
 
 async def _dm_resume(message: Message, bot: Bot, key: str, value: int):
     try:
-        await DM_HELPER.resume(key, value, client=bot, target_chat=DEFAULT_TARGET_CHAT)
+        await DM_HELPER.resume(key, value, client=HELPER_RUNTIME.client, target_chat=DEFAULT_TARGET_CHAT)
         await message.answer(f"DM helper resumed: {key} {value}")
     except Exception as e:
         await message.answer(f"DM resume error: {e}")
