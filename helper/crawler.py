@@ -21,10 +21,18 @@ class CommandCrawler:
                 success = False
 
                 for attempt in range(self.max_retry):
-                    await self.client.send_message(
-                        self.source.bot,
-                        f"{self.source.command} {current_id}",
-                    )
+                    try:
+                        await self.client.send_message(
+                            self.source.bot,
+                            f"{self.source.command} {current_id}",
+                        )
+                    except Exception:
+                        if self.jobs:
+                            await self.jobs.update(
+                                self.source.key,
+                                status="error",
+                            )
+                        break
 
                     response = await self.watcher.wait(self.source.key)
 
