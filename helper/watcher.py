@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+from pyrogram import filters
 
 class ResponseWatcher:
     def __init__(self, timeout=30):
@@ -17,10 +18,7 @@ class ResponseWatcher:
 
     async def wait(self, source_key):
         try:
-            return await asyncio.wait_for(
-                self.queues[source_key].get(),
-                timeout=self.timeout,
-            )
+            return await asyncio.wait_for(self.queues[source_key].get(), timeout=self.timeout)
         except asyncio.TimeoutError:
             return None
 
@@ -28,10 +26,7 @@ class ResponseWatcher:
         if not client:
             return
 
-        # Listen only to messages that can belong to configured sources.
-        # Avoid resolving arbitrary Telegram peers which can cause
-        # "Peer id invalid" errors on unrelated updates.
-        @client.on_message()
+        @client.on_message(filters.private)
         async def handler(_, message):
             try:
                 key = source_resolver(message) if source_resolver else None
@@ -41,14 +36,22 @@ class ResponseWatcher:
                 return
 
 def build_source_resolver(sources):
-    def resolve(message):
-        username = ""
-        if getattr(message, "from_user", None):
-            username = (message.from_user.username or "").lower()
+    normalized = {}
+    for key, source in sources.items():
+        bot = source.get("bot", "") if isinstance(source, dict) else getattr(source, "bot", "")
+        normalized[str(bot).replace("@","").lower()] = key
 
-        for key, source in sources.items():
-            bot = source.get("bot", "") if isinstance(source, dict) else getattr(source, "bot", "")
-            if str(bot).replace("@", "").lower() == username:
+    def resolve(message):
+        candidates = []
+        if getattr(message, "from_user", None):
+            candidates.append(getattr(message.from_user, "username", "") or "")
+        if getattr(message, "chat", None):
+            candidates.append(getattr(message.chat, "username", "") or "")
+
+        for item in candidates:
+            key = normalized.get(str(item).replace("@","").lower())
+            if key:
                 return key
         return None
+
     return resolve
