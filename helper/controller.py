@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from .config import SOURCES
 from .jobs import JobManager
 from .crawler import CommandCrawler
@@ -14,19 +15,28 @@ class HelperController:
         self.dm = DMManager()
 
     def get_source(self, key):
-        return SOURCES.get(key)
+        src = SOURCES.get(key)
+        if not src:
+            return None
+        return SimpleNamespace(key=key, **src)
 
     async def start(self, source_key, start_id=1, client=None, target_chat=None):
-        if source_key not in SOURCES:
+        source = self.get_source(source_key)
+        if not source:
             raise ValueError(f"Unknown helper source: {source_key}")
-        await self.jobs.create(source_key, start_id)
         if not client:
-            return
-        source = SOURCES[source_key]
-        task = asyncio.create_task(CommandCrawler(
-            client, source, self.watcher,
-            HelperForwarder(target_chat), self.jobs
-        ).run(start_id))
+            raise RuntimeError("Pyrogram DM client is not running")
+        await self.jobs.create(source_key, int(start_id))
+
+        task = asyncio.create_task(
+            CommandCrawler(
+                client,
+                source,
+                self.watcher,
+                HelperForwarder(target_chat),
+                self.jobs,
+            ).run(int(start_id))
+        )
         self.tasks[source_key] = task
         self.dm.add(source_key, task)
         return self.jobs.get(source_key)
