@@ -3,22 +3,25 @@ from collections import defaultdict
 from pyrogram import filters
 
 class ResponseWatcher:
-    def __init__(self, timeout=30):
+    def __init__(self, timeout=45):
         self.timeout = timeout
         self.queues = defaultdict(asyncio.Queue)
         self.seen_messages = set()
 
     async def push(self, source_key, message):
-        message_id = getattr(message, "id", None)
-        if message_id and (source_key, message_id) in self.seen_messages:
+        mid = getattr(message, "id", None)
+        if mid and (source_key, mid) in self.seen_messages:
             return
-        if message_id:
-            self.seen_messages.add((source_key, message_id))
+        if mid:
+            self.seen_messages.add((source_key, mid))
         await self.queues[source_key].put(message)
 
     async def wait(self, source_key):
         try:
-            return await asyncio.wait_for(self.queues[source_key].get(), timeout=self.timeout)
+            return await asyncio.wait_for(
+                self.queues[source_key].get(),
+                timeout=self.timeout
+            )
         except asyncio.TimeoutError:
             return None
 
@@ -28,30 +31,38 @@ class ResponseWatcher:
 
         @client.on_message(filters.private)
         async def handler(_, message):
+            key = None
             try:
-                key = source_resolver(message) if source_resolver else None
+                if source_resolver:
+                    key = source_resolver(message)
                 if key:
                     await self.push(key, message)
             except Exception:
-                return
+                pass
+
 
 def build_source_resolver(sources):
-    normalized = {}
-    for key, source in sources.items():
-        bot = source.get("bot", "") if isinstance(source, dict) else getattr(source, "bot", "")
-        normalized[str(bot).replace("@","").lower()] = key
+    lookup = {}
+    for key, src in sources.items():
+        names = [
+            str(src.get("bot","")).lstrip("@").lower()
+        ]
+        for n in names:
+            lookup[n] = key
 
     def resolve(message):
-        candidates = []
-        if getattr(message, "from_user", None):
-            candidates.append(getattr(message.from_user, "username", "") or "")
-        if getattr(message, "chat", None):
-            candidates.append(getattr(message.chat, "username", "") or "")
+        values=[]
+        if getattr(message,"from_user",None):
+            values.append(getattr(message.from_user,"username","") or "")
+            values.append(str(getattr(message.from_user,"id","")))
+        if getattr(message,"chat",None):
+            values.append(getattr(message.chat,"username","") or "")
+            values.append(str(getattr(message.chat,"id","")))
 
-        for item in candidates:
-            key = normalized.get(str(item).replace("@","").lower())
-            if key:
-                return key
+        for v in values:
+            v=str(v).lstrip("@").lower()
+            for name,key in lookup.items():
+                if v and v == name:
+                    return key
         return None
-
     return resolve
