@@ -3472,7 +3472,7 @@ async def dm_resume_commands(message: Message, bot: Bot):
     text = (message.text or "").strip().split()
     if not text:
         return
-    cmd = text[0].split("@")[0]
+    cmd = text[0].split("@")[0].lower()
     mapping = {
         "/resumedmcatchbot": "catch",
         "/resumedmgrabbot": "grab",
@@ -3480,8 +3480,9 @@ async def dm_resume_commands(message: Message, bot: Bot):
         "/resumedmhallowbot": "hallow",
         "/resumedmtakersbot": "takers",
     }
-    if cmd in mapping and len(text) > 1 and text[1].isdigit():
-        await _dm_resume(message, bot, mapping[cmd], int(text[1]))
+    if cmd in mapping:
+        value = int(text[1]) if len(text) > 1 and text[1].isdigit() else 1
+        await _dm_resume(message, bot, mapping[cmd], value)
 
 
 ADD_HELPER = AddHelperService()
