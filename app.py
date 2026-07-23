@@ -30,10 +30,6 @@ from helper.controller import HelperController
 from helper.commands import COMMANDS, RESUME_PREFIX
 from helper.runtime import HelperRuntime
 
-# DM helper controller (isolated crawler flow)
-from helper.controller import HelperController
-DM_HELPER = HelperController()
-
 
 # -----------------------------------------------------
 # Config
@@ -147,6 +143,8 @@ router = Router()
 
 HELPER_CONTROLLER = HelperController()
 HELPER_RUNTIME = HelperRuntime()
+# keep a single shared controller reference for DM flow
+DM_HELPER = HELPER_CONTROLLER
 
 # -----------------------------------------------------
 # Data models
