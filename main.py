@@ -11,9 +11,12 @@ from app.middlewares.user import user_middleware
 from app.services.database_service import database_service
 from app.services.pyrogram_service import pyrogram_service
 from app.utils.logger import logger
+from app.utils.logging_config import logging_config
 
 
 async def main():
+    logging_config.setup()
+
     errors = config_validator.validate()
     if errors:
         for error in errors:
