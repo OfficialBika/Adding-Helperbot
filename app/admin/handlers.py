@@ -3,6 +3,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.admin.checks import admin_checker
+from app.services.statistics_service import statistics_service
 
 router = Router()
 
@@ -12,4 +13,10 @@ async def status(message: Message):
     if not admin_checker.is_admin(message.from_user.id):
         return
 
-    await message.answer("Adding HelperBot V3 status: OK")
+    stats = statistics_service.get()
+
+    await message.answer(
+        "Adding HelperBot V3 status: OK\n"
+        f"Users: {stats['users']}\n"
+        f"Images: {stats['images']}"
+    )
