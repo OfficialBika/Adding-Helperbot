@@ -24,6 +24,15 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+          pip install flake8 isort
+
+      - name: Import check
+        run: |
+          isort --check-only .
+
+      - name: Style check
+        run: |
+          flake8 .
 
       - name: Run tests
         run: |
