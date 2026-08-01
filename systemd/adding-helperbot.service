@@ -1,0 +1,11 @@
+[Unit]
+Description=Adding HelperBot V3
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/Adding-Helperbot
+ExecStart=/usr/bin/python3 main.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
