@@ -7,6 +7,7 @@ from app.database.connection import database
 from app.handlers.loader import register_handlers
 from app.middlewares.error import error_middleware
 from app.middlewares.user import user_middleware
+from app.services.database_service import database_service
 from app.utils.logger import logger
 
 
@@ -19,7 +20,8 @@ async def main():
     register_handlers(dp)
 
     await database.connect()
-    logger.info("Database connected")
+    await database_service.initialize_indexes()
+    logger.info("Database connected and indexes initialized")
 
     try:
         logger.info("Adding HelperBot V3 started")
