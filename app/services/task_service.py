@@ -13,3 +13,6 @@ class TaskService:
 
 
  task_service = TaskService()
+".replace("
+
+ task_service
