@@ -1,0 +1,28 @@
+name: V3 CodeQL Analysis
+
+on:
+  push:
+    branches:
+      - Adding-HelperV3
+  pull_request:
+    branches:
+      - Adding-HelperV3
+  schedule:
+    - cron: '30 2 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze Python Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
