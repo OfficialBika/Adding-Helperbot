@@ -3,6 +3,7 @@ import asyncio
 from aiogram import Dispatcher
 
 from app.bot.client import bot_client
+from app.config.validator import config_validator
 from app.database.connection import database
 from app.handlers.loader import register_handlers
 from app.middlewares.error import error_middleware
@@ -13,6 +14,12 @@ from app.utils.logger import logger
 
 
 async def main():
+    errors = config_validator.validate()
+    if errors:
+        for error in errors:
+            logger.error(error)
+        return
+
     dp = Dispatcher()
 
     dp.message.middleware(error_middleware)
