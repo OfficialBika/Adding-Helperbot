@@ -5,6 +5,15 @@
   Built with modern async architecture, scalable services and production-ready tooling.
 </p>
 
+<p align="center">
+
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![Docker](https://img.shields.io/badge/Docker-Ready-blue)
+![CI](https://github.com/OfficialBika/Adding-Helperbot/actions/workflows/test.yml/badge.svg)
+![Security](https://github.com/OfficialBika/Adding-Helperbot/actions/workflows/security.yml/badge.svg)
+
+</p>
+
 ---
 
 ## ✨ Features
@@ -99,15 +108,9 @@ ADMIN_IDS=
 
 ## 🧪 Development
 
-Run tests:
-
 ```bash
 pytest
-```
 
-Code quality:
-
-```bash
 flake8 .
 isort --check-only .
 ```
@@ -121,6 +124,7 @@ V3 includes:
 - Dependency vulnerability scanning
 - CodeQL analysis
 - Automated CI validation
+- Pre-commit quality checks
 
 ---
 
@@ -143,9 +147,11 @@ docker-compose.yml
 
 ---
 
-## 📌 Version
+## 📌 Release
 
 Current Branch: `Adding-HelperV3`
+
+Version: `v3.0.0`
 
 Status: Production Migration 🚀
 
