@@ -1,4 +1,0 @@
-APP_NAME = "Adding HelperBot V3"
-VERSION = "3.0.0"
-
-MAX_UPLOAD_SIZE = 20 * 1024 * 1024
