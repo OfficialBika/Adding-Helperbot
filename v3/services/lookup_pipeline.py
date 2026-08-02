@@ -2,7 +2,7 @@ from v3.normalizers.lookup_normalizer import lookup_normalizer
 
 
 class LookupPipeline:
-    """Build and store lookup records safely."""
+    """Build, validate and store lookup records safely."""
 
     def __init__(self, repository=None, collection_manager=None, duplicate_checker=None):
         self.repository = repository
@@ -20,13 +20,22 @@ class LookupPipeline:
 
         if self.duplicate_checker:
             if not await self.duplicate_checker.can_insert(record):
-                return {"status": "duplicate", "record": record}
+                return {
+                    "status": "duplicate",
+                    "record": record,
+                }
 
         if self.repository:
-            result = await self.repository.insert(record)
-            return {"status": "inserted", "result": result}
+            result = await self.repository.upsert(record)
+            return {
+                "status": "stored",
+                "result": result,
+            }
 
-        return {"status": "ready", "record": record}
+        return {
+            "status": "ready",
+            "record": record,
+        }
 
 
 lookup_pipeline = LookupPipeline()
