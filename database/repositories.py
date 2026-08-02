@@ -21,6 +21,25 @@ class UserRepository:
         self.known_users = known_users
         self.user_modes = user_modes
 
+    async def get_user(self, user_id: int):
+        return await self.known_users.find_one({"user_id": user_id})
+
+    async def create_user(self, data: dict):
+        return await self.known_users.insert_one(data)
+
+    async def update_user(self, user_id: int, data: dict):
+        return await self.known_users.update_one(
+            {"user_id": user_id},
+            {"$set": data},
+        )
+
+    async def set_mode(self, user_id: int, mode: str):
+        return await self.user_modes.update_one(
+            {"user_id": user_id},
+            {"$set": {"mode": mode}},
+            upsert=True,
+        )
+
 
 items_repo = ItemRepository()
 users_repo = UserRepository()
