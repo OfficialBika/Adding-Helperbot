@@ -1,0 +1,78 @@
+services:
+  - type: web
+    name: bika-adding
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: USE_WEBHOOK
+        value: "true"
+      - key: PUBLIC_URL
+        sync: false
+      - key: WEBHOOK_PATH
+        value: /webhook
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: DB_NAME
+        value: waifu_adding_v2
+      - key: OWNER_ID
+        sync: false
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: SESSION_STRING
+        sync: false
+
+  - type: web
+    name: bika-namebotv3
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python namebotv3/main.py
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: MODE
+        value: webhook
+      - key: USE_WEBHOOK
+        value: "true"
+      - key: PUBLIC_URL
+        sync: false
+      - key: WEBHOOK_PATH
+        value: /webhook
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: DB_NAME
+        value: waifu_adding_v2
+      - key: OWNER_IDS
+        sync: false
+      - key: LOOKUP_ENGINE_MODE
+        value: sqlite
+      - key: SQLITE_INDEX_PATH
+        value: data/fingerprint_index.db
+      - key: SQLITE_BUILD_ON_START
+        value: "true"
+      - key: SQLITE_SYNC_SECONDS
+        value: "10"
+      # Rebuild periodically because Render storage is ephemeral and MongoDB is
+      # the source of truth. A full rebuild also removes records deleted from Mongo.
+      - key: SQLITE_FULL_REBUILD_SECONDS
+        value: "21600"
+      - key: SQLITE_REBUILD_ON_START
+        value: "false"
+      - key: LOOKUP_LOG_GROUP_ID
+        sync: false

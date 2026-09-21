@@ -1527,6 +1527,10 @@ async def ensure_item_indexes(collection) -> None:
         sparse=True,
     )
     await collection.create_index("archive.message_id", sparse=True)
+
+    # NameBotV3 incremental SQLite sync uses this watermark query. Keep it indexed
+    # so new/updated records do not require a collection-wide scan.
+    await collection.create_index("updated_at")
     await collection.create_index("created_at")
 
 async def ensure_indexes() -> None:
