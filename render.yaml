@@ -68,6 +68,10 @@ services:
         value: "true"
       - key: SQLITE_SYNC_SECONDS
         value: "10"
+      # Rebuild periodically because Render storage is ephemeral and MongoDB is
+      # the source of truth. A full rebuild also removes records deleted from Mongo.
+      - key: SQLITE_FULL_REBUILD_SECONDS
+        value: "21600"
       - key: SQLITE_REBUILD_ON_START
         value: "false"
       - key: LOOKUP_LOG_GROUP_ID
