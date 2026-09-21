@@ -76,15 +76,21 @@ async def bootstrap_core(bot: Bot, *, webhook: bool) -> list[asyncio.Task]:
     tasks: list[asyncio.Task] = []
 
     if lookup_backend.mode == "sqlite":
-        # Open is fast. Initial/full index build runs in the background, so exact Mongo
-        # lookup and Telegram handling can start immediately.
+        # Build the initial secondary index before advertising the webhook as ready.
+        # MongoDB exact lookup remains the source of truth; SQLite must be complete
+        # before similarity lookups are accepted so a fresh Render instance cannot
+        # temporarily return false "not found" results while the index is empty.
         await sqlite_index.open()
+        if settings.sqlite_build_on_start:
+            await sqlite_index.ensure_built()
         if settings.sqlite_sync_seconds > 0:
-            # sync_loop performs the initial background build when required, then delta syncs.
             tasks.append(asyncio.create_task(sqlite_index.sync_loop(), name="sqlite-sync-loop"))
-        elif settings.sqlite_build_on_start:
-            tasks.append(asyncio.create_task(sqlite_index.ensure_built(), name="sqlite-initial-build"))
-        log.info("Lookup engine selected: SQLITE hybrid path=%s", settings.sqlite_index_path)
+        log.info(
+            "Lookup engine selected: SQLITE hybrid path=%s items=%s ready=%s",
+            settings.sqlite_index_path,
+            (await sqlite_index.count()),
+            sqlite_index.ready,
+        )
     else:
         if settings.snapshot_startup_load:
             await snapshot.refresh()
