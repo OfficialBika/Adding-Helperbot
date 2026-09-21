@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+data/*.db
+namebotv3/data/*.db
+sessions/
+*.session
+seeder_state.json
