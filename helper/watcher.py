@@ -1,19 +1,25 @@
 import asyncio
-from collections import defaultdict
+from collections import defaultdict, deque
 from pyrogram import filters
 
 class ResponseWatcher:
-    def __init__(self, timeout=45):
+    def __init__(self, timeout=45, max_seen_messages=10000):
         self.timeout = timeout
+        self.max_seen_messages = max(100, int(max_seen_messages))
         self.queues = defaultdict(asyncio.Queue)
         self.seen_messages = set()
+        self._seen_order = deque()
 
     async def push(self, source_key, message):
         mid = getattr(message, "id", None)
-        if mid and (source_key, mid) in self.seen_messages:
-            return
         if mid:
-            self.seen_messages.add((source_key, mid))
+            key = (source_key, mid)
+            if key in self.seen_messages:
+                return
+            self.seen_messages.add(key)
+            self._seen_order.append(key)
+            while len(self._seen_order) > self.max_seen_messages:
+                self.seen_messages.discard(self._seen_order.popleft())
         await self.queues[source_key].put(message)
 
     async def wait(self, source_key):
@@ -38,7 +44,8 @@ class ResponseWatcher:
                 if key:
                     await self.push(key, message)
             except Exception:
-                pass
+                import logging
+                logging.getLogger(__name__).exception("Response watcher failed")
 
 
 def build_source_resolver(sources):
