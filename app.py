@@ -29,6 +29,7 @@ load_dotenv()
 from helper.controller import HelperController
 from helper.commands import COMMANDS, RESUME_PREFIX
 from helper.runtime import HelperRuntime
+from helper.namebot_sync import latest_status as namebot_latest_status, monitor_namebot
 
 
 # -----------------------------------------------------
@@ -3326,7 +3327,31 @@ class AddHelperService:
             return
         if cmd in {"/helperstatus", "/addhelperstatus"}:
             s = self.state
-            await self._reply(f"Running: {'YES' if self.is_running() else 'NO'}\nMode: {s.runner_mode or '-'}\nSource: {s.source_ref or '-'}\nTarget chat: {s.target_chat}\nDelay: {s.delay_seconds}s\nSent count: {s.sent_count}\nSkipped count: {s.skipped_count}\nCurrent offset: {s.current_offset or '-'}\nCurrent index: {s.current_index}\nResume target count: {s.resume_target_count}\nLast error: {s.last_error or '-'}", reply_to_message_id=msg.id)
+            nb = namebot_latest_status()
+            nb_status = "NOT SEEN"
+            if nb.get("status") == "missing":
+                nb_status = "WAITING FOR NAMEBOT"
+            elif nb:
+                nb_status = (
+                    f"v{nb.get('version', 'unknown')} | "
+                    f"commit={nb.get('git_commit') or 'not-set'} | "
+                    f"engine={nb.get('lookup_engine') or 'unknown'}"
+                )
+            await self._reply(
+                f"Running: {'YES' if self.is_running() else 'NO'}\n"
+                f"Mode: {s.runner_mode or '-'}\n"
+                f"Source: {s.source_ref or '-'}\n"
+                f"Target chat: {s.target_chat}\n"
+                f"Delay: {s.delay_seconds}s\n"
+                f"Sent count: {s.sent_count}\n"
+                f"Skipped count: {s.skipped_count}\n"
+                f"Current offset: {s.current_offset or '-'}\n"
+                f"Current index: {s.current_index}\n"
+                f"Resume target count: {s.resume_target_count}\n"
+                f"Last error: {s.last_error or '-'}\n"
+                f"NameBot V3: {nb_status}",
+                reply_to_message_id=msg.id,
+            )
             return
         if cmd in {"/stophelper", "/stopinlinebot"}:
             stopped = await self.stop_runner()
@@ -3522,6 +3547,10 @@ async def main() -> None:
     dp.include_router(router)
     await on_startup(bot)
     runner = await start_web_app(dp, bot)
+    namebot_monitor_task = asyncio.create_task(
+        monitor_namebot(db),
+        name="namebotv3-registry-monitor",
+    )
     try:
         await ADD_HELPER.start()
 
@@ -3550,6 +3579,11 @@ async def main() -> None:
             # The runtime is only a reference to the single AddHelper client.
             HELPER_RUNTIME.client = None
             HELPER_RUNTIME.watcher = None
+        namebot_monitor_task.cancel()
+        try:
+            await namebot_monitor_task
+        except asyncio.CancelledError:
+            pass
         try:
             if USE_WEBHOOK:
                 await bot.delete_webhook(drop_pending_updates=False)
