@@ -46,15 +46,21 @@ async def monitor_namebot(db, poll_seconds: int = DEFAULT_POLL_SECONDS) -> None:
             else:
                 previous = _latest
                 _latest = dict(doc)
+                stats = doc.get("lookup_stats") or {}
                 signature = (
                     doc.get("version"),
                     doc.get("git_commit"),
                     doc.get("lookup_engine"),
+                    stats.get("items"),
+                    stats.get("ready"),
                 )
+                previous_stats = previous.get("lookup_stats") or {}
                 previous_signature = (
                     previous.get("version"),
                     previous.get("git_commit"),
                     previous.get("lookup_engine"),
+                    previous_stats.get("items"),
+                    previous_stats.get("ready"),
                 )
                 if signature != previous_signature:
                     log.info("NameBotV3 runtime changed: %s", _format_status(doc))
