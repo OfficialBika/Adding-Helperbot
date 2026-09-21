@@ -3547,8 +3547,12 @@ async def main() -> None:
     dp.include_router(router)
     await on_startup(bot)
     runner = await start_web_app(dp, bot)
+    namebot_monitor_interval = max(
+        5,
+        int(os.getenv("NAMEBOT_MONITOR_INTERVAL", "15") or 15),
+    )
     namebot_monitor_task = asyncio.create_task(
-        monitor_namebot(db),
+        monitor_namebot(db, namebot_monitor_interval),
         name="namebotv3-registry-monitor",
     )
     try:
