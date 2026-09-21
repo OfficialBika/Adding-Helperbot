@@ -8,6 +8,14 @@ class HelperRuntime:
         self.controller = None
         self.watcher = None
 
+    def attach_client(self, client, controller, source_resolver=None):
+        """Attach to an already-running Pyrogram client; never creates a second session."""
+        self.controller = controller
+        self.client = client
+        self.watcher = controller.watcher
+        if self.client and source_resolver:
+            self.watcher.bind_client(self.client, source_resolver)
+
     async def start(self, controller):
         self.controller = controller
         self.client = create_helper_client()
