@@ -362,54 +362,6 @@ class SQLiteFingerprintIndex:
             log.info("SQLite fingerprint delta sync changed=%s", changed_total)
         return changed_total
 
-    async def reconcile_stale_rows(self) -> int:
-        """Remove SQLite rows whose MongoDB documents no longer exist.
-
-        MongoDB has no delete watermark in the current schema, so incremental
-        updated_at sync cannot observe deletions. This reconciliation is run on
-        the periodic full-build cadence and is deliberately source-scoped.
-        """
-        await self.open()
-        if self.db is None or self.building:
-            return 0
-        removed = 0
-        for collection in COLLECTION_TO_OUTPUT_COMMAND:
-            try:
-                mongo_ids = {
-                    str(doc["_id"])
-                    async for doc in get_db()[collection].find({}, {"_id": 1})
-                }
-                cursor = await self.db.execute(
-                    "SELECT mongo_id FROM fingerprint_items WHERE collection=?",
-                    (collection,),
-                )
-                rows = await cursor.fetchall()
-                await cursor.close()
-                stale = [str(row[0]) for row in rows if str(row[0]) not in mongo_ids]
-                if not stale:
-                    continue
-                async with self._write_lock:
-                    for mongo_id in stale:
-                        await self.db.execute(
-                            "DELETE FROM hash_chunks WHERE collection=? AND mongo_id=?",
-                            (collection, mongo_id),
-                        )
-                        await self.db.execute(
-                            "DELETE FROM fingerprint_items WHERE collection=? AND mongo_id=?",
-                            (collection, mongo_id),
-                        )
-                    await self.db.commit()
-                removed += len(stale)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("SQLite stale-row reconciliation failed for %s", collection)
-                # Do not claim reconciliation is complete if one source failed.
-                continue
-        if removed:
-            log.info("SQLite stale-row reconciliation removed=%s", removed)
-        return removed
-
     async def sync_loop(self) -> None:
         while True:
             try:
