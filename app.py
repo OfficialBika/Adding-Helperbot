@@ -2497,7 +2497,9 @@ def normalize_webhook_path(path: str) -> str:
 
 
 async def on_startup(bot: Bot) -> None:
-    await HELPER_RUNTIME.start(HELPER_CONTROLLER)
+    # The AddHelper service owns the single Pyrogram session.
+    # Do not start HELPER_RUNTIME here: starting a second Client with the
+    # same SESSION_STRING can cause duplicate-session/update handling issues.
     await ensure_indexes()
     await bot.set_my_commands(
         [
@@ -3496,6 +3498,20 @@ async def main() -> None:
     runner = await start_web_app(dp, bot)
     try:
         await ADD_HELPER.start()
+
+        # Reuse the already-running AddHelper Pyrogram client for the legacy
+        # DM controller. This keeps exactly one MTProto session alive.
+        if ADD_HELPER.client:
+            from helper.config import SOURCES
+            from helper.watcher import build_source_resolver
+            HELPER_RUNTIME.controller = HELPER_CONTROLLER
+            HELPER_RUNTIME.client = ADD_HELPER.client
+            HELPER_RUNTIME.watcher = HELPER_CONTROLLER.watcher
+            HELPER_RUNTIME.watcher.bind_client(
+                ADD_HELPER.client,
+                build_source_resolver(SOURCES),
+            )
+
         if USE_WEBHOOK:
             await asyncio.Event().wait()
         else:
@@ -3506,6 +3522,10 @@ async def main() -> None:
             await ADD_HELPER.stop()
         except Exception:
             logger.exception("AddHelper shutdown failed")
+        finally:
+            # The runtime is only a reference to the single AddHelper client.
+            HELPER_RUNTIME.client = None
+            HELPER_RUNTIME.watcher = None
         try:
             if USE_WEBHOOK:
                 await bot.delete_webhook(drop_pending_updates=False)
