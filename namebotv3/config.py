@@ -320,7 +320,7 @@ class Settings:
     sqlite_rebuild_on_start: bool = _bool("SQLITE_REBUILD_ON_START", False)
     sqlite_batch_size: int = _int("SQLITE_BATCH_SIZE", 500)
     sqlite_busy_timeout_ms: int = _int("SQLITE_BUSY_TIMEOUT_MS", 5000)
-    sqlite_full_rebuild_seconds: int = _int("SQLITE_FULL_REBUILD_SECONDS", 0)
+    sqlite_full_rebuild_seconds: int = _int("SQLITE_FULL_REBUILD_SECONDS", 21600)
 
     result_cache_max_items: int = _int("RESULT_CACHE_MAX_ITEMS", 150000)
     result_cache_ttl_seconds: int = _int("RESULT_CACHE_TTL_SECONDS", 7200)
