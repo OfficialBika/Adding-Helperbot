@@ -2564,6 +2564,11 @@ ADD_HELPER_RETRY_BASE_DELAY = int(os.getenv("RETRY_BASE_DELAY", "3"))
 ADD_HELPER_CONTROL_POLL_INTERVAL = float(os.getenv("CONTROL_POLL_INTERVAL", "2"))
 ADD_HELPER_CONTROL_HISTORY_LIMIT = int(os.getenv("CONTROL_HISTORY_LIMIT", "25"))
 ADD_HELPER_STATE_FILE = os.getenv("STATE_FILE", "seeder_state.json").strip() or "seeder_state.json"
+# Keep the control cursor separate from runner progress so concurrent
+# control-loop writes cannot overwrite inline/forward progress state.
+ADD_HELPER_CONTROL_STATE_FILE = os.getenv(
+    "CONTROL_STATE_FILE", f"{ADD_HELPER_STATE_FILE}.control"
+).strip() or f"{ADD_HELPER_STATE_FILE}.control"
 ADD_HELPER_CLEAR_STATE_ON_FINISH = os.getenv("CLEAR_STATE_ON_FINISH", "true").lower() == "true"
 ADD_HELPER_SESSIONS_DIR = os.getenv("SESSIONS_DIR", "sessions").strip() or "sessions"
 ADD_HELPER_STARTUP_MESSAGE = os.getenv("ADD_HELPER_STARTUP_MESSAGE", "true").lower() == "true"
@@ -2796,14 +2801,35 @@ def add_helper_clear_progress() -> None:
     add_helper_save_state(data)
 
 
+def _load_control_state() -> dict[str, Any]:
+    import json
+    path = Path(ADD_HELPER_CONTROL_STATE_FILE)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("AddHelper failed to read control state")
+        return {}
+
+
+def _save_control_state(data: dict[str, Any]) -> None:
+    import json
+    try:
+        path = Path(ADD_HELPER_CONTROL_STATE_FILE)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        logger.exception("AddHelper failed to write control state")
+
+
 def add_helper_get_control_last_msg_id() -> int:
-    return int(add_helper_load_state().get("control_last_msg_id") or 0)
+    return int(_load_control_state().get("control_last_msg_id") or 0)
 
 
 def add_helper_set_control_last_msg_id(message_id: int) -> None:
-    data = add_helper_load_state()
+    data = _load_control_state()
     data["control_last_msg_id"] = int(message_id)
-    add_helper_save_state(data)
+    _save_control_state(data)
 
 
 @dataclass
