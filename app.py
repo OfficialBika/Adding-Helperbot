@@ -29,7 +29,7 @@ load_dotenv()
 from helper.controller import HelperController
 from helper.commands import COMMANDS, RESUME_PREFIX
 from helper.runtime import HelperRuntime
-from helper.namebot_sync import latest_status as namebot_latest_status, monitor_namebot
+from helper.data_sync import record_change, ensure_sync_indexes
 
 
 # -----------------------------------------------------
@@ -1627,6 +1627,15 @@ async def apply_source_update(update: SourceUpdate) -> tuple[bool, str]:
             },
         )
         if result.modified_count:
+            changed = await collection.find_one({"normalized_name": normalize_name(new_name)}, {"_id": 1})
+            if changed:
+                await record_change(
+                    db,
+                    operation="update",
+                    collection=collection.name,
+                    document_id=changed["_id"],
+                    source_key=update.source_key,
+                )
             return True, f"Renamed: {update.old_name} → {update.new_name}"
         return False, f"Rename target not found: {update.old_name}"
 
@@ -1643,6 +1652,15 @@ async def apply_source_update(update: SourceUpdate) -> tuple[bool, str]:
             },
         )
         if result.modified_count:
+            changed = await collection.find_one({"normalized_name": normalize_name(update.old_name)}, {"_id": 1})
+            if changed:
+                await record_change(
+                    db,
+                    operation="update",
+                    collection=collection.name,
+                    document_id=changed["_id"],
+                    source_key=update.source_key,
+                )
             return True, f"Rarity updated: {update.old_name} → {new_rarity}"
         return False, f"Rarity update target not found: {update.old_name}"
 
@@ -1765,6 +1783,13 @@ async def upsert_item(
             update_doc.setdefault("$addToSet", {})["name_aliases"] = old_name
 
         await collection.update_one({"_id": existing["_id"]}, update_doc)
+        await record_change(
+            db,
+            operation="update",
+            collection=collection.name,
+            document_id=existing["_id"],
+            source_key=source_key,
+        )
         existing.update(doc)
 
         # Keep returned document in sync for reply/log formatting.
@@ -1783,6 +1808,13 @@ async def upsert_item(
 
     result = await collection.insert_one(doc)
     doc["_id"] = result.inserted_id
+    await record_change(
+        db,
+        operation="insert",
+        collection=collection.name,
+        document_id=result.inserted_id,
+        source_key=source_key,
+    )
     return doc, True
 
 
@@ -2174,6 +2206,13 @@ async def persist_archive_pointer(
     await db[str(doc["source_collection"])].update_one(
         {"_id": doc["_id"]},
         update,
+    )
+    await record_change(
+        db,
+        operation="update",
+        collection=str(doc["source_collection"]),
+        document_id=doc["_id"],
+        source_key=str(doc.get("source_key") or ""),
     )
 
     doc["archive"] = archive
@@ -3327,16 +3366,6 @@ class AddHelperService:
             return
         if cmd in {"/helperstatus", "/addhelperstatus"}:
             s = self.state
-            nb = namebot_latest_status()
-            nb_status = "NOT SEEN"
-            if nb.get("status") == "missing":
-                nb_status = "WAITING FOR NAMEBOT"
-            elif nb:
-                nb_status = (
-                    f"v{nb.get('version', 'unknown')} | "
-                    f"commit={nb.get('git_commit') or 'not-set'} | "
-                    f"engine={nb.get('lookup_engine') or 'unknown'}"
-                )
             await self._reply(
                 f"Running: {'YES' if self.is_running() else 'NO'}\n"
                 f"Mode: {s.runner_mode or '-'}\n"
@@ -3348,8 +3377,7 @@ class AddHelperService:
                 f"Current offset: {s.current_offset or '-'}\n"
                 f"Current index: {s.current_index}\n"
                 f"Resume target count: {s.resume_target_count}\n"
-                f"Last error: {s.last_error or '-'}\n"
-                f"NameBot V3: {nb_status}",
+                f"Last error: {s.last_error or '-'}",
                 reply_to_message_id=msg.id,
             )
             return
@@ -3547,14 +3575,7 @@ async def main() -> None:
     dp.include_router(router)
     await on_startup(bot)
     runner = await start_web_app(dp, bot)
-    namebot_monitor_interval = max(
-        5,
-        int(os.getenv("NAMEBOT_MONITOR_INTERVAL", "15") or 15),
-    )
-    namebot_monitor_task = asyncio.create_task(
-        monitor_namebot(db, namebot_monitor_interval),
-        name="namebotv3-registry-monitor",
-    )
+    await ensure_sync_indexes(db)
     try:
         await ADD_HELPER.start()
 
