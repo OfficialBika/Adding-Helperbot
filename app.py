@@ -3504,11 +3504,9 @@ async def main() -> None:
         if ADD_HELPER.client:
             from helper.config import SOURCES
             from helper.watcher import build_source_resolver
-            HELPER_RUNTIME.controller = HELPER_CONTROLLER
-            HELPER_RUNTIME.client = ADD_HELPER.client
-            HELPER_RUNTIME.watcher = HELPER_CONTROLLER.watcher
-            HELPER_RUNTIME.watcher.bind_client(
+            HELPER_RUNTIME.attach_client(
                 ADD_HELPER.client,
+                HELPER_CONTROLLER,
                 build_source_resolver(SOURCES),
             )
 
