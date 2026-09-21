@@ -26,3 +26,14 @@ For Adding, also set the Pyrogram API_ID, API_HASH, and SESSION_STRING values re
 For NameBotV3, keep LOOKUP_ENGINE_MODE=sqlite.
 
 Do not commit real tokens, MongoDB credentials, or session strings.
+
+
+## MongoDB ↔ SQLite consistency
+
+- MongoDB is the source of truth for all lookup records.
+- In SQLite mode, exact UID/SHA/origin lookups still query MongoDB directly.
+- SQLite stores rebuildable photo/video similarity fingerprints and compact item snapshots.
+- Adding creates an `updated_at` index on every source collection so NameBotV3 delta sync can use an indexed watermark query.
+- NameBotV3 completes the initial SQLite build before marking the webhook service ready.
+- A periodic full SQLite rebuild (default: every 6 hours) is enabled to recover missed index state and remove rows for documents deleted from MongoDB, because deletions do not carry an `updated_at` watermark.
+- Render local storage is treated as ephemeral; a fresh instance can rebuild the secondary index from MongoDB.
