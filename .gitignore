@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# Pyrogram / Telegram sessions
+sessions/
+*.session
+
+# AddHelper local progress / control state
+seeder_state.json
+seeder_state.json.control
+*.state
+*.state.control
+
+# Local caches / generated files
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
