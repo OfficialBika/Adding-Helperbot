@@ -4,7 +4,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from bson import ObjectId
+from pymongo import ReturnDocument
+
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ async def record_change(
                 "$setOnInsert": {"created_at": now},
             },
             upsert=True,
-            return_document=True,
+            return_document=ReturnDocument.AFTER,
         )
         version = int((state or {}).get("version", 0))
 
