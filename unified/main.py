@@ -203,7 +203,6 @@ async def run():
             await asyncio.Event().wait()
         finally:
             await helper_userbot.stop()
-            await helper_userbot.stop()
             await cleanup(bot)
             await runner.cleanup()
     else:
@@ -225,6 +224,7 @@ async def run():
         try:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         finally:
+            await helper_userbot.stop()
             await cleanup(bot)
             await runner.cleanup()
 
