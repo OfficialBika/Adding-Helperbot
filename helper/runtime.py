@@ -64,13 +64,12 @@ class HelperUserbot:
             # Caption-only posts without media are never useful to Adding.
             return
 
-        @self.client.on_message(filters.chat(list(SOURCE_CHATS)) & filters.command(
+        @self.client.on_message(filters.chat(ADDING_CHAT_ID) & filters.command(
             ["helperstatus", "helperforward", "helperstop", "helperinline"],
             prefixes="/",
         ))
-        async def ignored_source_commands(_, message: Message):
-            # Never treat source-channel content as helper control commands.
-            return
+        async def helper_control(_, message: Message):
+            await self.control(message)
 
         await self.client.start()
         self._started = True
