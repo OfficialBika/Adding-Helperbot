@@ -9,8 +9,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
-      - key: USE_WEBHOOK
-        value: "true"
+      - key: RUN_MODE
+        value: webhook
       - key: PUBLIC_URL
         sync: false
       - key: WEBHOOK_PATH
@@ -35,5 +35,15 @@ services:
         sync: false
       - key: HELPER_TARGET_CHAT
         sync: false
+      - key: AUTO_LOOKUP_ENABLED
+        value: "true"
+      - key: LOOKUP_IN_PRIVATE
+        value: "true"
+      - key: LOOKUP_IN_GROUPS
+        value: "true"
       - key: LOOKUP_REPLY_NOT_FOUND
         value: "true"
+      - key: MAX_PHOTO_CANDIDATES
+        value: "1200"
+      - key: MAX_VIDEO_CANDIDATES
+        value: "1500"
