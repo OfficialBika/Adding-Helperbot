@@ -27,14 +27,6 @@ services:
         sync: false
       - key: ADDING_CHAT_ID
         sync: false
-      - key: API_ID
-        sync: false
-      - key: API_HASH
-        sync: false
-      - key: SESSION_STRING
-        sync: false
-      - key: HELPER_TARGET_CHAT
-        sync: false
       - key: AUTO_LOOKUP_ENABLED
         value: "true"
       - key: LOOKUP_IN_PRIVATE
