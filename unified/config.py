@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Tuple
 
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
 def _bool(name: str, default: bool = False) -> bool:
-    return os.getenv(name, str(default)).strip().lower() in {"1","true","yes","on","y"}
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 def _int(name: str, default: int = 0) -> int:
-    try: return int(os.getenv(name, str(default)).strip())
-    except Exception: return default
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except Exception:
+        return default
 
 def _csv(name: str) -> list[str]:
     return [x.strip() for x in os.getenv(name, "").split(",") if x.strip()]
@@ -31,7 +32,9 @@ class Settings:
     lookup_in_groups: bool = _bool("LOOKUP_IN_GROUPS", True)
     reply_not_found: bool = _bool("LOOKUP_REPLY_NOT_FOUND", True)
 
-    use_webhook: bool = _bool("USE_WEBHOOK", False)
+    # auto: webhook when PUBLIC_URL exists, otherwise polling.
+    # polling/webhook: explicit deployment mode.
+    run_mode: str = os.getenv("RUN_MODE", "auto").strip().lower()
     public_url: str = os.getenv("PUBLIC_URL", "").rstrip("/")
     webhook_path: str = os.getenv("WEBHOOK_PATH", "/webhook")
     webhook_secret: str = os.getenv("WEBHOOK_SECRET", "")
@@ -48,5 +51,7 @@ class Settings:
     dhash_threshold: int = _int("PHOTO_DHASH_THRESHOLD", 12)
     video_frame_threshold: int = _int("VIDEO_FRAME_THRESHOLD", 10)
     video_avg_threshold: int = _int("VIDEO_AVG_THRESHOLD", 12)
+    max_photo_candidates: int = _int("MAX_PHOTO_CANDIDATES", 1200)
+    max_video_candidates: int = _int("MAX_VIDEO_CANDIDATES", 1500)
 
 settings = Settings()
