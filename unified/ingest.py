@@ -11,6 +11,7 @@ from unified.parser import extract_name
 from unified.store import save_character
 from services.hash_service import hash_photo, hash_video
 from services.source_resolver import resolve_source_collection, output_command_from_message
+from unified.source_whitelist import is_allowed_source, forwarded_origin_chat
 
 log = logging.getLogger(__name__)
 
@@ -55,17 +56,29 @@ async def _download(bot: Bot, file_id: str) -> bytes | None:
 
 
 async def ingest_message(bot: Bot, message: Message) -> bool:
-    # The only accepted Adding input is a forwarded channel/source post.
-    target = message.reply_to_message or message
+    # The only accepted Adding input is the message itself forwarded from an
+    # explicitly configured source channel. A reply-to message is never used
+    # as an authorization shortcut.
+    target = message
     if not _forwarded(target):
+        return False
+
+    if not is_allowed_source(target):
+        origin_chat = forwarded_origin_chat(target)
+        log.warning(
+            "SKIP unauthorized forwarded source chat=%s username=%s message=%s",
+            getattr(origin_chat, "id", None),
+            getattr(origin_chat, "username", None),
+            getattr(target, "message_id", None),
+        )
         return False
 
     media, media_type = _media(target)
     if not media:
         return False
 
-    # Source must be identified from Telegram forward metadata or the known
-    # source-content rules. Unknown sources are not silently stored.
+    # After authorization, resolve the canonical source collection. Content
+    # parsing can classify the source, but it cannot authorize ingestion.
     source_key = resolve_source_collection(target)
     if not source_key:
         log.warning(
