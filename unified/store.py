@@ -78,7 +78,7 @@ async def save_character(*, name: str, command: str, source_key: str, media_type
     origin_filter = None
     if source_origin:
         origin_filter = {"source_origin.chat_id": source_origin[0], "source_origin.message_id": source_origin[1]}
-    key = origin_filter or {"source_key": source_key, "sha256": sha} if sha else None
+    key = origin_filter or ({"source_key": source_key, "sha256": sha} if sha else None)
     if key is None and uid:
         key = {"source_key": source_key, "file_unique_ids": uid}
     if key is None:
