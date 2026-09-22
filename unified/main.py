@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "namebotv3"))
 sys.path.insert(0, str(ROOT))
 
 from aiohttp import web
-from aiogram import Dispatcher, F, Router, Bot
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -18,14 +18,11 @@ from aiogram.types import Message
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from unified.config import settings
-from unified.store import ensure_indexes, close, characters
+from unified.store import characters, close, ensure_indexes
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
 from services.result_formatter import result_buttons
 from utils.text import h, first_token
-
-from helper.controller import HelperController
-from helper.runtime import HelperRuntime
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -34,11 +31,11 @@ logging.basicConfig(
 log = logging.getLogger("unified")
 
 router = Router(name="unified")
-controller = HelperController()
-runtime = HelperRuntime()
+
 
 def owner(message: Message) -> bool:
     return bool(message.from_user and message.from_user.id in settings.owner_ids)
+
 
 def is_media(message: Message) -> bool:
     return bool(
@@ -48,12 +45,12 @@ def is_media(message: Message) -> bool:
         or getattr(message, "document", None)
     )
 
+
 def format_result(doc: dict) -> str:
-    raw_name = str(doc.get("name") or "")
+    name = h(str(doc.get("name") or ""))
     command = str(doc.get("command") or "/name")
-    name = h(raw_name)
-    hint = h(f"{command} {first_token(raw_name)}")
-    full = h(f"{command} {raw_name}")
+    hint = h(f"{command} {first_token(str(doc.get('name') or ''))}")
+    full = h(f"{command} {str(doc.get('name') or '')}")
     return (
         f"<b>NAME :</b> <code>{name}</code>\n"
         "────────────────\n"
@@ -62,60 +59,6 @@ def format_result(doc: dict) -> str:
         "Powered by <b>Bika</b>"
     )
 
-async def start_source(message: Message, key: str) -> None:
-    if not runtime.client:
-        await message.reply("⚠️ Adding helper userbot is not connected.")
-        return
-    await controller.start(
-        key,
-        1,
-        runtime.client,
-        settings.helper_target_chat or settings.adding_chat_id,
-    )
-    await message.reply(f"✅ Adding worker started: <code>{key}</code>")
-
-@router.message(Command("startdmcatchbot"))
-async def start_catch(message: Message):
-    if owner(message):
-        await start_source(message, "catch")
-
-@router.message(Command("startdmgrabbot"))
-async def start_grab(message: Message):
-    if owner(message):
-        await start_source(message, "grab")
-
-@router.message(Command("startdmsenpaibot"))
-async def start_senpai(message: Message):
-    if owner(message):
-        await start_source(message, "senpai")
-
-@router.message(Command("startdmhallowbot"))
-async def start_hallow(message: Message):
-    if owner(message):
-        await start_source(message, "hallow")
-
-@router.message(Command("startdmtakersbot"))
-async def start_takers(message: Message):
-    if owner(message):
-        await start_source(message, "takers")
-
-@router.message(Command("stopdm"))
-async def stop_dm(message: Message):
-    if not owner(message):
-        return
-    await controller.stop_all_dm()
-    await message.reply("✅ All Adding workers stopped.")
-
-@router.message(Command("addingstatus"))
-async def adding_status(message: Message):
-    if not owner(message):
-        return
-    keys = ("catch", "grab", "senpai", "hallow", "takers")
-    lines = [
-        f"{key}: {'RUNNING' if controller.is_running(key) else 'STOPPED'}"
-        for key in keys
-    ]
-    await message.reply("📥 <b>Adding status</b>\n" + "\n".join(lines))
 
 @router.message(Command("stats"))
 async def stats(message: Message):
@@ -126,14 +69,33 @@ async def stats(message: Message):
         f"📊 <b>Unified Adding + Lookup</b>\n"
         f"Characters: <code>{count}</code>\n"
         f"DB: <code>{h(settings.db_name)}</code>\n"
-        f"Adding Group: <code>{settings.adding_chat_id}</code>"
+        f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
+        "Mode: <code>forward-only adding</code>"
     )
+
+
+@router.message(Command("addingstatus"))
+async def adding_status(message: Message):
+    if not owner(message):
+        return
+    await message.reply(
+        "📥 <b>Adding Helper</b>\n"
+        "Mode: <code>channel-forward only</code>\n"
+        f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
+        "DM worker/crawler: <code>disabled</code>"
+    )
+
 
 @router.message(F.chat.id == settings.adding_chat_id, F.func(is_media))
 async def adding_ingest(message: Message):
+    # Adding is intentionally restricted to forwarded channel/source posts.
+    # Ordinary media sent directly into the Adding group is ignored.
+    if not getattr(message, "forward_origin", None) and not getattr(message, "forward_from_chat", None):
+        return
     ok = await ingest_message(message.bot, message)
     if ok:
-        log.info("INGESTED message=%s chat=%s", message.message_id, message.chat.id)
+        log.info("INGESTED forwarded post message=%s chat=%s", message.message_id, message.chat.id)
+
 
 @router.message(
     F.func(lambda m: bool(getattr(m.chat, "id", 0) != settings.adding_chat_id)),
@@ -173,11 +135,11 @@ async def lookup_media(message: Message):
     elif settings.reply_not_found:
         await message.reply("❌ Character not found.")
 
-async def _cleanup(bot: Bot):
-    await runtime.stop()
-    await controller.stop_all_dm()
+
+async def cleanup(bot: Bot):
     await close()
     await bot.session.close()
+
 
 async def run():
     if not settings.bot_token:
@@ -205,24 +167,16 @@ async def run():
     dp = Dispatcher()
     dp.include_router(router)
 
-    if settings.api_id and settings.api_hash and settings.session_string:
-        await runtime.start(controller)
-        log.info("Adding helper userbot started")
-    else:
-        log.warning("Adding helper disabled: API_ID/API_HASH/SESSION_STRING missing")
-
     if webhook:
         path = settings.webhook_path if settings.webhook_path.startswith("/") else "/" + settings.webhook_path
         app = web.Application()
-
-        # Cheap liveness endpoint. Render health checks should not depend on
-        # Mongo/Telegram latency.
         app.router.add_get(
             "/healthz",
             lambda _: web.json_response({
                 "ok": True,
                 "service": "unified-adding-lookup",
                 "mode": "webhook",
+                "adding": "forward-only",
             }),
         )
         SimpleRequestHandler(
@@ -236,23 +190,18 @@ async def run():
         await runner.setup()
         site = web.TCPSite(runner, settings.host, settings.port)
         await site.start()
-
         await bot.set_webhook(
             settings.public_url + path,
             secret_token=settings.webhook_secret,
             drop_pending_updates=True,
         )
-        log.info("Unified webhook ready on %s%s", settings.public_url, path)
-
+        log.info("Webhook ready: %s%s", settings.public_url, path)
         try:
             await asyncio.Event().wait()
         finally:
-            await _cleanup(bot)
+            await cleanup(bot)
             await runner.cleanup()
     else:
-        # Telegram does not allow getUpdates while an outgoing webhook exists.
-        # Only run polling with a token that is NOT simultaneously used by
-        # another webhook/polling deployment.
         await bot.delete_webhook(drop_pending_updates=False)
         app = web.Application()
         app.router.add_get(
@@ -261,18 +210,19 @@ async def run():
                 "ok": True,
                 "service": "unified-adding-lookup",
                 "mode": "polling",
+                "adding": "forward-only",
             }),
         )
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, settings.host, settings.port).start()
-        log.info("Unified polling ready")
-
+        log.info("Polling ready; Adding mode=forward-only")
         try:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         finally:
-            await _cleanup(bot)
+            await cleanup(bot)
             await runner.cleanup()
+
 
 if __name__ == "__main__":
     asyncio.run(run())
