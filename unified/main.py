@@ -5,7 +5,6 @@ import logging
 import sys
 from pathlib import Path
 
-# Reuse the proven media hashing/source-resolution modules from NameBot V3.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "namebotv3"))
 sys.path.insert(0, str(ROOT))
@@ -77,40 +76,51 @@ async def start_source(message: Message, key: str) -> None:
 
 @router.message(Command("startdmcatchbot"))
 async def start_catch(message: Message):
-    if owner(message): await start_source(message, "catch")
+    if owner(message):
+        await start_source(message, "catch")
 
 @router.message(Command("startdmgrabbot"))
 async def start_grab(message: Message):
-    if owner(message): await start_source(message, "grab")
+    if owner(message):
+        await start_source(message, "grab")
 
 @router.message(Command("startdmsenpaibot"))
 async def start_senpai(message: Message):
-    if owner(message): await start_source(message, "senpai")
+    if owner(message):
+        await start_source(message, "senpai")
 
 @router.message(Command("startdmhallowbot"))
 async def start_hallow(message: Message):
-    if owner(message): await start_source(message, "hallow")
+    if owner(message):
+        await start_source(message, "hallow")
 
 @router.message(Command("startdmtakersbot"))
 async def start_takers(message: Message):
-    if owner(message): await start_source(message, "takers")
+    if owner(message):
+        await start_source(message, "takers")
 
 @router.message(Command("stopdm"))
 async def stop_dm(message: Message):
-    if not owner(message): return
+    if not owner(message):
+        return
     await controller.stop_all_dm()
     await message.reply("✅ All Adding workers stopped.")
 
 @router.message(Command("addingstatus"))
 async def adding_status(message: Message):
-    if not owner(message): return
+    if not owner(message):
+        return
     keys = ("catch", "grab", "senpai", "hallow", "takers")
-    lines = [f"{key}: {'RUNNING' if controller.is_running(key) else 'STOPPED'}" for key in keys]
+    lines = [
+        f"{key}: {'RUNNING' if controller.is_running(key) else 'STOPPED'}"
+        for key in keys
+    ]
     await message.reply("📥 <b>Adding status</b>\n" + "\n".join(lines))
 
 @router.message(Command("stats"))
 async def stats(message: Message):
-    if not owner(message): return
+    if not owner(message):
+        return
     count = await characters.count_documents({})
     await message.reply(
         f"📊 <b>Unified Adding + Lookup</b>\n"
@@ -121,40 +131,73 @@ async def stats(message: Message):
 
 @router.message(F.chat.id == settings.adding_chat_id, F.func(is_media))
 async def adding_ingest(message: Message):
-    # The Adding group is ingestion-only. It never performs lookup.
     ok = await ingest_message(message.bot, message)
     if ok:
         log.info("INGESTED message=%s chat=%s", message.message_id, message.chat.id)
 
-@router.message(F.func(lambda m: bool(getattr(m.chat, "id", 0) != settings.adding_chat_id)), F.func(is_media))
+@router.message(
+    F.func(lambda m: bool(getattr(m.chat, "id", 0) != settings.adding_chat_id)),
+    F.func(is_media),
+)
 async def lookup_media(message: Message):
+    if not settings.auto_lookup_enabled:
+        return
     if message.chat.type == "private" and not settings.lookup_in_private:
         return
     if message.chat.type != "private" and not settings.lookup_in_groups:
         return
 
     doc, reason = await lookup_message(message.bot, message)
+    log.info(
+        "LOOKUP chat=%s message=%s result=%s reason=%s",
+        message.chat.id,
+        message.message_id,
+        bool(doc),
+        reason,
+    )
     if doc:
         await message.reply(
             format_result(doc),
             disable_web_page_preview=True,
             reply_markup=result_buttons(
-                type("LookupItem", (), {
-                    "command": doc.get("command", "/name"),
-                    "name": doc.get("name", ""),
-                })()
+                type(
+                    "LookupItem",
+                    (),
+                    {
+                        "command": doc.get("command", "/name"),
+                        "name": doc.get("name", ""),
+                    },
+                )()
             ),
         )
     elif settings.reply_not_found:
         await message.reply("❌ Character not found.")
 
+async def _cleanup(bot: Bot):
+    await runtime.stop()
+    await controller.stop_all_dm()
+    await close()
+    await bot.session.close()
+
 async def run():
-    if not settings.bot_token: raise RuntimeError("BOT_TOKEN is required")
-    if not settings.mongo_uri: raise RuntimeError("MONGO_URI is required")
-    if not settings.owner_ids: raise RuntimeError("OWNER_IDS is required")
-    if not settings.adding_chat_id: raise RuntimeError("ADDING_CHAT_ID is required")
+    if not settings.bot_token:
+        raise RuntimeError("BOT_TOKEN is required")
+    if not settings.mongo_uri:
+        raise RuntimeError("MONGO_URI is required")
+    if not settings.owner_ids:
+        raise RuntimeError("OWNER_IDS is required")
+    if not settings.adding_chat_id:
+        raise RuntimeError("ADDING_CHAT_ID is required")
+
+    mode = settings.run_mode
+    if mode not in {"auto", "polling", "webhook"}:
+        raise RuntimeError("RUN_MODE must be auto, polling, or webhook")
+    webhook = mode == "webhook" or (mode == "auto" and bool(settings.public_url))
+    if webhook and not settings.public_url:
+        raise RuntimeError("PUBLIC_URL is required in webhook mode")
 
     await ensure_indexes()
+
     bot = Bot(
         settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -168,17 +211,18 @@ async def run():
     else:
         log.warning("Adding helper disabled: API_ID/API_HASH/SESSION_STRING missing")
 
-    webhook = settings.use_webhook or bool(settings.public_url)
     if webhook:
         path = settings.webhook_path if settings.webhook_path.startswith("/") else "/" + settings.webhook_path
         app = web.Application()
+
+        # Cheap liveness endpoint. Render health checks should not depend on
+        # Mongo/Telegram latency.
         app.router.add_get(
             "/healthz",
             lambda _: web.json_response({
                 "ok": True,
                 "service": "unified-adding-lookup",
-                "db": settings.db_name,
-                "adding_chat_id": settings.adding_chat_id,
+                "mode": "webhook",
             }),
         )
         SimpleRequestHandler(
@@ -193,8 +237,6 @@ async def run():
         site = web.TCPSite(runner, settings.host, settings.port)
         await site.start()
 
-        if not settings.public_url:
-            raise RuntimeError("PUBLIC_URL is required in webhook mode")
         await bot.set_webhook(
             settings.public_url + path,
             secret_token=settings.webhook_secret,
@@ -205,19 +247,32 @@ async def run():
         try:
             await asyncio.Event().wait()
         finally:
-            await runtime.stop()
-            await controller.stop_all_dm()
-            await close()
-            await bot.session.close()
+            await _cleanup(bot)
             await runner.cleanup()
     else:
+        # Telegram does not allow getUpdates while an outgoing webhook exists.
+        # Only run polling with a token that is NOT simultaneously used by
+        # another webhook/polling deployment.
+        await bot.delete_webhook(drop_pending_updates=False)
+        app = web.Application()
+        app.router.add_get(
+            "/healthz",
+            lambda _: web.json_response({
+                "ok": True,
+                "service": "unified-adding-lookup",
+                "mode": "polling",
+            }),
+        )
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, settings.host, settings.port).start()
+        log.info("Unified polling ready")
+
         try:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         finally:
-            await runtime.stop()
-            await controller.stop_all_dm()
-            await close()
-            await bot.session.close()
+            await _cleanup(bot)
+            await runner.cleanup()
 
 if __name__ == "__main__":
     asyncio.run(run())
