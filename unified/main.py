@@ -21,6 +21,7 @@ from unified.config import settings
 from unified.store import characters, close, ensure_indexes
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
+from helper.runtime import HelperUserbot
 from services.result_formatter import result_buttons
 from utils.text import h, first_token
 
@@ -31,6 +32,7 @@ logging.basicConfig(
 log = logging.getLogger("unified")
 
 router = Router(name="unified")
+helper_userbot = HelperUserbot()
 
 
 def owner(message: Message) -> bool:
@@ -159,6 +161,7 @@ async def run():
         raise RuntimeError("PUBLIC_URL is required in webhook mode")
 
     await ensure_indexes()
+    await helper_userbot.start()
 
     bot = Bot(
         settings.bot_token,
@@ -199,6 +202,8 @@ async def run():
         try:
             await asyncio.Event().wait()
         finally:
+            await helper_userbot.stop()
+            await helper_userbot.stop()
             await cleanup(bot)
             await runner.cleanup()
     else:
