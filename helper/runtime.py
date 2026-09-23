@@ -164,7 +164,7 @@ class HelperUserbot:
             return
 
         @self.client.on_message(filters.chat(ADDING_CHAT_ID) & filters.command(
-            ["helperstatus", "helperforward", "helperstop", "helperinline"],
+            ["helperforward", "helperstop", "helperinline"],
             prefixes="/",
         ))
         async def helper_control(_, message: Message):
