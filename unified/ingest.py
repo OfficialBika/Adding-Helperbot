@@ -55,15 +55,19 @@ async def _download(bot: Bot, file_id: str) -> bytes | None:
     return None
 
 
-async def ingest_message(bot: Bot, message: Message) -> bool:
+async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] | None = None) -> bool:
     # The only accepted Adding input is the message itself forwarded from an
     # explicitly configured source channel. A reply-to message is never used
     # as an authorization shortcut.
     target = message
-    if not _forwarded(target):
+    trusted = bool(
+        trusted_user_ids
+        and getattr(getattr(target, "from_user", None), "id", None) in trusted_user_ids
+    )
+    if not _forwarded(target) and not trusted:
         return False
 
-    if not is_allowed_source(target):
+    if not trusted and not is_allowed_source(target):
         origin_chat = forwarded_origin_chat(target)
         log.warning(
             "SKIP unauthorized forwarded source chat=%s username=%s message=%s",
