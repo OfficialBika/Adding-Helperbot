@@ -135,7 +135,8 @@ async def adding_ingest(message: Message):
     is_helper_inline = bool(helper_user_id and getattr(message.from_user, "id", None) == helper_user_id)
     if not is_forwarded and not is_helper_inline:
         return
-    ok = await ingest_message(message.bot, message)
+    trusted_helpers = {helper_userbot.user_id} if helper_userbot.user_id else set()
+    ok = await ingest_message(message.bot, message, trusted_user_ids=trusted_helpers)
     if ok:
         log.info("INGESTED forwarded post message=%s chat=%s", message.message_id, message.chat.id)
 
