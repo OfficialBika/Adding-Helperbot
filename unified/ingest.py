@@ -10,7 +10,7 @@ from aiogram.types import Message
 from unified.parser import extract_name
 from unified.store import save_character
 from services.hash_service import hash_photo, hash_video
-from services.source_resolver import resolve_source_collection, output_command_from_message
+from services.source_resolver import resolve_source_collection, resolve_trusted_inline_collection, output_command_from_message
 from unified.source_whitelist import is_allowed_source, forwarded_origin_chat
 
 log = logging.getLogger(__name__)
@@ -84,9 +84,11 @@ async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] 
     # After authorization, resolve the canonical source collection. Content
     # parsing can classify the source, but it cannot authorize ingestion.
     source_key = resolve_source_collection(target)
+    if not source_key and trusted:
+        source_key = resolve_trusted_inline_collection(target)
     if not source_key:
         log.warning(
-            "SKIP unknown forwarded source chat=%s message=%s",
+            "SKIP unknown source chat=%s message=%s",
             getattr(getattr(target, "chat", None), "id", None),
             getattr(target, "message_id", None),
         )
