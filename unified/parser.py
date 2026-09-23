@@ -4,9 +4,6 @@ import re
 import unicodedata
 
 
-# This parser deliberately stores only the character name.  ID/anime/rarity are
-# used only as parsing boundaries and are never persisted by unified/store.py.
-
 LABEL_ALIASES = {
     "name": r"(?:character\s*name|char\s*name|character|name)",
     "anime": r"(?:anime|series|movie)",
@@ -44,7 +41,6 @@ def clean_name(value: str) -> str:
     value = norm(value)
     value = re.sub(r"^(?:📛|👤|🆔|⭐|💠|🎬|🎭|📤)+\s*", "", value)
     value = re.sub(r"^(?:name|character\s*name|char\s*name)\s*[:：•\-=]\s*", "", value, flags=re.I)
-    # Never let adjacent metadata become part of the stored name.
     value = re.split(
         r"\s*(?:\||•)\s*(?:anime|movie|series|rarity|role|id)\b",
         value,
@@ -79,7 +75,6 @@ def _myanmar_name(text: str) -> str | None:
         v = _line_label_value(line, r"(?:📛\s*)?Name")
         if v:
             return v
-    # Icon-only name line used by some Super Zeko / uploaded formats.
     for line in norm(text).splitlines():
         line = line.strip()
         if not line or NOISE_RE.search(line):
@@ -114,17 +109,11 @@ def _smash_name(text: str) -> str | None:
 
 
 def extract_character_id(text: str | None) -> str | None:
-    """Return the source character ID when the source format exposes one.
-
-    IDs are persisted as lookup identity, not as display metadata. Source
-    specific formats are handled conservatively so an unrelated number in
-    prose is never treated as a character ID.
-    """
+    """Return the source character ID when the source format exposes one."""
     raw = norm(text)
     if not raw:
         return None
 
-    # Explicit ID labels are unambiguous.
     for line in raw.splitlines():
         m = re.match(
             rf"^\s*(?:[^\w\n\r:：•\-=]{{0,8}})?{LABEL_ALIASES['id']}\s*[:：•\-=]\s*(\d+)\s*$",
@@ -134,15 +123,20 @@ def extract_character_id(text: str | None) -> str | None:
         if m:
             return m.group(1)
 
-    # OwO inline result: "123: Name [emoji]". Only inspect lines that look
-    # like the character-entry shape; anime/rarity lines are ignored.
-    if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+character", raw, re.I):
+    # Character Catcher/OwO format:
+    # OwO! Check out this character!
+    #
+    # Anime
+    # 35: Character Name [emoji]
+    # (rarity)
+    # The previous implementation incorrectly required the internal
+    # "media + owo!" phrase, which is not present in the actual caption.
+    if re.search(r"owo!\s*check\s+out\s+this\s+character", raw, re.I):
         for line in raw.splitlines():
             m = re.match(r"^\s*(\d+)\s*[:：-]\s*.+?\s*$", line)
             if m:
                 return m.group(1)
 
-    # Database format: ID / Name / Movie.
     for line in raw.splitlines():
         m = re.match(r"^\s*(\d+)\s*/\s*[^/]+(?:/|$)", line)
         if m:
@@ -150,18 +144,17 @@ def extract_character_id(text: str | None) -> str | None:
 
     return None
 
+
 def extract_name(text: str | None) -> str | None:
     raw = norm(text)
     if not raw:
         return None
 
-    # Source-specific formats first because their boundaries are strongest.
     for parser in (_senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name
 
-    # Explicit Name/Character Name labels, including emoji-prefixed labels.
     for line in raw.splitlines():
         for label in (
             LABEL_ALIASES["name"],
@@ -176,9 +169,7 @@ def extract_name(text: str | None) -> str | None:
     if value:
         return value
 
-    # OwO inline result: "123: Name [emoji]". The numeric ID and bracketed
-    # rarity/element marker are parsing-only and are never stored.
-    if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+character", raw, re.I):
+    if re.search(r"owo!\s*check\s+out\s+this\s+character", raw, re.I):
         for line in raw.splitlines():
             line = line.strip()
             m = re.match(r"^(?:ID\s*)?(\d+)\s*[:：-]\s*(.+?)\s*$", line, re.I)
@@ -186,10 +177,9 @@ def extract_name(text: str | None) -> str | None:
                 continue
             value = re.sub(r"\s+\[[^\]]*\]\s*$", "", m.group(2)).strip()
             value = clean_name(value)
-            if value and not re.match(r"^(?:anime|rarity|id|role)\\b", value, re.I):
+            if value and not re.match(r"^(?:anime|rarity|id|role)\b", value, re.I):
                 return value
 
-    # OwO-style: numeric ID followed by character name.
     for line in raw.splitlines():
         line = line.strip()
         m = re.match(r"^(?:ID\s*)?(\d+)\s*[:：\-]\s*(.+?)\s*$", line, re.I)
@@ -204,7 +194,6 @@ def extract_name(text: str | None) -> str | None:
             if value and not NOISE_RE.search(value):
                 return value
 
-    # Database format: ID / Name / Movie.
     for line in raw.splitlines():
         parts = [p.strip() for p in line.split("/")]
         if len(parts) >= 2 and parts[0].isdigit():
@@ -212,7 +201,6 @@ def extract_name(text: str | None) -> str | None:
             if value:
                 return value
 
-    # "Name - ..." fallback.
     for line in raw.splitlines():
         m = re.match(r"^\s*(?:📛\s*)?name\s*[-–—:]\s*(.+)$", line, re.I)
         if m:
