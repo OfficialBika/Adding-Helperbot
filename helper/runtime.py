@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sqlite3
 from collections import defaultdict
+from pathlib import Path
 
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -22,6 +25,91 @@ from .config import (
 
 log = logging.getLogger("helper-userbot")
 
+_SESSION_NAME = "adding_helper_forwarder"
+_SESSION_DIR = Path(__file__).resolve().parent.parent / "sessions"
+_SESSION_PATH = _SESSION_DIR / f"{_SESSION_NAME}.session"
+
+
+async def _ensure_persistent_session() -> None:
+    """Convert the configured session string to a persistent Pyrogram session once.
+
+    Pyrogram session strings always use MemoryStorage. That means peer/access-hash
+    data disappears on every restart. For a long-running forwarder this can cause
+    incoming updates for known groups to fail peer resolution.
+
+    The one-time bootstrap loads the existing session string with updates disabled,
+    walks the dialogs to populate the peer cache, then atomically copies the
+    SQLite storage to the ignored sessions/ directory. The live client subsequently
+    uses FileStorage and keeps the peer cache across restarts.
+    """
+    if _SESSION_PATH.exists():
+        return
+
+    if not SESSION_STRING:
+        raise RuntimeError(
+            f"Persistent helper session is missing: {_SESSION_PATH}; "
+            "SESSION_STRING is also not configured"
+        )
+
+    _SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(_SESSION_DIR, 0o700)
+    except OSError:
+        pass
+
+    bootstrap = Client(
+        _SESSION_NAME,
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=SESSION_STRING,
+        in_memory=True,
+        no_updates=True,
+        workdir="/tmp",
+    )
+
+    temp_path = _SESSION_PATH.with_suffix(".session.tmp")
+
+    try:
+        log.info("Bootstrapping persistent helper session from SESSION_STRING")
+        await bootstrap.start()
+
+        dialogs = 0
+        async for _ in bootstrap.get_dialogs():
+            dialogs += 1
+
+        await bootstrap.storage.save()
+
+        if temp_path.exists():
+            temp_path.unlink()
+
+        source_conn = getattr(bootstrap.storage, "conn", None)
+        if source_conn is None:
+            raise RuntimeError("Pyrogram MemoryStorage connection is unavailable")
+
+        target_conn = sqlite3.connect(str(temp_path))
+        try:
+            source_conn.backup(target_conn)
+            target_conn.commit()
+        finally:
+            target_conn.close()
+
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, _SESSION_PATH)
+        log.info(
+            "Persistent helper session created: %s (dialogs=%s)",
+            _SESSION_PATH,
+            dialogs,
+        )
+    except Exception:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except OSError:
+            pass
+        raise
+    finally:
+        await bootstrap.stop()
+
 
 class HelperUserbot:
     """Safe source-channel forwarder + optional inline utility.
@@ -37,7 +125,13 @@ class HelperUserbot:
         self._forwarded: set[tuple[str, int]] = set()
 
     def configured(self) -> bool:
-        return bool(API_ID and API_HASH and SESSION_STRING and ADDING_CHAT_ID and SOURCE_CHATS)
+        return bool(
+            API_ID
+            and API_HASH
+            and (SESSION_STRING or _SESSION_PATH.exists())
+            and ADDING_CHAT_ID
+            and SOURCE_CHATS
+        )
 
     async def start(self) -> None:
         if self._started:
@@ -46,13 +140,13 @@ class HelperUserbot:
             log.warning("Helper userbot disabled: incomplete helper configuration")
             return
 
+        await _ensure_persistent_session()
+
         self.client = Client(
-            "adding_helper_forwarder",
+            _SESSION_NAME,
             api_id=API_ID,
             api_hash=API_HASH,
-            session_string=SESSION_STRING,
-            in_memory=True,
-            workdir="/tmp",
+            workdir=str(_SESSION_DIR),
         )
 
         @self.client.on_message(filters.chat(list(SOURCE_CHATS)) & filters.media)
@@ -73,7 +167,11 @@ class HelperUserbot:
 
         await self.client.start()
         self._started = True
-        log.info("Helper userbot started; source chats=%s", SOURCE_CHATS)
+        log.info(
+            "Helper Userbot started; persistent session=%s; source chats=%s",
+            _SESSION_PATH,
+            SOURCE_CHATS,
+        )
 
     async def stop(self) -> None:
         if self.client and self._started:
@@ -102,10 +200,19 @@ class HelperUserbot:
                 if len(self._forwarded) > 20000:
                     self._forwarded = set(list(self._forwarded)[-10000:])
                 await asyncio.sleep(HELPER_FORWARD_DELAY)
-                log.info("Forwarded source=%s message=%s -> adding=%s", chat_key, message.id, ADDING_CHAT_ID)
+                log.info(
+                    "Forwarded source=%s message=%s -> adding=%s",
+                    chat_key,
+                    message.id,
+                    ADDING_CHAT_ID,
+                )
                 return True
             except Exception:
-                log.exception("Failed to forward source=%s message=%s", chat_key, message.id)
+                log.exception(
+                    "Failed to forward source=%s message=%s",
+                    chat_key,
+                    message.id,
+                )
                 return False
 
     async def forward_history(self, source_chat: str, limit: int = 100) -> int:
