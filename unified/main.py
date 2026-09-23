@@ -195,7 +195,7 @@ HELPER_COMMANDS = [
 ]
 
 
-@router.message(Command(HELPER_COMMANDS))
+@router.message(Command(*HELPER_COMMANDS))
 async def helper_commands(message: Message):
     if not owner(message):
         return
