@@ -77,6 +77,21 @@ async def start(message: Message):
     )
 
 
+@router.message(Command("status"))
+async def status(message: Message):
+    if not owner(message):
+        return
+    helper = await helper_manager.status_text()
+    count = await characters.count_documents({})
+    await message.reply(
+        f"🛠 <b>ADDING BOT STATUS</b>\\n"
+        f"Characters: <code>{count}</code>\\n"
+        f"Adding Group: <code>{settings.adding_chat_id}</code>\\n"
+        f"Helper Userbot: <code>{"ONLINE" if helper_userbot.client else "OFFLINE"}</code>\\n\\n"
+        f"{helper}"
+    )
+
+
 @router.message(Command("stats"))
 async def stats(message: Message):
     if not owner(message):
@@ -114,7 +129,10 @@ async def adding_status(message: Message):
 async def adding_ingest(message: Message):
     # Adding is intentionally restricted to forwarded channel/source posts.
     # Ordinary media sent directly into the Adding group is ignored.
-    if not getattr(message, "forward_origin", None) and not getattr(message, "forward_from_chat", None):
+    is_forwarded = bool(getattr(message, "forward_origin", None) or getattr(message, "forward_from_chat", None))
+    helper_user_id = helper_userbot.user_id
+    is_helper_inline = bool(helper_user_id and getattr(message.from_user, "id", None) == helper_user_id)
+    if not is_forwarded and not is_helper_inline:
         return
     ok = await ingest_message(message.bot, message)
     if ok:
