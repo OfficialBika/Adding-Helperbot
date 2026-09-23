@@ -94,7 +94,7 @@ async def save_character(
     file_ids: list[str] | None = None,
     media_meta: dict[str, Any] | None = None,
     media_hash=None,
-    source_origin: tuple[int, int] | None,
+    source_origin: tuple[int, int] | None = None,
     archive: tuple[int, int] | None = None,
 ):
     """Insert a new media record, update a matching record, or no-op.
