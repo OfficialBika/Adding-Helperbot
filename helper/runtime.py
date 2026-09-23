@@ -124,6 +124,10 @@ class HelperUserbot:
         self._locks = defaultdict(asyncio.Lock)
         self._forwarded: set[tuple[str, int]] = set()
 
+    @property
+    def adding_chat_id(self) -> int:
+        return ADDING_CHAT_ID
+
     def configured(self) -> bool:
         return bool(
             API_ID
