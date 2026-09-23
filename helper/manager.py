@@ -105,16 +105,18 @@ class HelperManager:
     def _bot_id_for(self, key):
         return str(self._state.get("dm_bot_ids", {}).get(key, ""))
 
-    def _parse(self, text: str):
+    def _start_delay(self, text: str) -> int:
         parts = (text or "").strip().split()
-        delay = DEFAULT_DELAY
-        count = None
         if len(parts) >= 2 and parts[1].isdigit():
-            count = int(parts[1])
-        if len(parts) >= 3 and parts[2].isdigit():
-            delay = max(1, min(int(parts[2]), MAX_DELAY))
-        elif len(parts) >= 2 and count is None:
-            delay = max(1, min(DEFAULT_DELAY, MAX_DELAY))
+            return max(1, min(int(parts[1]), MAX_DELAY))
+        return DEFAULT_DELAY
+
+    def _resume_args(self, text: str):
+        parts = (text or "").strip().split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            raise ValueError("Resume count is required")
+        count = int(parts[1])
+        delay = max(1, min(int(parts[2]), MAX_DELAY)) if len(parts) >= 3 and parts[2].isdigit() else DEFAULT_DELAY
         return count, delay
 
     def _source_for_command(self, cmd: str):
@@ -282,8 +284,11 @@ class HelperManager:
             starts = (f"/startfw{key}bot", f"/startfw{key}")
             resumes = (f"/resumefw{key}bot", f"/resumefw{key}")
             if cmd in starts or cmd in resumes:
-                count, delay = self._parse(text)
                 try:
+                    if cmd in resumes:
+                        count, delay = self._resume_args(text)
+                    else:
+                        count, delay = None, self._start_delay(text)
                     await self.start_forward(key, delay, count if cmd in resumes else None)
                     await message.reply(f"{'Resumed' if cmd in resumes else 'Started'} forward {key}. Delay: {delay}s")
                 except Exception as exc:
