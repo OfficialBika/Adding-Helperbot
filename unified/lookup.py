@@ -38,10 +38,12 @@ async def _download(bot: Bot, file_id: str) -> bytes | None:
         log.info("media download failed: %s", exc)
     return None
 
-async def _find_exact(file_uid: str, sha: str | None, origin, scope):
+async def _find_exact(file_uid: str, file_ids: list[str] | None, sha: str | None, origin, scope):
     ors = []
     if file_uid:
         ors.append({"file_unique_ids": file_uid})
+    for fid in dict.fromkeys(str(x).strip() for x in (file_ids or []) if str(x).strip()):
+        ors.append({"file_ids": fid})
     if sha:
         ors.extend([{"sha256": sha}, {"sha256_aliases": sha}])
     if origin:
@@ -187,7 +189,19 @@ async def lookup_message(bot: Bot, message: Message):
 
     source_message = media.source_message
     scope = _scope(source_message)
-    uid = str(getattr(media.obj, "file_unique_id", "") or "")
+    photo_uids = []
+    photo_file_ids = []
+    if media.media_type == "photo":
+        for p in (getattr(source_message, "photo", None) or []):
+            u = str(getattr(p, "file_unique_id", "") or "").strip()
+            f = str(getattr(p, "file_id", "") or "").strip()
+            if u: photo_uids.append(u)
+            if f: photo_file_ids.append(f)
+
+    uid = str(getattr(media.obj, "file_unique_id", "") or "").strip()
+    fid = str(getattr(media.obj, "file_id", "") or "").strip()
+    if uid and uid not in photo_uids: photo_uids.append(uid)
+    if fid and fid not in photo_file_ids: photo_file_ids.append(fid)
 
     origin = None
     try:
@@ -199,7 +213,12 @@ async def lookup_message(bot: Bot, message: Message):
     except Exception:
         pass
 
-    doc = await _find_exact(uid, None, origin, scope)
+    doc = await _find_exact(uid, photo_file_ids, None, origin, scope)
+    if not doc:
+        for candidate_uid in photo_uids:
+            if candidate_uid == uid: continue
+            doc = await _find_exact(candidate_uid, photo_file_ids, None, origin, scope)
+            if doc: break
     if doc:
         return doc, "uid/origin"
 
@@ -212,7 +231,12 @@ async def lookup_message(bot: Bot, message: Message):
         data,
     )
 
-    doc = await _find_exact(uid, hashed.sha256, origin, scope)
+    doc = await _find_exact(uid, photo_file_ids, hashed.sha256, origin, scope)
+    if not doc:
+        for candidate_uid in photo_uids:
+            if candidate_uid == uid: continue
+            doc = await _find_exact(candidate_uid, photo_file_ids, hashed.sha256, origin, scope)
+            if doc: break
     if doc:
         return doc, "exact"
 
