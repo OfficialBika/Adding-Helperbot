@@ -58,6 +58,7 @@ async def ensure_indexes():
     # narrow a lookup to Catch/Bika/Hallow/etc. before similarity work.
     indexes = [
         ([("source_key", 1), ("name_key", 1)], "idx_source_name_key"),
+        ([("source_key", 1), ("character_id", 1)], "uq_source_character_id", {"unique": True, "partialFilterExpression": {"character_id": {"$exists": True}}}),
         ([("name_key", 1)], "idx_global_name_key"),
         ([("source_key", 1), ("file_unique_ids", 1)], "idx_source_file_uid"),
         ([("source_key", 1), ("sha256", 1)], "idx_source_sha256"),
@@ -82,6 +83,7 @@ async def save_character(
     name: str,
     command: str,
     source_key: str,
+    character_id: str | None = None,
     media_type: str,
     file_unique_id: str | None,
     media_hash,
@@ -106,13 +108,17 @@ async def save_character(
         return {"status": "skipped", "document": None}
 
     source_key = (source_key or "unknown").strip().lower()
+    character_id = str(character_id).strip() if character_id is not None and str(character_id).strip() else None
     uid = file_unique_id or ""
     sha = getattr(media_hash, "sha256", None)
 
-    # Stable media identity comes before source-origin. The same media can be
-    # delivered repeatedly from different helper messages, but it must remain
-    # one character record within the same canonical source.
-    if sha:
+    # Source character ID is the primary identity. A source guarantees that
+    # one character ID refers to one character, so a changed media payload or
+    # renamed character must update that same record instead of creating one.
+    # Media identity remains the fallback for formats without an ID.
+    if character_id:
+        key = {"source_key": source_key, "character_id": character_id}
+    elif sha:
         key = {"source_key": source_key, "sha256": sha}
     elif uid:
         key = {"source_key": source_key, "file_unique_ids": uid}
@@ -130,6 +136,7 @@ async def save_character(
         "name_key": name_key,
         "command": command or "/name",
         "source_key": source_key,
+        "character_id": character_id,
         "media_type": media_type,
         "sha256": sha,
         "phash": getattr(media_hash, "phash", None),
@@ -155,6 +162,8 @@ async def save_character(
         "phash_chunks": _chunks(getattr(media_hash, "phash", None)),
         "dhash_chunks": _chunks(getattr(media_hash, "dhash", None)),
     }
+    if character_id is None:
+        media_fields.pop("character_id", None)
 
     existing = await characters.find_one(key)
     if existing is None:
