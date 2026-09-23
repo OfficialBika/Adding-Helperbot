@@ -111,12 +111,24 @@ class HelperManager:
             return max(1, min(int(parts[1]), MAX_DELAY))
         return DEFAULT_DELAY
 
-    def _resume_args(self, text: str):
+    def _parse(self, text: str):
+        """Parse optional delay for start commands and count+delay for resume commands."""
         parts = (text or "").strip().split()
-        if len(parts) < 2 or not parts[1].isdigit():
+        args = parts[1:]
+        numbers = [int(x) for x in args if x.isdigit()]
+        if not numbers:
+            return None, DEFAULT_DELAY
+        if parts[0].lower().split("@", 1)[0].startswith("/resume"):
+            count = max(0, numbers[0])
+            delay = max(1, min(numbers[1], MAX_DELAY)) if len(numbers) >= 2 else DEFAULT_DELAY
+            return count, delay
+        delay = max(1, min(numbers[0], MAX_DELAY))
+        return None, delay
+
+    def _resume_args(self, text: str):
+        count, delay = self._parse(text)
+        if count is None:
             raise ValueError("Resume count is required")
-        count = int(parts[1])
-        delay = max(1, min(int(parts[2]), MAX_DELAY)) if len(parts) >= 3 and parts[2].isdigit() else DEFAULT_DELAY
         return count, delay
 
     def _source_for_command(self, cmd: str):
@@ -300,24 +312,24 @@ class HelperManager:
         return (
             "AddHelper ready ✅\n\n"
             "/startcatchbot [delay]\n"
-            "/resumecatchbot <count> [delay]\n"
+            "/resumecatchbot &lt;count&gt; [delay]\n"
             "/starthallowbot [delay]\n"
-            "/resumehallowbot <count> [delay]\n"
+            "/resumehallowbot &lt;count&gt; [delay]\n"
             "/startcapturebot [delay]\n"
-            "/resumecapturebot <count> [delay]\n"
+            "/resumecapturebot &lt;count&gt; [delay]\n"
             "/startseizerbot [delay]\n"
-            "/resumeseizerbot <count> [delay]\n"
+            "/resumeseizerbot &lt;count&gt; [delay]\n"
             "/startgrabbot [delay]\n"
-            "/resumegrabbot <count> [delay]\n"
+            "/resumegrabbot &lt;count&gt; [delay]\n"
             "/starttakersbot [delay]\n"
-            "/resumetakersbot <count> [delay]\n"
+            "/resumetakersbot &lt;count&gt; [delay]\n"
             "/startpickerbot [delay]\n"
-            "/resumepickerbot <count> [delay]\n"
+            "/resumepickerbot &lt;count&gt; [delay]\n"
             "/startzicekobot [delay]\n"
-            "/resumezicekobot <count> [delay]\n"
+            "/resumezicekobot &lt;count&gt; [delay]\n"
             "/startorinbot [delay]\n"
-            "/resumeorinbot <count> [delay]\n"
+            "/resumeorinbot &lt;count&gt; [delay]\n"
             "/startdaobot [delay]\n"
-            "/resumedaobot <count> [delay]\n\n"
+            "/resumedaobot &lt;count&gt; [delay]\n\n"
             "Controls: /helperstatus /stophelper /resethelperprogress"
         )
