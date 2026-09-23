@@ -127,7 +127,7 @@ def extract_character_id(text: str | None) -> str | None:
     # Explicit ID labels are unambiguous.
     for line in raw.splitlines():
         m = re.match(
-            rf"^\\s*(?:[^\\w\\n\\r:：•\\-=]{{0,8}})?{LABEL_ALIASES['id']}\\s*[:：•\\-=]\\s*(\\d+)\\s*$",
+            rf"^\s*(?:[^\w\n\r:：•\-=]{{0,8}})?{LABEL_ALIASES['id']}\s*[:：•\-=]\s*(\d+)\s*$",
             line.strip(),
             re.I,
         )
@@ -136,15 +136,15 @@ def extract_character_id(text: str | None) -> str | None:
 
     # OwO inline result: "123: Name [emoji]". Only inspect lines that look
     # like the character-entry shape; anime/rarity lines are ignored.
-    if re.search(r"media\\s*\\+\\s*owo!\\s*check\\s+out\\s+this\\s+character", raw, re.I):
+    if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+character", raw, re.I):
         for line in raw.splitlines():
-            m = re.match(r"^\\s*(\\d+)\\s*[:：-]\\s*.+?\\s*$", line)
+            m = re.match(r"^\s*(\d+)\s*[:：-]\s*.+?\s*$", line)
             if m:
                 return m.group(1)
 
     # Database format: ID / Name / Movie.
     for line in raw.splitlines():
-        m = re.match(r"^\\s*(\\d+)\\s*/\\s*[^/]+(?:/|$)", line)
+        m = re.match(r"^\s*(\d+)\s*/\s*[^/]+(?:/|$)", line)
         if m:
             return m.group(1)
 
