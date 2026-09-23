@@ -333,6 +333,14 @@ def _custom_source_command(message: Message) -> str | None:
     return None
 
 
+def resolve_trusted_inline_collection(message: Message) -> str | None:
+    """Resolve trusted Helper-generated inline results without pretending they are forwards."""
+    text = _message_text(message)
+    if re.search(r"media\\s*\\+\\s*owo!\\s*check\\s+out\\s+this\\s+character", text, re.I):
+        return "items_character_catcher"
+    return None
+
+
 def resolve_source_collection(message: Message) -> str | None:
     if is_blocked_source(message):
         return None
