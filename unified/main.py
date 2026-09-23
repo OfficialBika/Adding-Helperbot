@@ -22,6 +22,7 @@ from unified.store import characters, close, ensure_indexes
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
 from helper.runtime import HelperUserbot
+from helper.manager import HelperManager
 from services.result_formatter import result_buttons
 from utils.text import h, first_token
 
@@ -33,6 +34,7 @@ log = logging.getLogger("unified")
 
 router = Router(name="unified")
 helper_userbot = HelperUserbot()
+helper_manager = HelperManager(helper_userbot)
 
 
 def owner(message: Message) -> bool:
@@ -62,6 +64,19 @@ def format_result(doc: dict) -> str:
     )
 
 
+@router.message(Command("start"))
+async def start(message: Message):
+    if not owner(message):
+        return
+    await message.reply(
+        "🤖 <b>Adding & Helper Main</b>\n\n"
+        "Adding: <code>ONLINE</code>\n"
+        "Helper: <code>ONLINE</code>\n\n"
+        "Use /status for system status.\n"
+        "Use /helper for Helper controls."
+    )
+
+
 @router.message(Command("stats"))
 async def stats(message: Message):
     if not owner(message):
@@ -74,6 +89,13 @@ async def stats(message: Message):
         f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
         "Mode: <code>forward-only adding</code>"
     )
+
+
+@router.message(Command("helperstatus"))
+async def helper_status(message: Message):
+    if not owner(message):
+        return
+    await message.reply(await helper_manager.status_text())
 
 
 @router.message(Command("addingstatus"))
@@ -138,6 +160,28 @@ async def lookup_media(message: Message):
         await message.reply("❌ Character not found.")
 
 
+HELPER_COMMANDS = [
+    "helper", "addhelper", "helperstatus", "addhelperstatus", "stophelper",
+    "resethelperprogress", "startcatchbot", "resumecatchbot",
+    "startcatcherbot", "resumecatcherbot", "starthallowbot", "resumehallowbot",
+    "startcapturebot", "resumecapturebot", "startseizerbot", "resumeseizerbot",
+    "startgrabbot", "resumegrabbot", "starttakersbot", "resumetakersbot",
+    "startpickerbot", "resumepickerbot", "startzicekobot", "resumezicekobot",
+    "startorinbot", "resumeorinbot", "startdaobot", "resumedaobot",
+    "startbika", "resumebika", "startsenpaibot", "resumesenpaibot",
+    "startsmashbot", "resumesmashbot", "startwaifuxgrabbot", "resumewaifuxgrabbot",
+    "startwaifugrabberbot", "resumewaifugrabberbot", "startcatchyourwaifubot",
+    "resumecatchyourwaifubot", "startcatchyourhusbandobot", "resumecatchyourhusbandobot",
+]
+
+
+@router.message(Command(HELPER_COMMANDS))
+async def helper_commands(message: Message):
+    if not owner(message):
+        return
+    await helper_manager.handle_command(message)
+
+
 async def cleanup(bot: Bot):
     await close()
     await bot.session.close()
@@ -162,6 +206,7 @@ async def run():
 
     await ensure_indexes()
     await helper_userbot.start()
+    helper_manager.bind()
 
     bot = Bot(
         settings.bot_token,
