@@ -10,8 +10,6 @@ from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-from config import BOT_SOURCE_COLLECTION
-
 from .config import (
     ADDING_CHAT_ID,
     API_HASH,
@@ -114,7 +112,7 @@ async def _ensure_persistent_session() -> None:
 
 
 class HelperUserbot:
-    """Safe source-channel forwarder + optional inline utility.
+    """Safe source-channel forwarder + direct inline utility.
 
     Deliberately does NOT implement source-bot DM commands, crawlers, response
     watchers, or automatic /catch /grab /pick /hallow commands.
@@ -126,17 +124,6 @@ class HelperUserbot:
         self._locks = defaultdict(asyncio.Lock)
         self._forwarded: set[tuple[str, int]] = set()
         self.user_id: int | None = None
-        # Message IDs copied from inline results -> canonical source collection.
-        # This survives the loss of Telegram's via_bot field on the user copy.
-        self._relay_source_by_message: dict[int, str] = {}
-
-    def pop_relay_source(self, message_id: int) -> str | None:
-        """Return and consume the source attached to a relayed inline copy."""
-        try:
-            return self._relay_source_by_message.pop(int(message_id), None)
-        except (TypeError, ValueError):
-            return None
-
     @property
     def adding_chat_id(self) -> int:
         return ADDING_CHAT_ID
@@ -174,59 +161,6 @@ class HelperUserbot:
         async def source_caption_only(_, message: Message):
             # Caption-only posts without media are never useful to Adding.
             return
-
-        @self.client.on_message(filters.chat(ADDING_CHAT_ID) & filters.outgoing & filters.media & filters.via_bot)
-        async def relay_inline_result(_, message: Message):
-            """Relay inline-bot media through the Helper user account.
-
-            Telegram normally does not deliver another bot's group message to
-            our Adding bot. The Helper is a real user, so we copy the inline
-            result as a normal user message, preserve its caption/buttons, and
-            remove the original bot-generated message. The Adding bot can then
-            ingest the user copy normally.
-            """
-            via_bot = getattr(message, "via_bot", None)
-            username = (getattr(via_bot, "username", "") or "").strip().lower()
-            source_key = BOT_SOURCE_COLLECTION.get("@" + username) if username else None
-            if not source_key:
-                return
-            try:
-                copied = await message.copy(ADDING_CHAT_ID)
-                if not copied:
-                    log.warning(
-                        "Inline relay copy returned no message: via=%s message=%s",
-                        username,
-                        getattr(message, "id", None),
-                    )
-                    return
-                copied_id = int(getattr(copied, "id", 0) or 0)
-                if copied_id:
-                    self._relay_source_by_message[copied_id] = source_key
-                    if len(self._relay_source_by_message) > 5000:
-                        self._relay_source_by_message = dict(
-                            list(self._relay_source_by_message.items())[-2500:]
-                        )
-                try:
-                    await message.delete()
-                except Exception:
-                    log.warning(
-                        "Inline relay copied but original could not be deleted: via=%s message=%s",
-                        username,
-                        getattr(message, "id", None),
-                    )
-                log.info(
-                    "Relayed inline source=%s via=@%s original=%s copy=%s",
-                    source_key,
-                    username,
-                    getattr(message, "id", None),
-                    copied_id,
-                )
-            except Exception:
-                log.exception(
-                    "Inline relay failed: via=@%s message=%s",
-                    username,
-                    getattr(message, "id", None),
-                )
 
         @self.client.on_message(filters.chat(ADDING_CHAT_ID) & filters.command(
             ["helperforward", "helperstop", "helperinline"],
