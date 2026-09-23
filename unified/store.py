@@ -60,6 +60,7 @@ async def ensure_indexes():
         ([("source_key", 1), ("name_key", 1)], "idx_source_name_key"),
         ([("source_key", 1), ("character_id", 1)], "uq_source_character_id", {"unique": True, "partialFilterExpression": {"character_id": {"$exists": True}}}),
         ([("name_key", 1)], "idx_global_name_key"),
+        ([("source_key", 1), ("file_ids", 1)], "idx_source_file_id"),
         ([("source_key", 1), ("file_unique_ids", 1)], "idx_source_file_uid"),
         ([("source_key", 1), ("sha256", 1)], "idx_source_sha256"),
         ([("source_key", 1), ("sha256_aliases", 1)], "idx_source_sha256_alias"),
@@ -98,10 +99,11 @@ async def save_character(
 ):
     """Insert a new media record, update a matching record, or no-op.
 
-    Identity priority is deliberately media-first:
-      1. source + SHA-256
-      2. source + Telegram file_unique_id
-      3. source-origin as a legacy fallback when no stable media identity exists
+    Identity priority is:
+      1. source + character_id
+      2. source + SHA-256 when no character ID exists
+      3. source + Telegram file_unique_id
+      4. source-origin as a legacy fallback
 
     This prevents a new forwarded/inline message carrying the same media from
     creating a duplicate just because its source message ID changed.
@@ -147,6 +149,15 @@ async def save_character(
         log.warning("skip character without stable identity: %s", name)
         return {"status": "skipped", "document": None}
 
+    # If Telegram download was unavailable, keep existing hashes intact.
+    # File IDs/metadata can still be refreshed safely.
+    media_hash_fields = {
+        "sha256", "phash", "phash_large", "dhash", "whash", "colorhash",
+        "crop_hash", "pixel_sha256", "frame_hashes", "video_samples",
+        "video_signature", "duration_ms", "duration_bucket",
+        "phash_chunks", "dhash_chunks",
+    }
+
     media_fields = {
         "name": name,
         "name_key": name_key,
@@ -185,6 +196,9 @@ async def save_character(
     }
     if character_id is None:
         media_fields.pop("character_id", None)
+    if media_hash is None:
+        for field in media_hash_fields:
+            media_fields.pop(field, None)
 
     existing = await characters.find_one(key)
     if existing is None:
