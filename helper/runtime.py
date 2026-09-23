@@ -130,6 +130,13 @@ class HelperUserbot:
         # This survives the loss of Telegram's via_bot field on the user copy.
         self._relay_source_by_message: dict[int, str] = {}
 
+    def pop_relay_source(self, message_id: int) -> str | None:
+        """Return and consume the source attached to a relayed inline copy."""
+        try:
+            return self._relay_source_by_message.pop(int(message_id), None)
+        except (TypeError, ValueError):
+            return None
+
     @property
     def adding_chat_id(self) -> int:
         return ADDING_CHAT_ID
