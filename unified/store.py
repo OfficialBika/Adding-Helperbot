@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any
+import re
+import unicodedata
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -19,6 +21,14 @@ client = AsyncIOMotorClient(
 )
 db = client[settings.db_name]
 characters = db.characters
+
+
+def _name_key(value: str | None) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).lower()
+    text = re.sub(r"[\\u200b-\\u200f\\u2060\\ufeff]", "", text)
+    text = re.sub(r"[^0-9a-z\\u1000-\\u109f\\u3040-\\u30ff\\u4e00-\\u9fff\\uac00-\\ud7af\\s]+", " ", text)
+    return re.sub(r"\\s+", " ", text).strip()
+
 
 def _now():
     return datetime.now(timezone.utc)
@@ -47,6 +57,8 @@ async def ensure_indexes():
     # The collection stays unified. source_key is the first field so Mongo can
     # narrow a lookup to Catch/Bika/Hallow/etc. before similarity work.
     indexes = [
+        ([("source_key", 1), ("name_key", 1)], "idx_source_name_key"),
+        ([("name_key", 1)], "idx_global_name_key"),
         ([("source_key", 1), ("file_unique_ids", 1)], "idx_source_file_uid"),
         ([("source_key", 1), ("sha256", 1)], "idx_source_sha256"),
         ([("source_key", 1), ("sha256_aliases", 1)], "idx_source_sha256_alias"),
@@ -77,6 +89,11 @@ async def save_character(
     archive: tuple[int, int] | None = None,
 ):
     now = _now()
+    name = str(name or "").strip()
+    name_key = _name_key(name)
+    if not name_key:
+        log.warning("skip character without normalized name")
+        return None
     source_key = (source_key or "unknown").strip().lower()
     uid = file_unique_id or ""
     sha = getattr(media_hash, "sha256", None)
@@ -99,6 +116,7 @@ async def save_character(
 
     doc = {
         "name": name,
+        "name_key": name_key,
         "command": command or "/name",
         "source_key": source_key,
         "media_type": media_type,
