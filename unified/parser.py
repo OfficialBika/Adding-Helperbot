@@ -181,10 +181,10 @@ def extract_name(text: str | None) -> str | None:
     if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+character", raw, re.I):
         for line in raw.splitlines():
             line = line.strip()
-            m = re.match(r"^(?:ID\\s*)?(\\d+)\\s*[:：-]\\s*(.+?)\\s*$", line, re.I)
+            m = re.match(r"^(?:ID\s*)?(\d+)\s*[:：-]\s*(.+?)\s*$", line, re.I)
             if not m:
                 continue
-            value = re.sub(r"\\s+\\[[^\\]]*\\]\\s*$", "", m.group(2)).strip()
+            value = re.sub(r"\s+\[[^\]]*\]\s*$", "", m.group(2)).strip()
             value = clean_name(value)
             if value and not re.match(r"^(?:anime|rarity|id|role)\\b", value, re.I):
                 return value
