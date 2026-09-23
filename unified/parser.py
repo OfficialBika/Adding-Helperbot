@@ -113,6 +113,43 @@ def _smash_name(text: str) -> str | None:
     return None
 
 
+def extract_character_id(text: str | None) -> str | None:
+    """Return the source character ID when the source format exposes one.
+
+    IDs are persisted as lookup identity, not as display metadata. Source
+    specific formats are handled conservatively so an unrelated number in
+    prose is never treated as a character ID.
+    """
+    raw = norm(text)
+    if not raw:
+        return None
+
+    # Explicit ID labels are unambiguous.
+    for line in raw.splitlines():
+        m = re.match(
+            rf"^\\s*(?:[^\\w\\n\\r:：•\\-=]{{0,8}})?{LABEL_ALIASES['id']}\\s*[:：•\\-=]\\s*(\\d+)\\s*$",
+            line.strip(),
+            re.I,
+        )
+        if m:
+            return m.group(1)
+
+    # OwO inline result: "123: Name [emoji]". Only inspect lines that look
+    # like the character-entry shape; anime/rarity lines are ignored.
+    if re.search(r"media\\s*\\+\\s*owo!\\s*check\\s+out\\s+this\\s+character", raw, re.I):
+        for line in raw.splitlines():
+            m = re.match(r"^\\s*(\\d+)\\s*[:：-]\\s*.+?\\s*$", line)
+            if m:
+                return m.group(1)
+
+    # Database format: ID / Name / Movie.
+    for line in raw.splitlines():
+        m = re.match(r"^\\s*(\\d+)\\s*/\\s*[^/]+(?:/|$)", line)
+        if m:
+            return m.group(1)
+
+    return None
+
 def extract_name(text: str | None) -> str | None:
     raw = norm(text)
     if not raw:
