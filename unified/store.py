@@ -75,8 +75,10 @@ async def ensure_indexes():
         ([("video_signature", 1)], "idx_global_video_signature"),
         ([("updated_at", -1)], "idx_updated_at"),
     ]
-    for keys, name in indexes:
-        await characters.create_index(keys, name=name, background=True)
+    for entry in indexes:
+        keys, name = entry[:2]
+        options = entry[2] if len(entry) > 2 else {}
+        await characters.create_index(keys, name=name, background=True, **options)
 
 async def save_character(
     *,
