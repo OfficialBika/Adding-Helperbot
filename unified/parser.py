@@ -34,7 +34,9 @@ def norm(text: str | None) -> str:
 def strip_symbols(value: str) -> str:
     value = value.strip()
     value = re.sub(r"^[^\w\u00c0-\u024f\u0400-\u04ff\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]+", "", value)
-    return value.strip("[](){}<>|•:：-–—")
+    # Do not strip closing brackets from legitimate name suffixes such as
+    # "Yoru [🪶]". Only remove separator characters around the whole value.
+    return value.strip(" |•:：-–—")
 
 
 def clean_name(value: str) -> str:
