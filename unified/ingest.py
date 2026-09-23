@@ -55,7 +55,12 @@ async def _download(bot: Bot, file_id: str) -> bytes | None:
     return None
 
 
-async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] | None = None) -> bool:
+async def ingest_message(
+    bot: Bot,
+    message: Message,
+    trusted_user_ids: set[int] | None = None,
+    trusted_source_collection: str | None = None,
+) -> bool:
     # The only accepted Adding input is the message itself forwarded from an
     # explicitly configured source channel. A reply-to message is never used
     # as an authorization shortcut.
@@ -65,6 +70,12 @@ async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] 
         and getattr(getattr(target, "from_user", None), "id", None) in trusted_user_ids
     )
     if not _forwarded(target) and not trusted:
+        log.info(
+            "SKIP untrusted message chat=%s message=%s from_user=%s",
+            getattr(getattr(target, "chat", None), "id", None),
+            getattr(target, "message_id", None),
+            getattr(getattr(target, "from_user", None), "id", None),
+        )
         return False
 
     if not trusted and not is_allowed_source(target):
@@ -79,11 +90,16 @@ async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] 
 
     media, media_type = _media(target)
     if not media:
+        log.warning(
+            "SKIP no supported media chat=%s message=%s",
+            getattr(getattr(target, "chat", None), "id", None),
+            getattr(target, "message_id", None),
+        )
         return False
 
     # After authorization, resolve the canonical source collection. Content
     # parsing can classify the source, but it cannot authorize ingestion.
-    source_key = resolve_source_collection(target)
+    source_key = trusted_source_collection or resolve_source_collection(target)
     if not source_key and trusted:
         source_key = resolve_trusted_inline_collection(target)
     if not source_key:
@@ -118,7 +134,22 @@ async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] 
     try:
         data = await _download(bot, str(getattr(media, "file_id", "") or ""))
         if not data:
+            log.warning(
+                "SKIP media download returned empty data source=%s message=%s file_id_present=%s",
+                source_key,
+                getattr(target, "message_id", None),
+                bool(getattr(media, "file_id", None)),
+            )
             return False
+        log.info(
+            "INGEST media ready source=%s message=%s type=%s bytes=%s name=%s id=%s",
+            source_key,
+            getattr(target, "message_id", None),
+            media_type,
+            len(data),
+            name,
+            character_id,
+        )
 
         hashed = await asyncio.to_thread(
             hash_photo if media_type == "photo" else hash_video,
@@ -147,6 +178,13 @@ async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] 
             media_hash=hashed,
             source_origin=origin,
             archive=(message.chat.id, message.message_id),
+        )
+        log.info(
+            "INGEST save completed source=%s message=%s name=%s id=%s",
+            source_key,
+            getattr(target, "message_id", None),
+            name,
+            character_id,
         )
         return True
     except Exception:
