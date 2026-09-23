@@ -219,7 +219,11 @@ async def save_character(
         doc["created_at"] = now
         doc["updated_at"] = now
         await characters.insert_one(doc)
-        return {"status": "saved", "document": await characters.find_one(key)}
+        return {
+            "status": "saved",
+            "document": await characters.find_one(key),
+            "changes": ["new character record"],
+        }
 
     # Do not touch updated_at for an exact repeat. Only write fields that
     # genuinely changed, so MongoDB can report a true no-op.
@@ -261,11 +265,47 @@ async def save_character(
             update["$addToSet"]["sha256_aliases"] = {"$each": [sha]}
 
     if not update:
-        return {"status": "unchanged", "document": existing}
+        return {
+            "status": "unchanged",
+            "document": existing,
+            "changes": [],
+        }
+
+    changed_fields = []
+    for field in set_fields:
+        if field == "updated_at":
+            continue
+        old_value = existing.get(field)
+        new_value = set_fields[field]
+        if field == "media_meta":
+            old_meta = old_value or {}
+            new_meta = new_value or {}
+            for meta_key in sorted(set(old_meta) | set(new_meta)):
+                if old_meta.get(meta_key) != new_meta.get(meta_key):
+                    changed_fields.append(
+                        f"media_meta.{meta_key}: {old_meta.get(meta_key)!r} -> {new_meta.get(meta_key)!r}"
+                    )
+        elif field in {"sha256", "phash", "phash_large", "dhash", "whash", "colorhash", "crop_hash", "pixel_sha256", "video_signature"}:
+            changed_fields.append(f"{field}: changed")
+        elif field in {"name", "command", "media_type", "character_id", "name_key"}:
+            changed_fields.append(f"{field}: {old_value!r} -> {new_value!r}")
+        else:
+            changed_fields.append(f"{field}: changed")
+
+    if new_ids:
+        changed_fields.append(f"file_ids: +{len(new_ids)}")
+    if new_unique_ids:
+        changed_fields.append(f"file_unique_ids: +{len(new_unique_ids)}")
+    if sha and sha not in old_aliases:
+        changed_fields.append("sha256_aliases: +1")
 
     update.setdefault("$set", {})["updated_at"] = now
     await characters.update_one({"_id": existing["_id"]}, update)
-    return {"status": "updated", "document": await characters.find_one({"_id": existing["_id"]})}
+    return {
+        "status": "updated",
+        "document": await characters.find_one({"_id": existing["_id"]}),
+        "changes": changed_fields,
+    }
 
 async def close():
     client.close()
