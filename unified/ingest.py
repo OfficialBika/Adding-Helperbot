@@ -130,7 +130,7 @@ async def ingest_message(
     message: Message,
     trusted_user_ids: set[int] | None = None,
     trusted_source_collection: str | None = None,
-) -> bool:
+) -> dict | bool:
     # The only accepted Adding input is the message itself forwarded from an
     # explicitly configured source channel. A reply-to message is never used
     # as an authorization shortcut.
@@ -288,7 +288,7 @@ async def ingest_message(
             character_id,
             saved.get("status") if isinstance(saved, dict) else "unknown",
         )
-        return True
+        return saved
     except Exception:
         log.exception("forward-only ingest failed")
         return False
