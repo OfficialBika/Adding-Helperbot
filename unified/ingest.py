@@ -7,7 +7,7 @@ import logging
 from aiogram import Bot
 from aiogram.types import Message
 
-from unified.parser import extract_name
+from unified.parser import extract_name, extract_character_id
 from unified.store import save_character
 from services.hash_service import hash_photo, hash_video
 from services.source_resolver import resolve_source_collection, resolve_trusted_inline_collection, output_command_from_message
@@ -104,6 +104,7 @@ async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] 
     )
 
     name = extract_name(text)
+    character_id = extract_character_id(text)
     if not name:
         log.warning(
             "SKIP source=%s: character name not parsed message=%s",
@@ -138,6 +139,7 @@ async def ingest_message(bot: Bot, message: Message, trusted_user_ids: set[int] 
 
         await save_character(
             name=name,
+            character_id=character_id,
             command=command,
             source_key=source_key,
             media_type=media_type,
