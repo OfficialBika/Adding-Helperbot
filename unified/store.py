@@ -88,7 +88,11 @@ async def save_character(
     character_id: str | None = None,
     media_type: str,
     file_unique_id: str | None,
-    media_hash,
+    file_id: str | None = None,
+    file_unique_ids: list[str] | None = None,
+    file_ids: list[str] | None = None,
+    media_meta: dict[str, Any] | None = None,
+    media_hash=None,
     source_origin: tuple[int, int] | None,
     archive: tuple[int, int] | None = None,
 ):
@@ -111,8 +115,18 @@ async def save_character(
 
     source_key = (source_key or "unknown").strip().lower()
     character_id = str(character_id).strip() if character_id is not None and str(character_id).strip() else None
-    uid = file_unique_id or ""
-    sha = getattr(media_hash, "sha256", None)
+    uid = str(file_unique_id or "").strip()
+    unique_ids = list(dict.fromkeys(
+        str(x).strip() for x in (file_unique_ids or []) if str(x).strip()
+    ))
+    if uid and uid not in unique_ids:
+        unique_ids.append(uid)
+    ids = list(dict.fromkeys(
+        str(x).strip() for x in (file_ids or []) if str(x).strip()
+    ))
+    if file_id and str(file_id).strip() and str(file_id).strip() not in ids:
+        ids.append(str(file_id).strip())
+    sha = getattr(media_hash, "sha256", None) if media_hash is not None else None
 
     # Source character ID is the primary identity. A source guarantees that
     # one character ID refers to one character, so a changed media payload or
@@ -140,15 +154,20 @@ async def save_character(
         "source_key": source_key,
         "character_id": character_id,
         "media_type": media_type,
+        "telegram_file_id": str(file_id or ""),
+        "telegram_file_unique_id": uid,
+        "file_ids": ids,
+        "file_unique_ids": unique_ids,
+        "media_meta": dict(media_meta or {}),
         "sha256": sha,
-        "phash": getattr(media_hash, "phash", None),
-        "phash_large": getattr(media_hash, "phash_large", None),
-        "dhash": getattr(media_hash, "dhash", None),
-        "whash": getattr(media_hash, "whash", None),
-        "colorhash": getattr(media_hash, "colorhash", None),
-        "crop_hash": getattr(media_hash, "crop_hash", None),
-        "pixel_sha256": getattr(media_hash, "pixel_sha256", None),
-        "frame_hashes": list(getattr(media_hash, "frame_hashes", ()) or ()),
+        "phash": getattr(media_hash, "phash", None) if media_hash is not None else None,
+        "phash_large": getattr(media_hash, "phash_large", None) if media_hash is not None else None,
+        "dhash": getattr(media_hash, "dhash", None) if media_hash is not None else None,
+        "whash": getattr(media_hash, "whash", None) if media_hash is not None else None,
+        "colorhash": getattr(media_hash, "colorhash", None) if media_hash is not None else None,
+        "crop_hash": getattr(media_hash, "crop_hash", None) if media_hash is not None else None,
+        "pixel_sha256": getattr(media_hash, "pixel_sha256", None) if media_hash is not None else None,
+        "frame_hashes": list(getattr(media_hash, "frame_hashes", ()) or ()) if media_hash is not None else [],
         "video_samples": [
             {
                 "position": s.position,
@@ -156,13 +175,13 @@ async def save_character(
                 "phash": s.phash,
                 "dhash": s.dhash,
             }
-            for s in (getattr(media_hash, "video_samples", ()) or ())
+            for s in (getattr(media_hash, "video_samples", ()) or ()) if media_hash is not None
         ],
-        "video_signature": getattr(media_hash, "video_signature", None),
-        "duration_ms": int(getattr(media_hash, "duration_ms", 0) or 0),
-        "duration_bucket": int(round((getattr(media_hash, "duration_ms", 0) or 0) / 1000)),
-        "phash_chunks": _chunks(getattr(media_hash, "phash", None)),
-        "dhash_chunks": _chunks(getattr(media_hash, "dhash", None)),
+        "video_signature": getattr(media_hash, "video_signature", None) if media_hash is not None else None,
+        "duration_ms": int(getattr(media_hash, "duration_ms", 0) or 0) if media_hash is not None else 0,
+        "duration_bucket": int(round((getattr(media_hash, "duration_ms", 0) or 0) / 1000)) if media_hash is not None else 0,
+        "phash_chunks": _chunks(getattr(media_hash, "phash", None)) if media_hash is not None else [],
+        "dhash_chunks": _chunks(getattr(media_hash, "dhash", None)) if media_hash is not None else [],
     }
     if character_id is None:
         media_fields.pop("character_id", None)
@@ -170,7 +189,8 @@ async def save_character(
     existing = await characters.find_one(key)
     if existing is None:
         doc = dict(media_fields)
-        doc["file_unique_ids"] = [uid] if uid else []
+        doc["file_ids"] = ids
+        doc["file_unique_ids"] = unique_ids
         doc["sha256_aliases"] = [sha] if sha else []
         doc["source_origin"] = (
             {"chat_id": source_origin[0], "message_id": source_origin[1]}
@@ -196,9 +216,15 @@ async def save_character(
 
     # New Telegram file IDs/content aliases are useful lookup identities and
     # should be merged without replacing the existing values.
+    old_ids = set(existing.get("file_ids") or [])
+    new_ids = [x for x in ids if x not in old_ids]
+    if new_ids:
+        changed["file_ids"] = {"$each": new_ids}
+
     old_uids = set(existing.get("file_unique_ids") or [])
-    if uid and uid not in old_uids:
-        changed["file_unique_ids"] = {"$each": [uid]}
+    new_unique_ids = [x for x in unique_ids if x not in old_uids]
+    if new_unique_ids:
+        changed["file_unique_ids"] = {"$each": new_unique_ids}
 
     old_aliases = set(existing.get("sha256_aliases") or [])
     if sha and sha not in old_aliases:
@@ -207,14 +233,16 @@ async def save_character(
     update = {}
     set_fields = {
         k: v for k, v in changed.items()
-        if k not in {"file_unique_ids", "sha256_aliases"}
+        if k not in {"file_ids", "file_unique_ids", "sha256_aliases"}
     }
     if set_fields:
         update["$set"] = set_fields
-    if "file_unique_ids" in changed or "sha256_aliases" in changed:
+    if "file_ids" in changed or "file_unique_ids" in changed or "sha256_aliases" in changed:
         update["$addToSet"] = {}
+        if "file_ids" in changed:
+            update["$addToSet"]["file_ids"] = {"$each": new_ids}
         if "file_unique_ids" in changed:
-            update["$addToSet"]["file_unique_ids"] = {"$each": [uid]}
+            update["$addToSet"]["file_unique_ids"] = {"$each": new_unique_ids}
         if "sha256_aliases" in changed:
             update["$addToSet"]["sha256_aliases"] = {"$each": [sha]}
 
