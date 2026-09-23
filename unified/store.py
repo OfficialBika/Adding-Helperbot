@@ -88,41 +88,50 @@ async def save_character(
     source_origin: tuple[int, int] | None,
     archive: tuple[int, int] | None = None,
 ):
+    """Insert a new media record, update a matching record, or no-op.
+
+    Identity priority is deliberately media-first:
+      1. source + SHA-256
+      2. source + Telegram file_unique_id
+      3. source-origin as a legacy fallback when no stable media identity exists
+
+    This prevents a new forwarded/inline message carrying the same media from
+    creating a duplicate just because its source message ID changed.
+    """
     now = _now()
     name = str(name or "").strip()
     name_key = _name_key(name)
     if not name_key:
         log.warning("skip character without normalized name")
-        return None
+        return {"status": "skipped", "document": None}
+
     source_key = (source_key or "unknown").strip().lower()
     uid = file_unique_id or ""
     sha = getattr(media_hash, "sha256", None)
 
-    origin_filter = None
-    if source_origin:
-        origin_filter = {
+    # Stable media identity comes before source-origin. The same media can be
+    # delivered repeatedly from different helper messages, but it must remain
+    # one character record within the same canonical source.
+    if sha:
+        key = {"source_key": source_key, "sha256": sha}
+    elif uid:
+        key = {"source_key": source_key, "file_unique_ids": uid}
+    elif source_origin:
+        key = {
             "source_origin.chat_id": source_origin[0],
             "source_origin.message_id": source_origin[1],
         }
-
-    key = origin_filter or (
-        {"source_key": source_key, "sha256": sha} if sha else None
-    )
-    if key is None and uid:
-        key = {"source_key": source_key, "file_unique_ids": uid}
-    if key is None:
+    else:
         log.warning("skip character without stable identity: %s", name)
-        return None
+        return {"status": "skipped", "document": None}
 
-    doc = {
+    media_fields = {
         "name": name,
         "name_key": name_key,
         "command": command or "/name",
         "source_key": source_key,
         "media_type": media_type,
-        "file_unique_ids": [uid] if uid else [],
         "sha256": sha,
-        "sha256_aliases": [sha] if sha else [],
         "phash": getattr(media_hash, "phash", None),
         "phash_large": getattr(media_hash, "phash_large", None),
         "dhash": getattr(media_hash, "dhash", None),
@@ -145,38 +154,65 @@ async def save_character(
         "duration_bucket": int(round((getattr(media_hash, "duration_ms", 0) or 0) / 1000)),
         "phash_chunks": _chunks(getattr(media_hash, "phash", None)),
         "dhash_chunks": _chunks(getattr(media_hash, "dhash", None)),
-        "source_origin": (
+    }
+
+    existing = await characters.find_one(key)
+    if existing is None:
+        doc = dict(media_fields)
+        doc["file_unique_ids"] = [uid] if uid else []
+        doc["sha256_aliases"] = [sha] if sha else []
+        doc["source_origin"] = (
             {"chat_id": source_origin[0], "message_id": source_origin[1]}
             if source_origin
             else None
-        ),
-        "archive": (
+        )
+        doc["archive"] = (
             {"chat_id": archive[0], "message_id": archive[1]}
             if archive
             else None
-        ),
-        "created_at": now,
-        "updated_at": now,
-    }
+        )
+        doc["created_at"] = now
+        doc["updated_at"] = now
+        await characters.insert_one(doc)
+        return {"status": "saved", "document": await characters.find_one(key)}
 
-    update = {
-        "$set": {
-            k: v
-            for k, v in doc.items()
-            if k not in {"file_unique_ids", "sha256_aliases", "created_at"}
-        },
-        "$setOnInsert": {"created_at": now},
-        "$addToSet": {},
-    }
-    if uid:
-        update["$addToSet"]["file_unique_ids"] = uid
-    if sha:
-        update["$addToSet"]["sha256_aliases"] = sha
-    if not update["$addToSet"]:
-        update.pop("$addToSet")
+    # Do not touch updated_at for an exact repeat. Only write fields that
+    # genuinely changed, so MongoDB can report a true no-op.
+    changed = {}
+    for field, value in media_fields.items():
+        if existing.get(field) != value:
+            changed[field] = value
 
-    await characters.update_one(key, update, upsert=True)
-    return await characters.find_one(key)
+    # New Telegram file IDs/content aliases are useful lookup identities and
+    # should be merged without replacing the existing values.
+    old_uids = set(existing.get("file_unique_ids") or [])
+    if uid and uid not in old_uids:
+        changed["file_unique_ids"] = {"$each": [uid]}
+
+    old_aliases = set(existing.get("sha256_aliases") or [])
+    if sha and sha not in old_aliases:
+        changed["sha256_aliases"] = {"$each": [sha]}
+
+    update = {}
+    set_fields = {
+        k: v for k, v in changed.items()
+        if k not in {"file_unique_ids", "sha256_aliases"}
+    }
+    if set_fields:
+        update["$set"] = set_fields
+    if "file_unique_ids" in changed or "sha256_aliases" in changed:
+        update["$addToSet"] = {}
+        if "file_unique_ids" in changed:
+            update["$addToSet"]["file_unique_ids"] = {"$each": [uid]}
+        if "sha256_aliases" in changed:
+            update["$addToSet"]["sha256_aliases"] = {"$each": [sha]}
+
+    if not update:
+        return {"status": "unchanged", "document": existing}
+
+    update.setdefault("$set", {})["updated_at"] = now
+    await characters.update_one({"_id": existing["_id"]}, update)
+    return {"status": "updated", "document": await characters.find_one({"_id": existing["_id"]})}
 
 async def close():
     client.close()
