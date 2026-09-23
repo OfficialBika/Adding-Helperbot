@@ -184,7 +184,6 @@ class HelperManager:
                         self.runtime.adding_chat_id,
                         result.query_id,
                         results[i].id,
-                        hide_via=False,
                     )
                     sent += 1
                     self._state.update({"source": key, "current_index": sent, "running": True})
