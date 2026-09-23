@@ -256,7 +256,6 @@ class HelperUserbot:
                 INLINE_OUTPUT_CHAT_ID,
                 results.query_id,
                 results.results[0].id,
-                hide_via=False,
             )
         return count
 
