@@ -134,11 +134,34 @@ async def adding_ingest(message: Message):
     helper_user_id = helper_userbot.user_id
     is_helper_inline = bool(helper_user_id and getattr(message.from_user, "id", None) == helper_user_id)
     if not is_forwarded and not is_helper_inline:
+        log.info(
+            "ADDING skip untrusted media message=%s from_user=%s via_bot=%s",
+            message.message_id,
+            getattr(getattr(message, "from_user", None), "id", None),
+            getattr(getattr(message, "via_bot", None), "username", None),
+        )
         return
     trusted_helpers = {helper_userbot.user_id} if helper_userbot.user_id else set()
-    ok = await ingest_message(message.bot, message, trusted_user_ids=trusted_helpers)
+    trusted_source = helper_userbot.pop_relay_source(message.message_id)
+    log.info(
+        "ADDING ingest message=%s helper=%s forwarded=%s trusted_source=%s via_bot=%s caption=%r",
+        message.message_id,
+        is_helper_inline,
+        is_forwarded,
+        trusted_source,
+        getattr(getattr(message, "via_bot", None), "username", None),
+        (getattr(message, "caption", None) or "")[:180],
+    )
+    ok = await ingest_message(
+        message.bot,
+        message,
+        trusted_user_ids=trusted_helpers,
+        trusted_source_collection=trusted_source,
+    )
     if ok:
-        log.info("INGESTED forwarded post message=%s chat=%s", message.message_id, message.chat.id)
+        log.info("INGESTED adding message=%s chat=%s source=%s", message.message_id, message.chat.id, trusted_source or "resolved")
+    else:
+        log.warning("ADDING ingest did not save message=%s chat=%s", message.message_id, message.chat.id)
 
 
 @router.message(
