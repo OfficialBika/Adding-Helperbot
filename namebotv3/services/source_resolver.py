@@ -336,7 +336,7 @@ def _custom_source_command(message: Message) -> str | None:
 def resolve_trusted_inline_collection(message: Message) -> str | None:
     """Resolve trusted Helper-generated inline results without pretending they are forwards."""
     text = _message_text(message)
-    if re.search(r"media\\s*\\+\\s*owo!\\s*check\\s+out\\s+this\\s+character", text, re.I):
+    if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+character", text, re.I):
         return "items_character_catcher"
     return None
 
