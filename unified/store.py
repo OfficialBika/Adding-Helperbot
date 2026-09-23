@@ -25,9 +25,9 @@ characters = db.characters
 
 def _name_key(value: str | None) -> str:
     text = unicodedata.normalize("NFKC", str(value or "")).lower()
-    text = re.sub(r"[\\u200b-\\u200f\\u2060\\ufeff]", "", text)
-    text = re.sub(r"[^0-9a-z\\u1000-\\u109f\\u3040-\\u30ff\\u4e00-\\u9fff\\uac00-\\ud7af\\s]+", " ", text)
-    return re.sub(r"\\s+", " ", text).strip()
+    text = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", text)
+    text = re.sub(r"[^0-9a-z\u1000-\u109f\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af\s]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _now():
