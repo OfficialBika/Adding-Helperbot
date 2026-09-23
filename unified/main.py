@@ -83,11 +83,12 @@ async def status(message: Message):
         return
     helper = await helper_manager.status_text()
     count = await characters.count_documents({})
+    helper_state = "ONLINE" if helper_userbot.client else "OFFLINE"
     await message.reply(
-        f"🛠 <b>ADDING BOT STATUS</b>\\n"
-        f"Characters: <code>{count}</code>\\n"
-        f"Adding Group: <code>{settings.adding_chat_id}</code>\\n"
-        f"Helper Userbot: <code>{"ONLINE" if helper_userbot.client else "OFFLINE"}</code>\\n\\n"
+        f"🛠 <b>ADDING BOT STATUS</b>\n"
+        f"Characters: <code>{count}</code>\n"
+        f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
+        f"Helper Userbot: <code>{helper_state}</code>\n\n"
         f"{helper}"
     )
 
