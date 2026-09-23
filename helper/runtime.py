@@ -123,6 +123,7 @@ class HelperUserbot:
         self._started = False
         self._locks = defaultdict(asyncio.Lock)
         self._forwarded: set[tuple[str, int]] = set()
+        self.user_id: int | None = None
 
     @property
     def adding_chat_id(self) -> int:
@@ -170,6 +171,11 @@ class HelperUserbot:
             await self.control(message)
 
         await self.client.start()
+        try:
+            me = await self.client.get_me()
+            self.user_id = int(me.id)
+        except Exception:
+            self.user_id = None
         self._started = True
         log.info(
             "Helper Userbot started; persistent session=%s; source chats=%s",
@@ -181,6 +187,7 @@ class HelperUserbot:
         if self.client and self._started:
             await self.client.stop()
         self.client = None
+        self.user_id = None
         self._started = False
 
     async def _forward_source_message(self, message: Message) -> bool:
