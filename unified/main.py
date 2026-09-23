@@ -50,6 +50,49 @@ def is_media(message: Message) -> bool:
     )
 
 
+def format_ingest_notice(result: dict) -> str:
+    status = str(result.get("status") or "").lower()
+    doc = result.get("document") or {}
+    name = h(str(doc.get("name") or "Unknown"))
+    character_id = h(str(doc.get("character_id") or "—"))
+    source = h(str(doc.get("source_key") or "unknown"))
+    command = h(str(doc.get("command") or "/name"))
+    media_type = h(str(doc.get("media_type") or "unknown"))
+
+    if status == "unchanged":
+        return "This media have been saved."
+
+    if status == "saved":
+        return (
+            "✅ <b>CHARACTER SAVED</b>\n\n"
+            f"Name: <code>{name}</code>\n"
+            f"ID: <code>{character_id}</code>\n"
+            f"Command: <code>{command}</code>\n"
+            f"Source: <code>{source}</code>\n"
+            f"Media: <code>{media_type}</code>\n"
+            "Status: <code>NEW</code>"
+        )
+
+    if status == "updated":
+        changes = list(result.get("changes") or [])
+        lines = []
+        for change in changes[:12]:
+            lines.append(f"• {h(str(change))}")
+        if len(changes) > 12:
+            lines.append(f"• ...and {len(changes) - 12} more")
+        details = "\n".join(lines) if lines else "• record fields changed"
+        return (
+            "🔄 <b>CHARACTER UPDATED</b>\n\n"
+            f"Name: <code>{name}</code>\n"
+            f"ID: <code>{character_id}</code>\n"
+            f"Source: <code>{source}</code>\n"
+            f"Media: <code>{media_type}</code>\n\n"
+            "<b>Updated:</b>\n"
+            f"{details}"
+        )
+
+    return ""
+
 def format_result(doc: dict) -> str:
     name = h(str(doc.get("name") or ""))
     command = str(doc.get("command") or "/name")
@@ -150,13 +193,33 @@ async def adding_ingest(message: Message):
         getattr(getattr(message, "via_bot", None), "username", None),
         (getattr(message, "caption", None) or "")[:180],
     )
-    ok = await ingest_message(
+    result = await ingest_message(
         message.bot,
         message,
         trusted_user_ids=trusted_helpers,
     )
-    if ok:
-        log.info("INGESTED adding message=%s chat=%s source=resolved", message.message_id, message.chat.id)
+    if result:
+        status = result.get("status") if isinstance(result, dict) else "unknown"
+        log.info(
+            "INGESTED adding message=%s chat=%s source=resolved status=%s",
+            message.message_id,
+            message.chat.id,
+            status,
+        )
+        if isinstance(result, dict):
+            notice = format_ingest_notice(result)
+            if notice:
+                try:
+                    await message.reply(
+                        notice,
+                        disable_web_page_preview=True,
+                    )
+                except Exception:
+                    log.exception(
+                        "INGEST notification failed message=%s status=%s",
+                        message.message_id,
+                        status,
+                    )
     else:
         log.warning("ADDING ingest did not save message=%s chat=%s", message.message_id, message.chat.id)
 
