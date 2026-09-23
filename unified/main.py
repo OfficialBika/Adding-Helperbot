@@ -142,13 +142,11 @@ async def adding_ingest(message: Message):
         )
         return
     trusted_helpers = {helper_userbot.user_id} if helper_userbot.user_id else set()
-    trusted_source = helper_userbot.pop_relay_source(message.message_id)
     log.info(
-        "ADDING ingest message=%s helper=%s forwarded=%s trusted_source=%s via_bot=%s caption=%r",
+        "ADDING ingest message=%s helper=%s forwarded=%s via_bot=%s caption=%r",
         message.message_id,
         is_helper_inline,
         is_forwarded,
-        trusted_source,
         getattr(getattr(message, "via_bot", None), "username", None),
         (getattr(message, "caption", None) or "")[:180],
     )
@@ -156,10 +154,9 @@ async def adding_ingest(message: Message):
         message.bot,
         message,
         trusted_user_ids=trusted_helpers,
-        trusted_source_collection=trusted_source,
     )
     if ok:
-        log.info("INGESTED adding message=%s chat=%s source=%s", message.message_id, message.chat.id, trusted_source or "resolved")
+        log.info("INGESTED adding message=%s chat=%s source=resolved", message.message_id, message.chat.id)
     else:
         log.warning("ADDING ingest did not save message=%s chat=%s", message.message_id, message.chat.id)
 
