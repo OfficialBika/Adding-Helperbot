@@ -7,7 +7,7 @@ import logging
 from aiogram import Bot
 from aiogram.types import Message
 
-from unified.parser import extract_name, extract_character_id
+from unified.parser import extract_name, extract_character_id, extract_anime, extract_rarity
 from unified.store import save_character
 from services.hash_service import hash_photo, hash_video
 from services.source_resolver import resolve_source_collection, resolve_trusted_inline_collection, output_command_from_message
@@ -135,9 +135,14 @@ async def ingest_message(
     # explicitly configured source channel. A reply-to message is never used
     # as an authorization shortcut.
     target = message
+    from_user = getattr(target, "from_user", None)
+    sender_is_configured_bot = bool(
+        getattr(from_user, "is_bot", False)
+        and resolve_source_collection(target)
+    )
     trusted = bool(
-        trusted_user_ids
-        and getattr(getattr(target, "from_user", None), "id", None) in trusted_user_ids
+        (trusted_user_ids and getattr(from_user, "id", None) in trusted_user_ids)
+        or sender_is_configured_bot
     )
     if not _forwarded(target) and not trusted:
         log.info(
@@ -158,20 +163,8 @@ async def ingest_message(
         )
         return False
 
-    media_info = _media_info(target)
-    if not media_info:
-        log.warning(
-            "SKIP no supported media chat=%s message=%s",
-            getattr(getattr(target, "chat", None), "id", None),
-            getattr(target, "message_id", None),
-        )
-        return False
-
-    media = media_info["media"]
-    media_type = media_info["media_type"]
-
-    # After authorization, resolve the canonical source collection. Content
-    # parsing can classify the source, but it cannot authorize ingestion.
+    # Resolve the canonical source collection before media extraction so
+    # metadata-only Senpai valuation replies can also be ingested.
     source_key = trusted_source_collection or resolve_source_collection(target)
     if not source_key and trusted:
         source_key = resolve_trusted_inline_collection(target)
@@ -182,6 +175,14 @@ async def ingest_message(
             getattr(target, "message_id", None),
         )
         return False
+
+    media_info = _media_info(target)
+    if media_info:
+        media = media_info["media"]
+        media_type = media_info["media_type"]
+    else:
+        media = None
+        media_type = "metadata"
 
     text = "\n".join(
         x for x in (
@@ -194,6 +195,8 @@ async def ingest_message(
 
     name = extract_name(text)
     character_id = extract_character_id(text)
+    anime = extract_anime(text)
+    rarity = extract_rarity(text)
     if not name:
         log.warning(
             "SKIP source=%s: character name not parsed message=%s",
@@ -205,7 +208,7 @@ async def ingest_message(
     command = output_command_from_message(target, source_key) or "/name"
 
     try:
-        file_id = media_info["file_id"]
+        file_id = media_info["file_id"] if media_info else ""
         data = None
         try:
             data = await _download(bot, file_id)
@@ -217,7 +220,7 @@ async def ingest_message(
                 source_key,
                 getattr(target, "message_id", None),
                 media_type,
-                media_info.get("file_size", 0),
+                media_info.get("file_size", 0) if media_info else 0,
                 exc,
             )
 
@@ -243,7 +246,7 @@ async def ingest_message(
                 getattr(target, "message_id", None),
                 media_type,
                 bool(file_id),
-                len(media_info.get("file_unique_ids", [])),
+                len(media_info.get("file_unique_ids", [])) if media_info else 0,
             )
 
         origin_obj = getattr(target, "forward_origin", None)
@@ -265,16 +268,18 @@ async def ingest_message(
             source_key=source_key,
             media_type=media_type,
             file_id=file_id,
-            file_ids=media_info["file_ids"],
-            file_unique_id=media_info["file_unique_id"],
-            file_unique_ids=media_info["file_unique_ids"],
+            file_ids=media_info["file_ids"] if media_info else [],
+            file_unique_id=media_info["file_unique_id"] if media_info else None,
+            file_unique_ids=media_info["file_unique_ids"] if media_info else [],
             media_meta={
-                "width": media_info["width"],
-                "height": media_info["height"],
-                "duration": media_info["duration"],
-                "file_size": media_info["file_size"],
-                "mime_type": media_info["mime_type"],
-                "file_name": media_info["file_name"],
+                "width": media_info["width"] if media_info else 0,
+                "height": media_info["height"] if media_info else 0,
+                "duration": media_info["duration"] if media_info else 0,
+                "file_size": media_info["file_size"] if media_info else 0,
+                "mime_type": media_info["mime_type"] if media_info else "",
+                "file_name": media_info["file_name"] if media_info else "",
+                "anime": anime or "",
+                "rarity": rarity or "",
             },
             media_hash=hashed,
             source_origin=origin,
