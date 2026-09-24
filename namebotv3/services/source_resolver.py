@@ -36,7 +36,14 @@ class LookupScope:
 
 
 LOOKUP_COLLECTION_ORDER = [c for c in COLLECTION_TO_OUTPUT_COMMAND if c != "items_unknown"]
+# Generic manual lookup aliases. These commands intentionally search the
+# complete lookup database rather than forcing a source-specific collection.
+GENERIC_LOOKUP_COLLECTIONS = [
+    c for c in LOOKUP_COLLECTION_ORDER
+]
+
 COMMAND_TO_COLLECTIONS: dict[str, list[str]] = {
+    "/name": GENERIC_LOOKUP_COLLECTIONS,
     "/catch": ["items_character_catcher"],
     "/hallow": ["items_characters_hallow"],
     "/capture": ["items_capture_character"],
@@ -152,8 +159,17 @@ CONTENT_SOURCE_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
     (re.compile(r"(?:saved|updated).*\bname\b\s*[:：].*\bid\b\s*[:：].*\brarity\b\s*[:：].*\banime\b\s*[:：]", re.I | re.S), "items_immortal_donghua", "/dao"),
 ]
 
+# Legacy manual aliases for the generic lookup command.
+MANUAL_LOOKUP_ALIASES = {
+    ".w": "/name",
+    ".wa": "/name",
+    ".waifu": "/name",
+    "/w": "/name",
+    "/waifu": "/name",
+}
+
 USING_RE = re.compile(r"(?:using|use|hint|full|cmd|command)\s*[:：\-=]?\s*(/[a-zA-Z0-9_]+)(?:@[A-Za-z0-9_]+)?", re.I)
-CMD_RE = re.compile(r"(^|\s)(/[a-zA-Z0-9_]+)(?:@[A-Za-z0-9_]+)?(?=\s|$|[^A-Za-z0-9_@])", re.I)
+CMD_RE = re.compile(r"(^|\s)(/[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+)(?:@[A-Za-z0-9_]+)?(?=\s|$|[^A-Za-z0-9_@])", re.I)
 
 
 def _message_text(message: Message) -> str:
@@ -173,12 +189,14 @@ def command_from_text(text: str | None) -> str | None:
         return None
     value = _norm_text(text).strip()
     first = value.split(maxsplit=1)[0].lower().split("@", 1)[0] if value else ""
+    first = MANUAL_LOOKUP_ALIASES.get(first, first)
     if first in COMMAND_TO_COLLECTIONS or first in COMMAND_TO_COLLECTION:
         return first
     match = USING_RE.search(value) or CMD_RE.search(value)
     if not match:
         return None
     cmd = match.group(match.lastindex or 1).lower().split("@", 1)[0]
+    cmd = MANUAL_LOOKUP_ALIASES.get(cmd, cmd)
     return cmd if cmd in COMMAND_TO_COLLECTIONS or cmd in COMMAND_TO_COLLECTION else None
 
 
