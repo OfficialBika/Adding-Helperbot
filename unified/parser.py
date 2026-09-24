@@ -150,10 +150,23 @@ def extract_character_id(text: str | None) -> str | None:
         if m:
             return m.group(1)
 
-    # Some sources render the ID as an icon only, e.g. "🆔: 3755".
-    # Accept that form too, while requiring the value to be numeric.
+    # Senpai commonly renders this as "🆔 ID: 4". Telegram clients can
+    # also expose it as "🆔: 4" or "#: 4", so handle the icon and optional
+    # literal ID independently instead of relying on the generic label regex.
     for line in raw.splitlines():
-        m = re.match(r"^\s*[🆔🔢#]\s*[:：-]\s*(\d+)\s*$", line.strip())
+        line = line.strip()
+        m = re.match(r"^[🆔🔢#]\s*(?:ID\s*)?[:：-]\s*(\d+)\s*$", line, re.I)
+        if m:
+            return m.group(1)
+
+    # Explicit textual ID forms, including an emoji prefix.
+    for line in raw.splitlines():
+        line = line.strip()
+        m = re.match(
+            r"^[^\w\n\r:：•\-=]{0,8}\s*(?:character\s*)?id\s*[:：•\-=]\s*(\d+)\s*$",
+            line,
+            re.I,
+        )
         if m:
             return m.group(1)
 
