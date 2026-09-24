@@ -192,10 +192,14 @@ def command_from_text(text: str | None) -> str | None:
     first = MANUAL_LOOKUP_ALIASES.get(first, first)
     if first in COMMAND_TO_COLLECTIONS or first in COMMAND_TO_COLLECTION:
         return first
-    match = USING_RE.search(value) or CMD_RE.search(value)
-    if not match:
-        return None
-    cmd = match.group(match.lastindex or 1).lower().split("@", 1)[0]
+    using_match = USING_RE.search(value)
+    if using_match:
+        cmd = using_match.group(1).lower().split("@", 1)[0]
+    else:
+        match = CMD_RE.search(value)
+        if not match:
+            return None
+        cmd = match.group(2).lower().split("@", 1)[0]
     cmd = MANUAL_LOOKUP_ALIASES.get(cmd, cmd)
     return cmd if cmd in COMMAND_TO_COLLECTIONS or cmd in COMMAND_TO_COLLECTION else None
 
