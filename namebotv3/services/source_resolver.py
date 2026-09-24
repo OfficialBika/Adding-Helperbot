@@ -142,7 +142,8 @@ CONTENT_SOURCE_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
     (re.compile(r"media\s*\+\s*🎴.*\|.*(?:\n|$).*🎬\s*anime\s*:", re.I | re.S), "items_senpai_catcher", "/pick"),
     (re.compile(r"⚖️\s*character\s+valuation.*(?:\n|$).*🎴\s*name\s*:", re.I | re.S), "items_senpai_catcher", "/pick"),
     (re.compile(r"🚫\s*character\s+with\s+id\s+\d+\s+not\s+found", re.I), "items_senpai_catcher", "/pick"),
-    # Grab Your Waifu inline result.
+    # Grab Your Waifu: both the OwO caption and the labeled card format.
+    (re.compile(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+waifu", re.I | re.S), "items_grab_your_waifu", "/grab"),
     (re.compile(r"media\s*\+\s*.*?name\s*:.*(?:\n|$).*rarity\s*:.*(?:\n|$).*anime\s*:.*(?:\n|$).*id\s*:", re.I | re.S), "items_grab_your_waifu", "/grab"),
     (re.compile(r"new\s+waifu\s+added|item\s*id\s*[:：].*\bname\b\s*[:：].*\brarity\b\s*[:：]|waifuxgrab", re.I | re.S), "items_waifux_grab", "/grab"),
     (re.compile(r"new\s+character\s+added\s+to\s+the\s+bot|char\s*id\s*[:：].*\bname\b\s*[:：].*\banime\b\s*[:：].*\brarity\b\s*[:：]", re.I | re.S), "items_senpai_catcher", "/pick"),
@@ -342,6 +343,8 @@ def _custom_source_command(message: Message) -> str | None:
 def resolve_trusted_inline_collection(message: Message) -> str | None:
     """Resolve trusted Helper-generated inline results without pretending they are forwards."""
     text = _message_text(message)
+    if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+waifu", text, re.I):
+        return "items_grab_your_waifu"
     if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+character", text, re.I):
         return "items_character_catcher"
     if re.search(r"media\s*\+\s*🎴.*?\|.*(?:🎬\s*anime|🆔\s*id\s*:)", text, re.I | re.S):
