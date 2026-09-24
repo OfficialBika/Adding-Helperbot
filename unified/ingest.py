@@ -261,6 +261,19 @@ async def ingest_message(
         if origin_chat is not None and origin_mid is not None:
             origin = (int(origin_chat.id), int(origin_mid))
 
+        media_meta = {
+            "width": media_info["width"] if media_info else 0,
+            "height": media_info["height"] if media_info else 0,
+            "duration": media_info["duration"] if media_info else 0,
+            "file_size": media_info["file_size"] if media_info else 0,
+            "mime_type": media_info["mime_type"] if media_info else "",
+            "file_name": media_info["file_name"] if media_info else "",
+        }
+        if anime:
+            media_meta["anime"] = anime
+        if rarity:
+            media_meta["rarity"] = rarity
+
         saved = await save_character(
             name=name,
             character_id=character_id,
@@ -271,16 +284,7 @@ async def ingest_message(
             file_ids=media_info["file_ids"] if media_info else [],
             file_unique_id=media_info["file_unique_id"] if media_info else None,
             file_unique_ids=media_info["file_unique_ids"] if media_info else [],
-            media_meta={
-                "width": media_info["width"] if media_info else 0,
-                "height": media_info["height"] if media_info else 0,
-                "duration": media_info["duration"] if media_info else 0,
-                "file_size": media_info["file_size"] if media_info else 0,
-                "mime_type": media_info["mime_type"] if media_info else "",
-                "file_name": media_info["file_name"] if media_info else "",
-                "anime": anime or "",
-                "rarity": rarity or "",
-            },
+            media_meta=media_meta,
             media_hash=hashed,
             source_origin=origin,
             archive=(message.chat.id, message.message_id),
