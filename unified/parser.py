@@ -151,7 +151,7 @@ def extract_character_id(text: str | None) -> str | None:
     # (rarity)
     # The previous implementation incorrectly required the internal
     # "media + owo!" phrase, which is not present in the actual caption.
-    if re.search(r"owo!\s*check\s+out\s+this\s+character", raw, re.I):
+    if re.search(r"owo!\s*check\s+out\s+this\s+(?:character|waifu)", raw, re.I):
         for line in raw.splitlines():
             m = re.match(r"^\s*(\d+)\s*[:：-]\s*.+?\s*$", line)
             if m:
@@ -189,7 +189,7 @@ def extract_name(text: str | None) -> str | None:
     if value:
         return value
 
-    if re.search(r"owo!\s*check\s+out\s+this\s+character", raw, re.I):
+    if re.search(r"owo!\s*check\s+out\s+this\s+(?:character|waifu)", raw, re.I):
         for line in raw.splitlines():
             line = line.strip()
             m = re.match(r"^(?:ID\s*)?(\d+)\s*[:：-]\s*(.+?)\s*$", line, re.I)
