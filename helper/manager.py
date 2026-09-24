@@ -357,6 +357,8 @@ class HelperManager:
             f"Mode: <code>{self._state.get('mode', '-')}</code>\n"
             f"Source: <code>{self._state.get('source', '-')}</code>\n"
             f"Index: <code>{self._state.get('current_index', 0)}</code>\n"
+            f"Next ID: <code>{self._state.get('next_id', '-')}</code>\n"
+            f"Not Found Streak: <code>{self._state.get('consecutive_not_found', 0)}</code>\n"
             f"Delay: <code>{self._state.get('delay', DEFAULT_DELAY)}s</code>\n"
             f"Last error: <code>{self._state.get('last_error', '-')}</code>"
         )
@@ -446,6 +448,8 @@ class HelperManager:
             "/startorinbot [delay]\n"
             "/resumeorinbot &lt;count&gt; [delay]\n"
             "/startdaobot [delay]\n"
-            "/resumedaobot &lt;count&gt; [delay]\n\n"
+            "/resumedaobot &lt;count&gt; [delay]\n"
+            "/startsenpaibot [delay]\n"
+            "/resumesenpaibot &lt;next_id&gt; [delay]\n\n"
             "Controls: /helperstatus /stophelper /resethelperprogress"
         )
