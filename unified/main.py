@@ -24,6 +24,7 @@ from unified.lookup import lookup_message
 from helper.runtime import HelperUserbot
 from helper.manager import HelperManager
 from services.result_formatter import result_buttons
+from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
 
 logging.basicConfig(
@@ -47,6 +48,30 @@ def is_media(message: Message) -> bool:
         or getattr(message, "video", None)
         or getattr(message, "animation", None)
         or getattr(message, "document", None)
+    )
+
+
+def is_ingest_candidate(message: Message) -> bool:
+    """Allow media plus source-bot/helper text-only metadata replies."""
+    if is_media(message):
+        return True
+    text = str(
+        getattr(message, "text", None)
+        or getattr(message, "caption", None)
+        or ""
+    )
+    if not text.strip():
+        return False
+    from_user = getattr(message, "from_user", None)
+    helper_id = helper_userbot.user_id
+    if helper_id and getattr(from_user, "id", None) == helper_id:
+        return True
+    if getattr(from_user, "is_bot", False) and resolve_source_collection(message):
+        return True
+    lowered = text.lower()
+    return (
+        "character valuation" in lowered
+        or "character with id" in lowered and "not found" in lowered
     )
 
 
@@ -169,7 +194,7 @@ async def adding_status(message: Message):
     )
 
 
-@router.message(F.chat.id == settings.adding_chat_id, F.func(is_media))
+@router.message(F.chat.id == settings.adding_chat_id, F.func(is_ingest_candidate))
 async def adding_ingest(message: Message):
     # Adding is intentionally restricted to forwarded channel/source posts.
     # Ordinary media sent directly into the Adding group is ignored.
