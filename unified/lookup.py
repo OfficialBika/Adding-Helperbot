@@ -38,34 +38,105 @@ async def _download(bot: Bot, file_id: str) -> bytes | None:
         log.info("media download failed: %s", exc)
     return None
 
-async def _find_exact(file_uid: str, file_ids: list[str] | None, sha: str | None, origin, scope):
-    ors = []
-    if file_uid:
-        ors.append({"file_unique_ids": file_uid})
-    for fid in dict.fromkeys(str(x).strip() for x in (file_ids or []) if str(x).strip()):
-        ors.append({"file_ids": fid})
+async def _find_exact(
+    file_uids: list[str] | None,
+    file_ids: list[str] | None,
+    sha: str | None,
+    origin,
+    scope,
+):
+    """Fast exact lookup.
+
+    UID lookup is deliberately a separate first query instead of one large
+    $or. This lets MongoDB use the multikey UID index directly and avoids
+    repeating the same file-id clauses for every photo variant.
+    """
+    uids = list(dict.fromkeys(str(x).strip() for x in (file_uids or []) if str(x).strip()))
+    fids = list(dict.fromkeys(str(x).strip() for x in (file_ids or []) if str(x).strip()))
+
+    def scoped(base: dict, values: list[str] | None = None) -> dict:
+        query = dict(base)
+        if scope:
+            query["source_key"] = {"$in": scope}
+        return query
+
+    # 1) Telegram file_unique_id: the cheapest and strongest exact media key.
+    if uids:
+        doc = await characters.find_one(
+            scoped({"file_unique_ids": {"$in": uids}})
+        )
+        if doc:
+            return doc
+
+        # Legacy records may only have the scalar canonical UID.
+        doc = await characters.find_one(
+            scoped({"telegram_file_unique_id": {"$in": uids}})
+        )
+        if doc:
+            return doc
+
+        # Only use global UID matching when the source scope cannot resolve it.
+        if scope:
+            doc = await characters.find_one({"file_unique_ids": {"$in": uids}})
+            if doc:
+                return doc
+            doc = await characters.find_one({"telegram_file_unique_id": {"$in": uids}})
+            if doc:
+                return doc
+
+    # 2) file_id is useful for same-bot messages and old records.
+    if fids:
+        doc = await characters.find_one(
+            scoped({"file_ids": {"$in": fids}})
+        )
+        if doc:
+            return doc
+
+        doc = await characters.find_one(
+            scoped({"telegram_file_id": {"$in": fids}})
+        )
+        if doc:
+            return doc
+
+        if scope:
+            doc = await characters.find_one({"file_ids": {"$in": fids}})
+            if doc:
+                return doc
+            doc = await characters.find_one({"telegram_file_id": {"$in": fids}})
+            if doc:
+                return doc
+
+    # 3) SHA-256 is the next exact identity after Telegram IDs.
     if sha:
-        ors.extend([{"sha256": sha}, {"sha256_aliases": sha}])
+        doc = await characters.find_one(scoped({"sha256": sha}))
+        if doc:
+            return doc
+        doc = await characters.find_one(scoped({"sha256_aliases": sha}))
+        if doc:
+            return doc
+        if scope:
+            doc = await characters.find_one({"sha256": sha})
+            if doc:
+                return doc
+            doc = await characters.find_one({"sha256_aliases": sha})
+            if doc:
+                return doc
+
+    # 4) Forward origin is a final exact fallback.
     if origin:
-        ors.append({
+        query = {
             "source_origin.chat_id": origin[0],
             "source_origin.message_id": origin[1],
-        })
-    if not ors:
-        return None
+        }
+        doc = await characters.find_one(scoped(query))
+        if doc:
+            return doc
+        if scope:
+            doc = await characters.find_one(query)
+            if doc:
+                return doc
 
-    # First use the source-specific compound indexes.
-    if scope:
-        scoped = await characters.find_one({
-            "$or": ors,
-            "source_key": {"$in": scope},
-        })
-        if scoped:
-            return scoped
-
-    # Then global exact indexes. This is important for forwarded/re-uploaded
-    # Telegram media where source metadata is unavailable.
-    return await characters.find_one({"$or": ors})
+    return None
 
 def _similarity(query_hash, item) -> float:
     metrics = []
@@ -213,12 +284,7 @@ async def lookup_message(bot: Bot, message: Message):
     except Exception:
         pass
 
-    doc = await _find_exact(uid, photo_file_ids, None, origin, scope)
-    if not doc:
-        for candidate_uid in photo_uids:
-            if candidate_uid == uid: continue
-            doc = await _find_exact(candidate_uid, photo_file_ids, None, origin, scope)
-            if doc: break
+    doc = await _find_exact(photo_uids, photo_file_ids, None, origin, scope)
     if doc:
         return doc, "uid/origin"
 
@@ -231,12 +297,7 @@ async def lookup_message(bot: Bot, message: Message):
         data,
     )
 
-    doc = await _find_exact(uid, photo_file_ids, hashed.sha256, origin, scope)
-    if not doc:
-        for candidate_uid in photo_uids:
-            if candidate_uid == uid: continue
-            doc = await _find_exact(candidate_uid, photo_file_ids, hashed.sha256, origin, scope)
-            if doc: break
+    doc = await _find_exact(photo_uids, photo_file_ids, hashed.sha256, origin, scope)
     if doc:
         return doc, "exact"
 
