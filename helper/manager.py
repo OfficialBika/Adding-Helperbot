@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -51,7 +52,7 @@ FORWARD_SOURCES = {
 DM_SOURCES = {
     "catch": ("@CharacterCatcherBot", "/check"),
     "grab": ("@GrabGardenBot", "/check"),
-    "senpai": ("@SenpaiCatcher", "/see"),
+    "senpai": ("@SenpaiCatcherBot", "/see"),
     "hallow": ("@CharacterHallowBot", "/show"),
     "takers": ("@TakersBot", "/detect"),
 }
@@ -139,6 +140,105 @@ class HelperManager:
             if cmd in resumes:
                 return key, "resume"
         return None, None
+
+    async def start_senpai(self, start_id: int = 1, delay: int = DEFAULT_DELAY):
+        """Sequentially collect @SenpaiCatcherBot /see IDs through the helper account."""
+        key = "senpai"
+        if key in self.runners and not self.runners[key].task.done():
+            raise RuntimeError("senpai is already running")
+        start_id = max(1, int(start_id))
+        delay = max(1, min(int(delay), MAX_DELAY))
+        self._state.update({
+            "source": key,
+            "mode": "senpai_see",
+            "next_id": start_id,
+            "consecutive_not_found": 0,
+            "delay": delay,
+            "running": True,
+        })
+        self._save()
+        task = asyncio.create_task(self._senpai_worker(start_id, delay))
+        self.runners[key] = Runner(task, key, "senpai_see")
+
+    async def _senpai_worker(self, start_id: int, delay: int):
+        key = "senpai"
+        bot, _ = DM_SOURCES[key]
+        current_id = max(1, int(start_id))
+        consecutive_not_found = 0
+        q = self.responses.setdefault(key, asyncio.Queue())
+        try:
+            while True:
+                # Never let an old response satisfy a new /see request.
+                while not q.empty():
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+                await self.client.send_message(bot, f"/see {current_id}")
+                try:
+                    response = await asyncio.wait_for(q.get(), timeout=45)
+                except asyncio.TimeoutError:
+                    self._state.update({
+                        "source": key,
+                        "next_id": current_id,
+                        "consecutive_not_found": consecutive_not_found,
+                        "last_error": f"timeout waiting for /see {current_id}",
+                    })
+                    log.warning("Senpai /see timeout id=%s", current_id)
+                    break
+
+                response_text = "\n".join(
+                    str(v) for v in (
+                        getattr(response, "text", None),
+                        getattr(response, "caption", None),
+                    ) if isinstance(v, str) and v.strip()
+                )
+                if re.search(r"character\s+with\s+id\s+\d+\s+not\s+found", response_text, re.I):
+                    consecutive_not_found += 1
+                    self._state.update({
+                        "source": key,
+                        "mode": "senpai_see",
+                        "last_checked_id": current_id,
+                        "next_id": current_id + 1,
+                        "consecutive_not_found": consecutive_not_found,
+                        "running": True,
+                    })
+                    self._save()
+                    log.info("Senpai not found id=%s consecutive=%s", current_id, consecutive_not_found)
+                    if consecutive_not_found >= 3:
+                        log.info("Senpai auto-stop after 3 consecutive not-found responses at id=%s", current_id)
+                        break
+                else:
+                    consecutive_not_found = 0
+                    # Forward the original bot response so Telegram keeps its
+                    # media and sender identity. The Adding bot then parses it.
+                    await self.client.forward_messages(
+                        self.runtime.adding_chat_id,
+                        response.chat.id,
+                        response.id,
+                    )
+                    self._state.update({
+                        "source": key,
+                        "mode": "senpai_see",
+                        "last_checked_id": current_id,
+                        "next_id": current_id + 1,
+                        "consecutive_not_found": 0,
+                        "running": True,
+                    })
+                    self._save()
+
+                current_id += 1
+                await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._state["last_error"] = str(exc)
+            log.exception("Senpai helper failed")
+        finally:
+            self._state["running"] = False
+            self._save()
+            self.runners.pop(key, None)
 
     async def start_inline(self, key, delay=DEFAULT_DELAY, resume_count=None):
         if key in self.runners and not self.runners[key].task.done():
@@ -283,12 +383,28 @@ class HelperManager:
         if kind:
             count, delay = self._parse(text)
             try:
-                if kind == "resume":
+                if key == "senpai":
+                    if kind == "resume":
+                        start_id = max(1, int(count or 1))
+                        await self.start_senpai(start_id, delay)
+                        await message.reply(
+                            f"Resumed senpai /see from ID {start_id}.\\n"
+                            f"Delay: {delay}s\\n"
+                            "Auto-stop: 3 consecutive not-found responses."
+                        )
+                    else:
+                        await self.start_senpai(1, delay)
+                        await message.reply(
+                            "Started Senpai /see from ID 1.\\n"
+                            f"Delay: {delay}s\\n"
+                            "Auto-stop: 3 consecutive not-found responses."
+                        )
+                elif kind == "resume":
                     await self.start_inline(key, delay, count or 0)
-                    await message.reply(f"Resumed {key}.\nCount: {count or 0}\nDelay: {delay}s")
+                    await message.reply(f"Resumed {key}.\\nCount: {count or 0}\\nDelay: {delay}s")
                 else:
                     await self.start_inline(key, delay)
-                    await message.reply(f"Started {key}.\nSource: {SOURCES[key][0]}\nDelay: {delay}s")
+                    await message.reply(f"Started {key}.\\nSource: {SOURCES[key][0]}\\nDelay: {delay}s")
             except Exception as exc:
                 await message.reply(f"Helper error: {exc}")
             return True
