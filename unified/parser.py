@@ -95,15 +95,29 @@ def _senpai_name(text: str) -> str | None:
 
 
 def _senpai_inline_name(text: str) -> str | None:
-    """Parse Senpai's media card: Media + 🎴 Name | Rarity."""
+    """Parse Senpai media cards in both raw and forwarded forms."""
     for line in norm(text).splitlines():
-        m = re.match(r"^\s*media\s*\+\s*[^\w\n\r]{0,8}(.+?)\s*\|\s*(.+?)\s*$", line, re.I)
+        m = re.match(
+            r"^\s*(?:media\s*\+\s*)?🎴\s*(.+?)\s*\|\s*(.+?)\s*$",
+            line,
+            re.I,
+        )
         if m:
             value = clean_name(m.group(1))
             if value and not re.match(r"^(?:⚖️\s*)?character\s+valuation$", value, re.I):
                 return value
-    return None
 
+        # Fallback if the card emoji is omitted but Name | Rarity remains.
+        m = re.match(
+            r"^\s*(?:media\s*\+\s*)?[^\w\n\r]{1,4}(.+?)\s*\|\s*(.+?)\s*$",
+            line,
+            re.I,
+        )
+        if m and not re.search(r"^character\s+valuation$", m.group(1).strip(), re.I):
+            value = clean_name(m.group(1))
+            if value:
+                return value
+    return None
 
 def _smash_name(text: str) -> str | None:
     raw = norm(text)
@@ -254,7 +268,11 @@ def extract_rarity(text: str | None) -> str | None:
         value = _line_label_value(line, LABEL_ALIASES["rarity"])
         if value:
             return value
-        m = re.match(r"^\s*media\s*\+\s*[^\w\n\r]{0,8}.+?\s*\|\s*(.+?)\s*$", line, re.I)
+        m = re.match(
+            r"^\s*(?:media\s*\+\s*)?(?:🎴\s*)?.+?\s*\|\s*(.+?)\s*$",
+            line,
+            re.I,
+        )
         if m:
             candidate = clean_name(m.group(1))
             if candidate and not re.search(r"^character\s+valuation$", candidate, re.I):
