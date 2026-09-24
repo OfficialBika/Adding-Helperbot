@@ -65,12 +65,12 @@ class LookupService:
                 if scope.mode == "blocked":
                     return self._done(None, "blocked_source", started)
 
-                # Manual lookup must behave like automatic source-aware lookup:
-                # use only the source detected from the replied media/message.
-                # Never fall back to the manual command as a generic all-source lookup.
-                if manual and not scope.collections:
-                    return self._done(None, "source_unknown", started)
-
+                # Manual lookup is source-aware first.
+                # If the replied message has no detectable source, do NOT turn
+                # the manual command into a generic all-collection lookup.
+                # Instead, allow the UID stage below to use the global UID index
+                # as the explicit manual fallback.
+                source_unknown = manual and not scope.collections
                 collections = scope.collections
                 filter_tag = self._filter_tag(collections)
                 output_command = output_command_from_message(
@@ -98,6 +98,16 @@ class LookupService:
                         return self._done(self._with_command(cached, output_command, source_message), "uid_cache", started, 1.0)
                     item = await lookup_backend.exact_uid(file_uid, collections)
                     reason = "uid"
+
+                    # Manual-only fallback:
+                    # when the source cannot be detected from the replied
+                    # message, search the global UID index directly. This is
+                    # intentionally limited to UID lookup; it does not enable
+                    # generic global hash/similarity lookup.
+                    if not item and manual and source_unknown:
+                        item = await lookup_backend.exact_uid(file_uid, None)
+                        reason = "uid_global_manual"
+
                     if not item and settings.v3_global_exact_fallback:
                         item = await lookup_backend.exact_uid(file_uid, None)
                         reason = "uid_global"
