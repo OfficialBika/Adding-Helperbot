@@ -94,6 +94,17 @@ def _senpai_name(text: str) -> str | None:
     return None
 
 
+def _senpai_inline_name(text: str) -> str | None:
+    """Parse Senpai's media card: Media + 🎴 Name | Rarity."""
+    for line in norm(text).splitlines():
+        m = re.match(r"^\s*media\s*\+\s*[^\w\n\r]{0,8}(.+?)\s*\|\s*(.+?)\s*$", line, re.I)
+        if m:
+            value = clean_name(m.group(1))
+            if value and not re.match(r"^(?:⚖️\s*)?character\s+valuation$", value, re.I):
+                return value
+    return None
+
+
 def _smash_name(text: str) -> str | None:
     raw = norm(text)
     m = re.search(
@@ -152,7 +163,7 @@ def extract_name(text: str | None) -> str | None:
     if not raw:
         return None
 
-    for parser in (_senpai_name, _myanmar_name, _smash_name):
+    for parser in (_senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name
@@ -177,8 +188,9 @@ def extract_name(text: str | None) -> str | None:
             m = re.match(r"^(?:ID\s*)?(\d+)\s*[:：-]\s*(.+?)\s*$", line, re.I)
             if not m:
                 continue
-            value = re.sub(r"\s+\[[^\]]*\]\s*$", "", m.group(2)).strip()
-            value = clean_name(value)
+            # Bracketed emoji suffixes are part of the character name.
+            # Example: "Yoru [👶]" must stay exactly "Yoru [👶]".
+            value = clean_name(m.group(2))
             if value and not re.match(r"^(?:anime|rarity|id|role)\b", value, re.I):
                 return value
 
@@ -210,4 +222,34 @@ def extract_name(text: str | None) -> str | None:
             if value:
                 return value
 
+    return None
+
+
+
+def extract_anime(text: str | None) -> str | None:
+    """Extract an explicit Anime/Series/Movie field without altering bracketed suffixes."""
+    raw = norm(text)
+    if not raw:
+        return None
+    for line in raw.splitlines():
+        value = _line_label_value(line, LABEL_ALIASES["anime"])
+        if value:
+            return value
+    return None
+
+
+def extract_rarity(text: str | None) -> str | None:
+    """Extract an explicit rarity field or Senpai's `Name | Rarity` card suffix."""
+    raw = norm(text)
+    if not raw:
+        return None
+    for line in raw.splitlines():
+        value = _line_label_value(line, LABEL_ALIASES["rarity"])
+        if value:
+            return value
+        m = re.match(r"^\s*media\s*\+\s*[^\w\n\r]{0,8}.+?\s*\|\s*(.+?)\s*$", line, re.I)
+        if m:
+            candidate = clean_name(m.group(1))
+            if candidate and not re.search(r"^character\s+valuation$", candidate, re.I):
+                return candidate
     return None
