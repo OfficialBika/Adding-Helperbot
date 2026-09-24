@@ -62,6 +62,12 @@ async def ensure_indexes():
         ([("name_key", 1)], "idx_global_name_key"),
         ([("source_key", 1), ("file_ids", 1)], "idx_source_file_id"),
         ([("source_key", 1), ("file_unique_ids", 1)], "idx_source_file_uid"),
+        # Canonical scalar Telegram IDs are kept indexed for legacy records and
+        # fast single-file lookups; array indexes above cover merged variants.
+        ([("source_key", 1), ("telegram_file_unique_id", 1)], "idx_source_telegram_file_uid"),
+        ([("telegram_file_unique_id", 1)], "idx_global_telegram_file_uid"),
+        ([("telegram_file_id", 1)], "idx_global_telegram_file_id"),
+        ([("file_ids", 1)], "idx_global_file_id"),
         ([("source_key", 1), ("sha256", 1)], "idx_source_sha256"),
         ([("source_key", 1), ("sha256_aliases", 1)], "idx_source_sha256_alias"),
         ([("source_key", 1), ("phash_chunks", 1)], "idx_source_phash_chunk"),
