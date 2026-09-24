@@ -141,21 +141,28 @@ def extract_character_id(text: str | None) -> str | None:
     if not raw:
         return None
 
+    # Group the complete ID-label alternation so the delimiter applies
+    # to every supported label form.
+    id_label = rf"(?:{LABEL_ALIASES['id']})"
     for line in raw.splitlines():
+        line = line.strip()
         m = re.match(
-            rf"^\s*(?:[^\w\n\r:：•\-=]{{0,8}})?{LABEL_ALIASES['id']}\s*[:：•\-=]\s*(\d+)\s*$",
-            line.strip(),
+            rf"^\s*[^\w\n\r:：•\-=]{{0,8}}{id_label}\s*[:：•\-=]\s*(\d+)\s*$",
+            line,
             re.I,
         )
         if m:
             return m.group(1)
 
-    # Senpai commonly renders this as "🆔 ID: 4". Telegram clients can
-    # also expose it as "🆔: 4" or "#: 4", so handle the icon and optional
-    # literal ID independently instead of relying on the generic label regex.
+    # Senpai commonly renders this as "🆔 ID: 4". Telegram clients may
+    # preserve an optional variation selector after the emoji, so accept it.
     for line in raw.splitlines():
         line = line.strip()
-        m = re.match(r"^[🆔🔢#]\s*(?:ID\s*)?[:：-]\s*(\d+)\s*$", line, re.I)
+        m = re.match(
+            r"^[🆔🔢#](?:\ufe0f)?\s*(?:ID\s*)?[:：-]\s*(\d+)\s*$",
+            line,
+            re.I,
+        )
         if m:
             return m.group(1)
 
