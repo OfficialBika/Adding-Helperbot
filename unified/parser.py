@@ -136,6 +136,13 @@ def extract_character_id(text: str | None) -> str | None:
         if m:
             return m.group(1)
 
+    # Some sources render the ID as an icon only, e.g. "🆔: 3755".
+    # Accept that form too, while requiring the value to be numeric.
+    for line in raw.splitlines():
+        m = re.match(r"^\s*[🆔🔢#]\s*[:：-]\s*(\d+)\s*$", line.strip())
+        if m:
+            return m.group(1)
+
     # Character Catcher/OwO format:
     # OwO! Check out this character!
     #
