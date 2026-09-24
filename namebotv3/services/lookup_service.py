@@ -64,10 +64,12 @@ class LookupService:
                 scope = resolve_lookup_scope(source_message)
                 if scope.mode == "blocked":
                     return self._done(None, "blocked_source", started)
+
+                # Manual lookup must behave like automatic source-aware lookup:
+                # use only the source detected from the replied media/message.
+                # Never fall back to the manual command as a generic all-source lookup.
                 if manual and not scope.collections:
-                    manual_scope = resolve_lookup_scope(message)
-                    if manual_scope.collections:
-                        scope = manual_scope
+                    return self._done(None, "source_unknown", started)
 
                 collections = scope.collections
                 filter_tag = self._filter_tag(collections)
