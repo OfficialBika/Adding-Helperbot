@@ -30,6 +30,21 @@ def _photo_uids(source_message: Message) -> list[str]:
     return values
 
 
+def _uid_query(uids: list[str]) -> dict:
+    # Exact Telegram file_unique_id only. Supports the new unified schema plus
+    # legacy UID field names; never falls back to hashes or message IDs.
+    return {
+        "$or": [
+            {"file_unique_ids": {"$in": uids}},
+            {"telegram_file_unique_id": {"$in": uids}},
+            {"file_unique_id": {"$in": uids}},
+            {"photo_file_unique_id": {"$in": uids}},
+            {"video_file_unique_id": {"$in": uids}},
+            {"media.file_unique_id": {"$in": uids}},
+        ]
+    }
+
+
 async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: bool = False):
     """Exact Telegram file_unique_id lookup only.
 
@@ -59,29 +74,19 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     if collections:
         query = {
             "source_key": {"$in": collections},
-            "$or": [
-                {"file_unique_ids": {"$in": uids}},
-                {"telegram_file_unique_id": {"$in": uids}},
-            ],
+            **_uid_query(uids),
         }
         doc = await characters.find_one(query)
         if doc:
             return doc, "uid"
 
-    # Source-scoped lookup is the first and preferred path. If the resolver
-    # identifies a source but that source has no exact UID match, do one
-    # exact-UID global recovery. This prevents a resolver/source-label mismatch
-    # from turning a valid Telegram UID into a false "not found".
-    #
-    # Global recovery is intentionally ambiguity-safe: return a document only
-    # when this UID identifies exactly one character record. Never guess when
-    # the same UID exists in multiple source records.
-    global_query = {
-        "$or": [
-            {"file_unique_ids": {"$in": uids}},
-            {"telegram_file_unique_id": {"$in": uids}},
-        ],
-    }
+    # Manual lookup may recover globally after the source-scoped exact match
+    # fails. Auto lookup stays strictly source-scoped.
+    if not allow_global_fallback:
+        return None, "not_found_uid"
+
+    # Global recovery remains exact UID only and ambiguity-safe.
+    global_query = _uid_query(uids)
     global_docs = await characters.find(
         global_query,
         {
