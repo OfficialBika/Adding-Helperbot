@@ -67,4 +67,42 @@ async def lookup_message(bot: Bot, message: Message):
     if doc:
         return doc, "uid"
 
-    return None, "not_found_source_uid"
+    # Source-scoped lookup is the first and preferred path. If the resolver
+    # identifies a source but that source has no exact UID match, do one
+    # exact-UID global recovery. This prevents a resolver/source-label mismatch
+    # from turning a valid Telegram UID into a false "not found".
+    #
+    # Global recovery is intentionally ambiguity-safe: return a document only
+    # when this UID identifies exactly one character record. Never guess when
+    # the same UID exists in multiple source records.
+    global_query = {
+        "$or": [
+            {"file_unique_ids": {"$in": uids}},
+            {"telegram_file_unique_id": {"$in": uids}},
+        ],
+    }
+    global_docs = await characters.find(
+        global_query,
+        {
+            "_id": 1,
+            "name": 1,
+            "command": 1,
+            "source_key": 1,
+            "file_unique_ids": 1,
+            "telegram_file_unique_id": 1,
+        },
+    ).limit(2).to_list(length=2)
+
+    if len(global_docs) == 1:
+        return global_docs[0], "uid_global_recovery"
+
+    if len(global_docs) > 1:
+        log.warning(
+            "UID global recovery ambiguous message=%s source=%s candidates=%s",
+            getattr(message, "message_id", None),
+            collections,
+            len(global_docs),
+        )
+        return None, "ambiguous_global_uid"
+
+    return None, "not_found_uid"
