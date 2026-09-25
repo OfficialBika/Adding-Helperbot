@@ -179,7 +179,6 @@ async def save_character(
         "media_type": media_type,
         "telegram_file_id": str(file_id or ""),
         "telegram_file_unique_id": uid,
-        "file_unique_ids": unique_ids,
         "file_ids": ids,
         "file_unique_ids": unique_ids,
         "media_meta": dict(media_meta or {}),
