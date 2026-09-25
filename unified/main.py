@@ -19,6 +19,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from unified.config import settings
 from unified.store import characters, close, ensure_indexes
+from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
 from helper.runtime import HelperUserbot
@@ -40,6 +41,13 @@ helper_manager = HelperManager(helper_userbot)
 
 def owner(message: Message) -> bool:
     return bool(message.from_user and message.from_user.id in settings.owner_ids)
+
+
+async def has_admin_access(message: Message) -> bool:
+    user = getattr(message, "from_user", None)
+    if not user:
+        return False
+    return owner(message) or await is_authorized(user.id)
 
 
 def is_media(message: Message) -> bool:
@@ -132,9 +140,76 @@ def format_result(doc: dict) -> str:
     )
 
 
+@router.message(Command("auth"))
+async def auth_user(message: Message):
+    if not owner(message):
+        return
+    target = getattr(message, "reply_to_message", None)
+    user_id = getattr(getattr(target, "from_user", None), "id", None) if target else None
+    if user_id is None:
+        parts = (message.text or "").strip().split()
+        if len(parts) >= 2:
+            raw = parts[1].strip()
+            if raw.startswith("@"):
+                try:
+                    chat = await message.bot.get_chat(raw)
+                    user_id = getattr(chat, "id", None)
+                except Exception:
+                    user_id = None
+            elif raw.lstrip("-").isdigit():
+                user_id = int(raw)
+    if not user_id:
+        await message.reply("Usage: reply to a user with /auth, or use /auth <user_id>.")
+        return
+    if user_id in settings.owner_ids:
+        await message.reply("Owner already has full access.")
+        return
+    await grant(int(user_id), int(message.from_user.id))
+    await message.reply(
+        f"✅ Authorized user: <code>{int(user_id)}</code>\n"
+        "All commands and helper-style forwarding are enabled."
+    )
+
+
+@router.message(Command("unauth"))
+async def unauth_user(message: Message):
+    if not owner(message):
+        return
+    target = getattr(message, "reply_to_message", None)
+    user_id = getattr(getattr(target, "from_user", None), "id", None) if target else None
+    if user_id is None:
+        parts = (message.text or "").strip().split()
+        if len(parts) >= 2 and parts[1].lstrip("-").isdigit():
+            user_id = int(parts[1])
+    if not user_id:
+        await message.reply("Usage: reply to a user with /unauth, or use /unauth <user_id>.")
+        return
+    if user_id in settings.owner_ids:
+        await message.reply("Owner access cannot be removed.")
+        return
+    removed = await revoke(int(user_id))
+    await message.reply(
+        f"{'✅ Revoked' if removed else 'ℹ️ User was not authorized'}: <code>{int(user_id)}</code>"
+    )
+
+
+@router.message(Command("authlist"))
+async def auth_list(message: Message):
+    if not owner(message):
+        return
+    rows = await list_authorized()
+    if not rows:
+        await message.reply("Authorized users: <code>0</code>")
+        return
+    lines = ["👥 <b>AUTHORIZED USERS</b>", ""]
+    for row in rows:
+        lines.append(f"• <code>{row['user_id']}</code>")
+    await message.reply("\n".join(lines))
+
+
 @router.message(Command("start"))
 async def start(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     await message.reply(
         "🤖 <b>Adding & Helper Main</b>\n\n"
@@ -201,7 +276,11 @@ async def adding_ingest(message: Message):
     is_forwarded = bool(getattr(message, "forward_origin", None) or getattr(message, "forward_from_chat", None))
     helper_user_id = helper_userbot.user_id
     is_helper_inline = bool(helper_user_id and getattr(message.from_user, "id", None) == helper_user_id)
-    if not is_forwarded and not is_helper_inline:
+    is_authorized_sender = bool(
+        getattr(message, "from_user", None)
+        and await is_authorized(getattr(message.from_user, "id", None))
+    )
+    if not is_forwarded and not is_helper_inline and not is_authorized_sender:
         log.info(
             "ADDING skip untrusted media message=%s from_user=%s via_bot=%s",
             message.message_id,
@@ -210,6 +289,8 @@ async def adding_ingest(message: Message):
         )
         return
     trusted_helpers = {helper_userbot.user_id} if helper_userbot.user_id else set()
+    if is_authorized_sender and current_user_id:
+        trusted_helpers.add(int(current_user_id))
     log.info(
         "ADDING ingest message=%s helper=%s forwarded=%s via_bot=%s caption=%r",
         message.message_id,
@@ -333,6 +414,7 @@ async def run():
         raise RuntimeError("PUBLIC_URL is required in webhook mode")
 
     await ensure_indexes()
+    await ensure_auth_indexes()
     await helper_userbot.start()
     helper_manager.bind()
 
