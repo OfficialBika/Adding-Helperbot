@@ -72,6 +72,8 @@ async def ensure_indexes():
         ([("source_key", 1), ("sha256_aliases", 1)], "idx_source_sha256_alias"),
         ([("source_key", 1), ("phash_chunks", 1)], "idx_source_phash_chunk"),
         ([("source_key", 1), ("dhash_chunks", 1)], "idx_source_dhash_chunk"),
+        ([("phash_chunks", 1)], "idx_global_phash_chunk"),
+        ([("dhash_chunks", 1)], "idx_global_dhash_chunk"),
         ([("source_key", 1), ("video_signature", 1)], "idx_source_video_signature"),
         ([("source_key", 1), ("duration_bucket", 1)], "idx_source_duration"),
         ([("source_key", 1), ("media_type", 1), ("duration_bucket", 1)], "idx_source_media_duration"),
