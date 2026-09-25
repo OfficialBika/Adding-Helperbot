@@ -15,7 +15,10 @@ def _now():
 
 
 async def ensure_auth_indexes():
-    await authorized_users.create_index([("_id", 1)], unique=True, name="uq_authorized_user")
+    # MongoDB already provides a unique _id index automatically.
+    # Do not recreate it with unique=True; MongoDB rejects additional
+    # options on the built-in _id index.
+    return
 
 
 async def is_authorized(user_id: int | None) -> bool:
