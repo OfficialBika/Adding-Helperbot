@@ -411,29 +411,24 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 collections,
             )
 
-    if not allow_global_fallback:
-        return None, "not_found_uid"
+    # UID failed. Manual lookup may recover an exact UID globally, but
+    # auto lookup must never cross source boundaries.
+    if allow_global_fallback:
+        global_docs = await _exact_global_candidates(uids, limit=2)
+        if len(global_docs) == 1:
+            return global_docs[0], "uid_global_recovery"
+        if len(global_docs) > 1:
+            log.warning(
+                "UID global recovery ambiguous message=%s source=%s candidates=%s",
+                getattr(message, "message_id", None),
+                collections,
+                len(global_docs),
+            )
+            # Do not cross-match an ambiguous Telegram UID.
 
-    # Exact global UID recovery is retained before any download.
-    global_docs = await _exact_global_candidates(uids, limit=2)
-    if len(global_docs) == 1:
-        return global_docs[0], "uid_global_recovery"
-    if len(global_docs) > 1:
-        log.warning(
-            "UID global recovery ambiguous message=%s source=%s candidates=%s",
-            getattr(message, "message_id", None),
-            collections,
-            len(global_docs),
-        )
-        # Do not cross-match an ambiguous Telegram UID.
-
-    # UID failed. Only now download and compute hashes.
+    # UID failed. Now download and compute hashes for BOTH auto and manual.
+    # Auto remains source-scoped; manual may go global only when source is unknown.
     hash_scope = collections
-    if not hash_scope:
-        hash_scope = []
-
-    # Hashes may cross source only for a manual lookup when the source
-    # itself is unknown. A known source stays source-scoped.
     hash_global = bool(allow_global_fallback and not collections)
     doc, reason = await _hash_fallback(
         bot,
