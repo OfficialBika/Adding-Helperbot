@@ -369,6 +369,43 @@ async def lookup_media(message: Message):
         await message.reply("❌ Character not found.")
 
 
+async def _manual_lookup(message: Message):
+    target = getattr(message, "reply_to_message", None)
+    if not target or not is_media(target):
+        await message.reply("❌ Reply to a character media with .w / .wa / .waifu.")
+        return
+    doc, reason = await lookup_message(message.bot, target, allow_global_fallback=True)
+    log.info(
+        "MANUAL LOOKUP chat=%s message=%s result=%s reason=%s",
+        message.chat.id,
+        message.message_id,
+        bool(doc),
+        reason,
+    )
+    if doc:
+        await message.reply(
+            format_result(doc),
+            disable_web_page_preview=True,
+            reply_markup=result_buttons(
+                type(
+                    "LookupItem",
+                    (),
+                    {
+                        "command": doc.get("command", "/name"),
+                        "name": doc.get("name", ""),
+                    },
+                )()
+            ),
+        )
+    else:
+        await message.reply("❌ Character not found.")
+
+
+@router.message(F.text.regexp(r"^(?:\\.w|\\/w|\\.wa|\\/wa|\\.waifu|\\/waifu)(?:\\s|$)"))
+async def manual_lookup(message: Message):
+    await _manual_lookup(message)
+
+
 HELPER_COMMANDS = [
     "helper", "addhelper", "helperstatus", "addhelperstatus", "stophelper",
     "resethelperprogress", "startcatchbot", "resumecatchbot",
