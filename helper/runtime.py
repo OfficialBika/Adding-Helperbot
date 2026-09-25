@@ -122,7 +122,7 @@ class HelperUserbot:
         self.client: Client | None = None
         self._started = False
         self._locks = defaultdict(asyncio.Lock)
-        self._forwarded: set[tuple[str, int]] = set()
+        self._forwarded: set[tuple[str, int, int]] = set()
         self.user_id: int | None = None
     @property
     def adding_chat_id(self) -> int:
@@ -155,6 +155,13 @@ class HelperUserbot:
 
         @self.client.on_message(filters.chat(list(SOURCE_CHATS)) & filters.media)
         async def source_media(_, message: Message):
+            await self._forward_source_message(message)
+
+        @self.client.on_edited_message(filters.chat(list(SOURCE_CHATS)) & filters.media)
+        async def source_media_edited(_, message: Message):
+            # A source bot can replace the media while keeping the same message
+            # ID. Treat each edit as a new media observation so its new
+            # file_unique_id is ingested as an alias of the same character.
             await self._forward_source_message(message)
 
         @self.client.on_message(filters.chat(list(SOURCE_CHATS)) & filters.caption)
@@ -195,7 +202,8 @@ class HelperUserbot:
 
         chat = message.chat
         chat_key = str(getattr(chat, "id", "") or getattr(chat, "username", ""))
-        key = (chat_key, int(message.id))
+        edit_key = int(getattr(message, "edit_date", 0) or 0)
+        key = (chat_key, int(message.id), edit_key)
         if key in self._forwarded:
             return False
 
