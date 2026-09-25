@@ -274,6 +274,10 @@ async def save_character(
         changed["sha256_aliases"] = {"$each": [sha]}
 
     update = {}
+    # Array identity fields are merged with $addToSet below. Never put
+    # the same MongoDB path in both $set and $addToSet: that makes MongoDB
+    # reject the update and, critically, prevents newly discovered Telegram
+    # file_unique_id values from being persisted on existing records.
     set_fields = {
         k: v for k, v in changed.items()
         if k not in {"file_ids", "file_unique_ids", "sha256_aliases"}
