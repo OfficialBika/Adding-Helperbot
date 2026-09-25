@@ -269,10 +269,6 @@ async def ingest_message(
             "mime_type": media_info["mime_type"] if media_info else "",
             "file_name": media_info["file_name"] if media_info else "",
         }
-        if anime:
-            media_meta["anime"] = anime
-        if rarity:
-            media_meta["rarity"] = rarity
 
         # Exact UID architecture: every actual Telegram media record must carry
         # Telegram's native file_unique_id. Never synthesize an identity from
