@@ -274,6 +274,20 @@ async def ingest_message(
         if rarity:
             media_meta["rarity"] = rarity
 
+        # Exact UID architecture: every actual Telegram media record must carry
+        # Telegram's native file_unique_id. Never synthesize an identity from
+        # message IDs, hashes, filenames, or forward origin.
+        if media_info and media_info.get("media_type") != "metadata":
+            exact_uid = str(media_info.get("file_unique_id") or "").strip()
+            if not exact_uid:
+                log.error(
+                    "SKIP media without Telegram file_unique_id source=%s message=%s type=%s",
+                    source_key,
+                    getattr(target, "message_id", None),
+                    media_type,
+                )
+                return {"status": "skipped", "document": None, "reason": "missing_file_unique_id"}
+
         saved = await save_character(
             name=name,
             character_id=character_id,
