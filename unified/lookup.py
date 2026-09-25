@@ -151,12 +151,20 @@ def _photo_candidate_query(scope: list[str] | None, phash: str, dhash: str) -> d
         if chunks:
             ors.append({"phash_chunks": {"$in": chunks}})
             ors.append({"dhash_chunks": {"$in": chunks}})
-    # Legacy records may have hashes without chunk indexes.
-    ors.extend([
-        {"phash": {"$exists": True, "$ne": None}},
-        {"dhash": {"$exists": True, "$ne": None}},
-    ])
+    if not ors:
+        return {**prefix, "phash": {"$exists": True, "$ne": None}}
     return {**prefix, "$or": ors}
+
+
+def _legacy_photo_candidate_query(scope: list[str] | None) -> dict:
+    prefix = {"source_key": {"$in": scope}} if scope else {}
+    return {
+        **prefix,
+        "$or": [
+            {"phash_chunks": {"$exists": False}, "phash": {"$exists": True, "$ne": None}},
+            {"dhash_chunks": {"$exists": False}, "dhash": {"$exists": True, "$ne": None}},
+        ],
+    }
 
 
 def _photo_score(query_hash, candidate: dict) -> tuple[float, int | None, int | None]:
@@ -197,59 +205,75 @@ async def _photo_hash_match(
     if not media_hash.phash and not media_hash.dhash:
         return None, 0.0
 
-    cursor = characters.find(
-        _photo_candidate_query(scope, media_hash.phash or "", media_hash.dhash or ""),
-        {
-            "_id": 1,
-            "name": 1,
-            "command": 1,
-            "source_key": 1,
-            "media_type": 1,
-            "phash": 1,
-            "phash_large": 1,
-            "dhash": 1,
-            "whash": 1,
-            "colorhash": 1,
-        },
-    ).limit(_HASH_CANDIDATE_LIMIT)
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "media_type": 1,
+        "phash": 1,
+        "phash_large": 1,
+        "dhash": 1,
+        "whash": 1,
+        "colorhash": 1,
+    }
 
-    ranked: list[tuple[float, int | None, int | None, dict]] = []
-    async for candidate in cursor:
-        if str(candidate.get("media_type") or "photo").lower() not in {"photo", "image"}:
-            continue
-        score, p_distance, d_distance = _photo_score(media_hash, candidate)
-        if p_distance is None and d_distance is None:
-            continue
-        ranked.append((score, p_distance, d_distance, candidate))
+    async def rank(cursor):
+        ranked: list[tuple[float, int | None, int | None, dict]] = []
+        async for candidate in cursor:
+            if str(candidate.get("media_type") or "photo").lower() not in {"photo", "image"}:
+                continue
+            score, p_distance, d_distance = _photo_score(media_hash, candidate)
+            if p_distance is None and d_distance is None:
+                continue
+            ranked.append((score, p_distance, d_distance, candidate))
+        ranked.sort(key=lambda row: row[0], reverse=True)
+        return ranked
 
-    ranked.sort(key=lambda row: row[0], reverse=True)
-    if not ranked:
-        return None, 0.0
-
-    best = ranked[0]
-    second_score = ranked[1][0] if len(ranked) > 1 else 0.0
-    threshold = _PHASH_MIN_SCORE if global_mode else _PHASH_MIN_SCORE - 0.01
-    margin = best[0] - second_score
-
-    structural_ok = (
-        best[1] is not None and best[1] <= _PHASH_THRESHOLD
-    ) or (
-        best[2] is not None and best[2] <= 12
-    )
-
-    if not structural_ok or best[0] < threshold:
-        return None, best[0]
-    if len(ranked) > 1 and margin < _PHASH_MIN_MARGIN:
-        log.warning(
-            "pHash ambiguous source=%s best=%s second=%s margin=%.4f",
-            best[3].get("source_key"),
-            best[3].get("name"),
-            ranked[1][3].get("name"),
-            margin,
+    async def accept(ranked):
+        if not ranked:
+            return None, 0.0
+        best = ranked[0]
+        second_score = ranked[1][0] if len(ranked) > 1 else 0.0
+        threshold = _PHASH_MIN_SCORE if global_mode else _PHASH_MIN_SCORE - 0.01
+        margin = best[0] - second_score
+        structural_ok = (
+            best[1] is not None and best[1] <= _PHASH_THRESHOLD
+        ) or (
+            best[2] is not None and best[2] <= 12
         )
-        return None, best[0]
+        if not structural_ok or best[0] < threshold:
+            return None, best[0]
+        if len(ranked) > 1 and margin < _PHASH_MIN_MARGIN:
+            log.warning(
+                "pHash ambiguous source=%s best=%s second=%s margin=%.4f",
+                best[3].get("source_key"),
+                best[3].get("name"),
+                ranked[1][3].get("name"),
+                margin,
+            )
+            return None, best[0]
+        return best[3], best[0]
 
-    return best[3], best[0]
+    ranked = await rank(
+        characters.find(
+            _photo_candidate_query(scope, media_hash.phash or "", media_hash.dhash or ""),
+            projection,
+        ).limit(_HASH_CANDIDATE_LIMIT)
+    )
+    doc, score = await accept(ranked)
+    if doc:
+        return doc, score
+
+    # Compatibility pass for old records that have pHash fields but no chunk
+    # index. This is only reached after the indexed candidate pass is not safe.
+    legacy_ranked = await rank(
+        characters.find(
+            _legacy_photo_candidate_query(scope),
+            projection,
+        ).limit(_HASH_CANDIDATE_LIMIT)
+    )
+    return await accept(legacy_ranked)
 
 
 async def _download(bot: Bot, file_id: str) -> bytes | None:
@@ -408,12 +432,15 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     if not hash_scope:
         hash_scope = []
 
+    # Hashes may cross source only for a manual lookup when the source
+    # itself is unknown. A known source stays source-scoped.
+    hash_global = bool(allow_global_fallback and not collections)
     doc, reason = await _hash_fallback(
         bot,
         media,
         source_message,
         hash_scope,
-        allow_global_fallback=allow_global_fallback,
+        allow_global_fallback=hash_global,
     )
     if doc:
         log.info(
