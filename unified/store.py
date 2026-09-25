@@ -123,12 +123,18 @@ async def save_character(
 
     source_key = (source_key or "unknown").strip().lower()
     character_id = str(character_id).strip() if character_id is not None and str(character_id).strip() else None
+    # Telegram file_unique_id is the exact media identity. Keep every UID
+    # supplied by Telegram (especially all PhotoSize variants), de-duplicated
+    # without normalization that could alter the identifier.
     uid = str(file_unique_id or "").strip()
     unique_ids = list(dict.fromkeys(
         str(x).strip() for x in (file_unique_ids or []) if str(x).strip()
     ))
     if uid and uid not in unique_ids:
-        unique_ids.append(uid)
+        unique_ids.insert(0, uid)
+    elif not uid and unique_ids:
+        # Always keep one canonical scalar UID for legacy lookup compatibility.
+        uid = unique_ids[0]
     ids = list(dict.fromkeys(
         str(x).strip() for x in (file_ids or []) if str(x).strip()
     ))
@@ -173,6 +179,7 @@ async def save_character(
         "media_type": media_type,
         "telegram_file_id": str(file_id or ""),
         "telegram_file_unique_id": uid,
+        "file_unique_ids": unique_ids,
         "file_ids": ids,
         "file_unique_ids": unique_ids,
         "media_meta": dict(media_meta or {}),
