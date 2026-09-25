@@ -401,7 +401,7 @@ async def _manual_lookup(message: Message):
         await message.reply("❌ Character not found.")
 
 
-@router.message(F.text.regexp(r"^(?:\\.w|\\/w|\\.wa|\\/wa|\\.waifu|\\/waifu)(?:\\s|$)"))
+@router.message(F.text.regexp(r"^(?:\.w|/w|\.wa|/wa|\.waifu|/waifu)(?:\s|$)"))
 async def manual_lookup(message: Message):
     await _manual_lookup(message)
 
