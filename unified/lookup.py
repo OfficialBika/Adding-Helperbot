@@ -21,21 +21,34 @@ def _scope(message: Message) -> list[str]:
         return []
 
 
-def _photo_uids(source_message: Message) -> list[str]:
+def _telegram_uids(message: Message, media_type: str, media_obj) -> list[str]:
+    """Return every native Telegram UID exposed by the current media object.
+
+    For photos Telegram exposes several PhotoSize objects; every size is a
+    legitimate exact UID and must be checked. For other media the media object
+    itself is the exact identity.
+    """
     values: list[str] = []
-    for photo in (getattr(source_message, "photo", None) or []):
-        uid = str(getattr(photo, "file_unique_id", "") or "").strip()
-        if uid and uid not in values:
-            values.append(uid)
+    if media_type == "photo":
+        for photo in (getattr(message, "photo", None) or []):
+            uid = str(getattr(photo, "file_unique_id", "") or "").strip()
+            if uid and uid not in values:
+                values.append(uid)
+    uid = str(getattr(media_obj, "file_unique_id", "") or "").strip()
+    if uid and uid not in values:
+        values.append(uid)
     return values
 
 
-def _uid_query(uids: list[str]) -> dict:
-    # Exact Telegram file_unique_id only. Supports the new unified schema plus
-    # legacy UID field names; never falls back to hashes or message IDs.
+def _uid_query_new(uids: list[str]) -> dict:
+    # New unified records always merge all Telegram PhotoSize/media UIDs here.
+    return {"file_unique_ids": {"$in": uids}}
+
+
+def _uid_query_legacy(uids: list[str]) -> dict:
+    # Compatibility for old/imported records. Exact Telegram UID only.
     return {
         "$or": [
-            {"file_unique_ids": {"$in": uids}},
             {"telegram_file_unique_id": {"$in": uids}},
             {"file_unique_id": {"$in": uids}},
             {"photo_file_unique_id": {"$in": uids}},
@@ -45,11 +58,52 @@ def _uid_query(uids: list[str]) -> dict:
     }
 
 
-async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: bool = False):
-    """Exact Telegram file_unique_id lookup only.
+async def _exact_find(scope: list[str] | None, uids: list[str]):
+    """Use the canonical multikey UID index first, then legacy UID fields."""
+    if not uids:
+        return None
+    prefix = {"source_key": {"$in": scope}} if scope else {}
+    doc = await characters.find_one({**prefix, **_uid_query_new(uids)})
+    if doc:
+        return doc
+    return await characters.find_one({**prefix, **_uid_query_legacy(uids)})
 
-    No SHA-256, pHash, video similarity, filename, message-id, or download
-    fallback is used. Auto lookup is source-scoped; an unknown source is a miss.
+
+async def _exact_global_candidates(uids: list[str], limit: int = 2) -> list[dict]:
+    if not uids:
+        return []
+    docs = await characters.find(
+        _uid_query_new(uids),
+        {
+            "_id": 1,
+            "name": 1,
+            "command": 1,
+            "source_key": 1,
+            "file_unique_ids": 1,
+            "telegram_file_unique_id": 1,
+        },
+    ).limit(limit).to_list(length=limit)
+    if docs:
+        return docs
+    return await characters.find(
+        _uid_query_legacy(uids),
+        {
+            "_id": 1,
+            "name": 1,
+            "command": 1,
+            "source_key": 1,
+            "file_unique_ids": 1,
+            "telegram_file_unique_id": 1,
+        },
+    ).limit(limit).to_list(length=limit)
+
+
+async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: bool = False):
+    """Exact Telegram file_unique_id lookup.
+
+    Auto lookup is source-scoped. Manual lookup may perform a global exact-UID
+    recovery only after the source-scoped exact lookup fails. No filename,
+    message-id, SHA, pHash, or visual-similarity fallback is used.
     """
     media = extract_media(message)
     if not media:
@@ -60,11 +114,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     if not collections and not allow_global_fallback:
         return None, "source_unknown"
 
-    uids = _photo_uids(source_message) if media.media_type == "photo" else []
-    uid = str(getattr(media.obj, "file_unique_id", "") or "").strip()
-    if uid and uid not in uids:
-        uids.append(uid)
-
+    uids = _telegram_uids(source_message, media.media_type, media.obj)
     if not uids:
         return None, "no_file_unique_id"
 
@@ -77,15 +127,8 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         uids,
     )
 
-    # Query only Telegram native file_unique_id values. Mongo multikey indexes
-    # on file_unique_ids and the scalar legacy field keep this exact fallback
-    # fast without downloading media.
     if collections:
-        query = {
-            "source_key": {"$in": collections},
-            **_uid_query(uids),
-        }
-        doc = await characters.find_one(query)
+        doc = await _exact_find(collections, uids)
         if doc:
             log.info(
                 "UID DEBUG source_match message=%s source=%s name=%s",
@@ -95,12 +138,8 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
             )
             return doc, "uid"
 
-        # Diagnostic-only global probe on a source miss. This never changes
-        # auto-lookup behavior; it only identifies cross-source UID matches.
-        probe = await characters.find_one(
-            _uid_query(uids),
-            {"_id": 1, "name": 1, "source_key": 1},
-        )
+        # Diagnostic-only global probe. It never changes auto lookup behavior.
+        probe = (await _exact_global_candidates(uids, limit=1) or [None])[0]
         if probe:
             log.warning(
                 "UID DEBUG cross_source_match message=%s requested_sources=%s db_source=%s name=%s",
@@ -116,28 +155,12 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 collections,
             )
 
-    # Manual lookup may recover globally after the source-scoped exact match
-    # fails. Auto lookup stays strictly source-scoped.
     if not allow_global_fallback:
         return None, "not_found_uid"
 
-    # Global recovery remains exact UID only and ambiguity-safe.
-    global_query = _uid_query(uids)
-    global_docs = await characters.find(
-        global_query,
-        {
-            "_id": 1,
-            "name": 1,
-            "command": 1,
-            "source_key": 1,
-            "file_unique_ids": 1,
-            "telegram_file_unique_id": 1,
-        },
-    ).limit(2).to_list(length=2)
-
+    global_docs = await _exact_global_candidates(uids, limit=2)
     if len(global_docs) == 1:
         return global_docs[0], "uid_global_recovery"
-
     if len(global_docs) > 1:
         log.warning(
             "UID global recovery ambiguous message=%s source=%s candidates=%s",
@@ -146,5 +169,4 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
             len(global_docs),
         )
         return None, "ambiguous_global_uid"
-
     return None, "not_found_uid"
