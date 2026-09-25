@@ -68,6 +68,15 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     if not uids:
         return None, "no_file_unique_id"
 
+    log.info(
+        "UID DEBUG message=%s source_message=%s media_type=%s collections=%s uids=%s",
+        getattr(message, "message_id", None),
+        getattr(source_message, "message_id", None),
+        media.media_type,
+        collections,
+        uids,
+    )
+
     # Query only Telegram native file_unique_id values. Mongo multikey indexes
     # on file_unique_ids and the scalar legacy field keep this exact fallback
     # fast without downloading media.
@@ -78,7 +87,34 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         }
         doc = await characters.find_one(query)
         if doc:
+            log.info(
+                "UID DEBUG source_match message=%s source=%s name=%s",
+                getattr(message, "message_id", None),
+                doc.get("source_key"),
+                doc.get("name"),
+            )
             return doc, "uid"
+
+        # Diagnostic-only global probe on a source miss. This never changes
+        # auto-lookup behavior; it only identifies cross-source UID matches.
+        probe = await characters.find_one(
+            _uid_query(uids),
+            {"_id": 1, "name": 1, "source_key": 1},
+        )
+        if probe:
+            log.warning(
+                "UID DEBUG cross_source_match message=%s requested_sources=%s db_source=%s name=%s",
+                getattr(message, "message_id", None),
+                collections,
+                probe.get("source_key"),
+                probe.get("name"),
+            )
+        else:
+            log.warning(
+                "UID DEBUG database_uid_miss message=%s requested_sources=%s",
+                getattr(message, "message_id", None),
+                collections,
+            )
 
     # Manual lookup may recover globally after the source-scoped exact match
     # fails. Auto lookup stays strictly source-scoped.
