@@ -142,7 +142,7 @@ def format_result(doc: dict) -> str:
 
 @router.message(Command("auth"))
 async def auth_user(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     target = getattr(message, "reply_to_message", None)
     user_id = getattr(getattr(target, "from_user", None), "id", None) if target else None
@@ -173,7 +173,7 @@ async def auth_user(message: Message):
 
 @router.message(Command("unauth"))
 async def unauth_user(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     target = getattr(message, "reply_to_message", None)
     user_id = getattr(getattr(target, "from_user", None), "id", None) if target else None
@@ -195,7 +195,7 @@ async def unauth_user(message: Message):
 
 @router.message(Command("authlist"))
 async def auth_list(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     rows = await list_authorized()
     if not rows:
@@ -222,7 +222,7 @@ async def start(message: Message):
 
 @router.message(Command("status"))
 async def status(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     helper = await helper_manager.status_text()
     count = await characters.count_documents({})
@@ -238,7 +238,7 @@ async def status(message: Message):
 
 @router.message(Command("stats"))
 async def stats(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     count = await characters.count_documents({})
     await message.reply(
@@ -252,14 +252,14 @@ async def stats(message: Message):
 
 @router.message(Command("helperstatus"))
 async def helper_status(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     await message.reply(await helper_manager.status_text())
 
 
 @router.message(Command("addingstatus"))
 async def adding_status(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     await message.reply(
         "📥 <b>Adding Helper</b>\n"
@@ -276,9 +276,9 @@ async def adding_ingest(message: Message):
     is_forwarded = bool(getattr(message, "forward_origin", None) or getattr(message, "forward_from_chat", None))
     helper_user_id = helper_userbot.user_id
     is_helper_inline = bool(helper_user_id and getattr(message.from_user, "id", None) == helper_user_id)
+    current_user_id = getattr(getattr(message, "from_user", None), "id", None)
     is_authorized_sender = bool(
-        getattr(message, "from_user", None)
-        and await is_authorized(getattr(message.from_user, "id", None))
+        current_user_id and await is_authorized(current_user_id)
     )
     if not is_forwarded and not is_helper_inline and not is_authorized_sender:
         log.info(
@@ -386,7 +386,7 @@ HELPER_COMMANDS = [
 
 @router.message(Command(*HELPER_COMMANDS))
 async def helper_commands(message: Message):
-    if not owner(message):
+    if not await has_admin_access(message):
         return
     await helper_manager.handle_command(message)
 
