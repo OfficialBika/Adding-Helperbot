@@ -123,6 +123,14 @@ async def save_character(
 
     source_key = (source_key or "unknown").strip().lower()
     character_id = str(character_id).strip() if character_id is not None and str(character_id).strip() else None
+
+    # Exact UID invariant: real media records are never persisted without
+    # Telegram's native file_unique_id. Metadata-only records are exempt.
+    if media_type != "metadata" and not str(file_unique_id or "").strip() and not any(
+        str(x).strip() for x in (file_unique_ids or []) if x is not None
+    ):
+        log.error("reject media without file_unique_id source=%s name=%s type=%s", source_key, name, media_type)
+        return {"status": "skipped", "document": None, "reason": "missing_file_unique_id"}
     # Telegram file_unique_id is the exact media identity. Keep every UID
     # supplied by Telegram (especially all PhotoSize variants), de-duplicated
     # without normalization that could alter the identifier.
