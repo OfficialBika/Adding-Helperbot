@@ -142,7 +142,7 @@ def format_result(doc: dict) -> str:
 
 @router.message(Command("auth"))
 async def auth_user(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     target = getattr(message, "reply_to_message", None)
     user_id = getattr(getattr(target, "from_user", None), "id", None) if target else None
@@ -173,7 +173,7 @@ async def auth_user(message: Message):
 
 @router.message(Command("unauth"))
 async def unauth_user(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     target = getattr(message, "reply_to_message", None)
     user_id = getattr(getattr(target, "from_user", None), "id", None) if target else None
@@ -195,7 +195,7 @@ async def unauth_user(message: Message):
 
 @router.message(Command("authlist"))
 async def auth_list(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     rows = await list_authorized()
     if not rows:
