@@ -79,6 +79,11 @@ async def ensure_indexes():
         ([("sha256", 1)], "idx_global_sha256"),
         ([("sha256_aliases", 1)], "idx_global_sha256_alias"),
         ([("file_unique_ids", 1)], "idx_global_file_uid"),
+        # Legacy exact Telegram UID fields used by older imported records.
+        ([("file_unique_id", 1)], "idx_legacy_file_uid"),
+        ([("photo_file_unique_id", 1)], "idx_legacy_photo_file_uid"),
+        ([("video_file_unique_id", 1)], "idx_legacy_video_file_uid"),
+        ([("media.file_unique_id", 1)], "idx_legacy_media_file_uid"),
         ([("video_signature", 1)], "idx_global_video_signature"),
         ([("updated_at", -1)], "idx_updated_at"),
     ]
