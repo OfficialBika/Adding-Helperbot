@@ -30,7 +30,7 @@ def _photo_uids(source_message: Message) -> list[str]:
     return values
 
 
-async def lookup_message(bot: Bot, message: Message):
+async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: bool = False):
     """Exact Telegram file_unique_id lookup only.
 
     No SHA-256, pHash, video similarity, filename, message-id, or download
@@ -42,7 +42,7 @@ async def lookup_message(bot: Bot, message: Message):
 
     source_message = media.source_message
     collections = _scope(source_message)
-    if not collections:
+    if not collections and not allow_global_fallback:
         return None, "source_unknown"
 
     uids = _photo_uids(source_message) if media.media_type == "photo" else []
@@ -56,16 +56,17 @@ async def lookup_message(bot: Bot, message: Message):
     # Query only Telegram native file_unique_id values. Mongo multikey indexes
     # on file_unique_ids and the scalar legacy field keep this exact fallback
     # fast without downloading media.
-    query = {
-        "source_key": {"$in": collections},
-        "$or": [
-            {"file_unique_ids": {"$in": uids}},
-            {"telegram_file_unique_id": {"$in": uids}},
-        ],
-    }
-    doc = await characters.find_one(query)
-    if doc:
-        return doc, "uid"
+    if collections:
+        query = {
+            "source_key": {"$in": collections},
+            "$or": [
+                {"file_unique_ids": {"$in": uids}},
+                {"telegram_file_unique_id": {"$in": uids}},
+            ],
+        }
+        doc = await characters.find_one(query)
+        if doc:
+            return doc, "uid"
 
     # Source-scoped lookup is the first and preferred path. If the resolver
     # identifies a source but that source has no exact UID match, do one
