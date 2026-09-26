@@ -417,7 +417,18 @@ class HelperManager:
             if cmd in starts or cmd in resumes:
                 try:
                     if cmd in resumes:
-                        count, delay = self._resume_args(text)
+                        # Catch FW can resume from its persisted helper index
+                        # when no count is supplied; an explicit count still wins.
+                        if (
+                            key == "catch"
+                            and len((text or "").split()) == 1
+                            and self._state.get("source") == key
+                            and self._state.get("mode") == "forward"
+                        ):
+                            count = max(0, int(self._state.get("current_index", 0) or 0))
+                            delay = max(1, min(int(self._state.get("delay", DEFAULT_DELAY) or DEFAULT_DELAY), MAX_DELAY))
+                        else:
+                            count, delay = self._resume_args(text)
                     else:
                         count, delay = None, self._start_delay(text)
                     await self.start_forward(key, delay, count if cmd in resumes else None)
