@@ -43,6 +43,7 @@ FORWARD_SOURCES = {
     "seizer": "@Seizer_Database",
     "waifux": "@WAIFUXGRAB_DATABASE",
     "senpai": "@fafafawfawfa",
+    "catch": "@Character_Catcher_Logs",
     "bika": "-1003923540741",
     "ziceko": "@zicekodata_1",
     "orin": "@timunagalaya",
