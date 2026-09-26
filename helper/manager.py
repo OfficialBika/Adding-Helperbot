@@ -408,6 +408,8 @@ class HelperManager:
             f"Mode: <code>{self._state.get('mode', '-')}</code>\n"
             f"Source: <code>{self._state.get('source', '-')}</code>\n"
             f"Index: <code>{self._state.get('current_index', 0)}</code>\n"
+            f"Total: <code>{self._state.get('total_items', '-')}</code>\n"
+            f"History scan: <code>{'YES' if self._state.get('history_scanning') else 'NO'}</code>\n"
             f"Next ID: <code>{self._state.get('next_id', '-')}</code>\n"
             f"Not Found Streak: <code>{self._state.get('consecutive_not_found', 0)}</code>\n"
             f"Delay: <code>{self._state.get('delay', DEFAULT_DELAY)}s</code>\n"
