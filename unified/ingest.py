@@ -238,7 +238,7 @@ async def ingest_message(
                 media_type,
                 len(data),
                 name,
-                character_id,
+                stored_character_id,
             )
             hashed = await asyncio.to_thread(
                 hash_photo if media_type == "photo" else hash_video,
@@ -309,7 +309,7 @@ async def ingest_message(
             source_key,
             getattr(target, "message_id", None),
             name,
-            character_id,
+            stored_character_id,
             saved.get("status") if isinstance(saved, dict) else "unknown",
         )
         return saved
