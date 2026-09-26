@@ -451,6 +451,8 @@ class HelperManager:
             "/startdaobot [delay]\n"
             "/resumedaobot &lt;count&gt; [delay]\n"
             "/startsenpaibot [delay]\n"
-            "/resumesenpaibot &lt;next_id&gt; [delay]\n\n"
+            "/resumesenpaibot &lt;next_id&gt; [delay]\n"
+            "/startfwcatchbot [delay]\n"
+            "/resumefwcatchbot &lt;count&gt; [delay]\n\n"
             "Controls: /helperstatus /stophelper /resethelperprogress"
         )
