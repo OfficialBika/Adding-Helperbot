@@ -81,6 +81,7 @@ def _clean_title(value: str | None) -> str:
 TITLE_SOURCE_COLLECTION: dict[str, str] = {
     "character catcher": "items_character_catcher",
     "character catcher bot": "items_character_catcher",
+    "character catcher logs": "items_character_catcher_fw",
     "characters hallow": "items_characters_hallow",
     "hallow upload": "items_characters_hallow",
     "hallow uploads": "items_characters_hallow",
