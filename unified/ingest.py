@@ -207,6 +207,11 @@ async def ingest_message(
 
     command = output_command_from_message(target, source_key) or "/name"
 
+    # Catch Log forward records intentionally omit the legacy character ID.
+    # The media UIDs + hashes remain the lookup identities, so the FW dataset
+    # does not depend on the source bot's internal numeric ID.
+    stored_character_id = None if source_key == "items_character_catcher_fw" else character_id
+
     try:
         file_id = media_info["file_id"] if media_info else ""
         data = None
@@ -286,7 +291,7 @@ async def ingest_message(
 
         saved = await save_character(
             name=name,
-            character_id=character_id,
+            character_id=stored_character_id,
             command=command,
             source_key=source_key,
             media_type=media_type,
