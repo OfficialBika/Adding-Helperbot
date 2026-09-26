@@ -86,6 +86,55 @@ def _myanmar_name(text: str) -> str | None:
     return None
 
 
+def _catch_log_name(text: str) -> str | None:
+    """Parse Character_Catcher_Logs event captions.
+
+    The log channel emits several caption shapes for the same character:
+    changed-name events, image updates, event updates, and normal
+    "added new Character" cards. Only the character name is returned.
+    """
+    raw = norm(text)
+    if not raw:
+        return None
+
+    # Name-change event: prefer the New Name field over the old name.
+    m = re.search(
+        r"(?:^|\n)\s*New\s+Name\s*[:：]\s*(.+?)\s*(?:\n|$)",
+        raw,
+        re.I,
+    )
+    if m:
+        value = clean_name(m.group(1))
+        if value:
+            return value
+
+    # Image/event update captions: "... for Character Nicole Demara [emoji]".
+    for label in (r"changed\s+event\s+for", r"updated\s+image\s+for"):
+        m = re.search(
+            rf"\b{label}\s+Character\s+(.+?)(?:\n|$)",
+            raw,
+            re.I,
+        )
+        if m:
+            value = re.sub(r"\s+\[[^\]\n]*\]\s*$", "", m.group(1)).strip()
+            value = clean_name(value)
+            if value:
+                return value
+
+    # Some logs may put the character directly after "added new Character".
+    m = re.search(
+        r"\badded\s+new\s+Character[ \t]+(.+?)(?:\n|$)",
+        raw,
+        re.I,
+    )
+    if m:
+        value = clean_name(m.group(1))
+        if value:
+            return value
+
+    return None
+
+
 def _senpai_name(text: str) -> str | None:
     for line in norm(text).splitlines():
         v = _line_label_value(line, r"(?:👤\s*)?NAME")
@@ -204,7 +253,7 @@ def extract_name(text: str | None) -> str | None:
     if not raw:
         return None
 
-    for parser in (_senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
+    for parser in (_catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name
