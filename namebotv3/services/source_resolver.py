@@ -37,7 +37,7 @@ class LookupScope:
 
 LOOKUP_COLLECTION_ORDER = [c for c in COLLECTION_TO_OUTPUT_COMMAND if c != "items_unknown"]
 COMMAND_TO_COLLECTIONS: dict[str, list[str]] = {
-    "/catch": ["items_character_catcher"],
+    "/catch": ["items_character_catcher", "items_character_catcher_fw"],
     "/hallow": ["items_characters_hallow"],
     "/capture": ["items_capture_character"],
     "/seize": ["items_character_seizer"],
@@ -388,8 +388,13 @@ def resolve_lookup_scope(message: Message) -> LookupScope:
     command = command or content_command
     label = source_username(message) or source_title(message)
     if source_collection:
+        source_collections = (
+            [source_collection, "items_character_catcher_fw"]
+            if source_collection == "items_character_catcher"
+            else [source_collection]
+        )
         return LookupScope(
-            [source_collection], "source", command or COLLECTION_TO_OUTPUT_COMMAND.get(source_collection),
+            source_collections, "source", command or COLLECTION_TO_OUTPUT_COMMAND.get(source_collection),
             source_collection, settings.strict_forward_source_lookup, True, label,
         )
     command_collections = collections_from_command(command)
