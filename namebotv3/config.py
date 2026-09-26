@@ -126,6 +126,7 @@ def _supported_bots() -> list[tuple[str, str]]:
 
 COLLECTION_TO_OUTPUT_COMMAND: Dict[str, str] = {
     "items_character_catcher": "/catch",
+    "items_character_catcher_fw": "/catch",
     "items_characters_hallow": "/hallow",
     "items_capture_character": "/capture",
     "items_character_seizer": "/seize",
@@ -165,6 +166,7 @@ COMMAND_TO_COLLECTION: Dict[str, str] = {
 
 BOT_SOURCE_COLLECTION: Dict[str, str] = {
     "@character_catcher_bot": "items_character_catcher",
+    "@character_catcher_logs": "items_character_catcher_fw",
     "@characters_hallow_bot": "items_characters_hallow",
     "@hallowuploads": "items_characters_hallow",
     "@capturecharacterbot": "items_capture_character",
@@ -226,6 +228,7 @@ BOT_SOURCE_USER_ID: Dict[int, str] = {
 }
 
 BOT_SOURCE_OUTPUT_COMMAND: Dict[str, str] = {
+    "@character_catcher_logs": "/catch",
     "@characterlootbot": "/loot",
     "@super_zeko_bot": "/ziceko",
     "@zicekodata_1": "/ziceko",
