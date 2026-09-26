@@ -310,33 +310,83 @@ class HelperManager:
             raise RuntimeError(f"No forward source configured for {key}")
         if key in self.runners and not self.runners[key].task.done():
             raise RuntimeError(f"{key} is already running")
-        media = []
-        async for msg in self.client.get_chat_history(source):
-            if msg.media:
-                media.append(int(msg.id))
-        media.reverse()
-        start = int(resume_count or 0)
-        if start >= len(media):
-            raise RuntimeError(f"Resume index {start} is at/after the end ({len(media)})")
-        self._state.update({"source": key, "mode": "forward", "current_index": start, "delay": delay, "running": True})
+
+        start = max(0, int(resume_count or 0))
+        delay = max(1, min(int(delay), MAX_DELAY))
+
+        # IMPORTANT: never scan Telegram history inside the command handler.
+        # GetHistory is rate-limited and can take many seconds; doing it here
+        # makes /startfw... appear to hang and prevents the bot from replying.
+        self._state.update({
+            "source": key,
+            "mode": "forward",
+            "current_index": start,
+            "delay": delay,
+            "running": True,
+            "last_error": "",
+            "history_scanning": True,
+        })
         self._save()
-        task = asyncio.create_task(self._forward_worker(key, source, media, start, delay))
+
+        task = asyncio.create_task(
+            self._forward_worker(key, source, start, delay)
+        )
         self.runners[key] = Runner(task, key, "forward")
 
-    async def _forward_worker(self, key, source, media, start, delay):
+    async def _forward_worker(self, key, source, start, delay):
+        media = []
         try:
-            for i in range(start, len(media)):
-                await self.client.forward_messages(self.runtime.adding_chat_id, source, media[i])
-                self._state.update({"source": key, "current_index": i + 1, "running": True})
+            # Telegram returns chat history newest -> oldest. Build the media
+            # message-ID list in the background, then reverse it so forwarding
+            # remains chronological exactly like the previous implementation.
+            async for msg in self.client.get_chat_history(source):
+                if msg.media:
+                    media.append(int(msg.id))
+
+            media.reverse()
+            total = len(media)
+
+            if start >= total:
+                raise RuntimeError(
+                    f"Resume index {start} is at/after the end ({total})"
+                )
+
+            self._state.update({
+                "source": key,
+                "mode": "forward",
+                "current_index": start,
+                "total_items": total,
+                "delay": delay,
+                "running": True,
+                "history_scanning": False,
+                "last_error": "",
+            })
+            self._save()
+
+            for i in range(start, total):
+                await self.client.forward_messages(
+                    self.runtime.adding_chat_id,
+                    source,
+                    media[i],
+                )
+                self._state.update({
+                    "source": key,
+                    "current_index": i + 1,
+                    "total_items": total,
+                    "running": True,
+                    "history_scanning": False,
+                })
                 self._save()
                 await asyncio.sleep(delay)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self._state["last_error"] = str(exc)
+            self._state["history_scanning"] = False
             log.exception("forward helper failed: %s", key)
         finally:
             self._state["running"] = False
+            self._state["history_scanning"] = False
             self._save()
             self.runners.pop(key, None)
 
@@ -432,7 +482,17 @@ class HelperManager:
                     else:
                         count, delay = None, self._start_delay(text)
                     await self.start_forward(key, delay, count if cmd in resumes else None)
-                    await message.reply(f"{'Resumed' if cmd in resumes else 'Started'} forward {key}. Delay: {delay}s")
+                    action = "Resumed" if cmd in resumes else "Started"
+                    if cmd in resumes and count is not None:
+                        detail = f" from index {count}"
+                    else:
+                        detail = ""
+                    await message.reply(
+                        f"✅ {action} forward {key}{detail}.\n"
+                        f"Source: {source}\n"
+                        f"Delay: {delay}s\n"
+                        "History scan is running in background."
+                    )
                 except Exception as exc:
                     await message.reply(f"Forward helper error: {exc}")
                 return True
