@@ -304,7 +304,13 @@ class HelperManager:
             self._save()
             self.runners.pop(key, None)
 
-    async def start_forward(self, key, delay=DEFAULT_DELAY, resume_count=None):
+    async def start_forward(
+        self,
+        key,
+        delay=DEFAULT_DELAY,
+        resume_count=None,
+        media_filter=None,
+    ):
         source = FORWARD_SOURCES.get(key)
         if not source:
             raise RuntimeError(f"No forward source configured for {key}")
@@ -313,13 +319,20 @@ class HelperManager:
 
         start = max(0, int(resume_count or 0))
         delay = max(1, min(int(delay), MAX_DELAY))
+        media_filter = str(media_filter or "").strip().lower() or None
+
+        if media_filter not in {None, "video"}:
+            raise ValueError(f"Unsupported media filter: {media_filter}")
+
+        state_mode = "forward_video" if media_filter == "video" else "forward"
 
         # IMPORTANT: never scan Telegram history inside the command handler.
         # GetHistory is rate-limited and can take many seconds; doing it here
         # makes /startfw... appear to hang and prevents the bot from replying.
         self._state.update({
             "source": key,
-            "mode": "forward",
+            "mode": state_mode,
+            "media_filter": media_filter,
             "current_index": start,
             "delay": delay,
             "running": True,
@@ -329,18 +342,34 @@ class HelperManager:
         self._save()
 
         task = asyncio.create_task(
-            self._forward_worker(key, source, start, delay)
+            self._forward_worker(
+                key,
+                source,
+                start,
+                delay,
+                media_filter=media_filter,
+            )
         )
-        self.runners[key] = Runner(task, key, "forward")
+        self.runners[key] = Runner(task, key, state_mode)
 
-    async def _forward_worker(self, key, source, start, delay):
+    async def _forward_worker(
+        self,
+        key,
+        source,
+        start,
+        delay,
+        media_filter=None,
+    ):
         media = []
         try:
             # Telegram returns chat history newest -> oldest. Build the media
             # message-ID list in the background, then reverse it so forwarding
             # remains chronological exactly like the previous implementation.
             async for msg in self.client.get_chat_history(source):
-                if msg.media:
+                if media_filter == "video":
+                    if getattr(msg, "video", None):
+                        media.append(int(msg.id))
+                elif msg.media:
                     media.append(int(msg.id))
 
             media.reverse()
@@ -351,9 +380,11 @@ class HelperManager:
                     f"Resume index {start} is at/after the end ({total})"
                 )
 
+            state_mode = "forward_video" if media_filter == "video" else "forward"
             self._state.update({
                 "source": key,
-                "mode": "forward",
+                "mode": state_mode,
+                "media_filter": media_filter,
                 "current_index": start,
                 "total_items": total,
                 "delay": delay,
@@ -371,6 +402,8 @@ class HelperManager:
                 )
                 self._state.update({
                     "source": key,
+                    "mode": state_mode,
+                    "media_filter": media_filter,
                     "current_index": i + 1,
                     "total_items": total,
                     "running": True,
@@ -410,6 +443,7 @@ class HelperManager:
             f"Index: <code>{self._state.get('current_index', 0)}</code>\n"
             f"Total: <code>{self._state.get('total_items', '-')}</code>\n"
             f"History scan: <code>{'YES' if self._state.get('history_scanning') else 'NO'}</code>\n"
+            f"Media filter: <code>{self._state.get('media_filter') or 'all'}</code>\n"
             f"Next ID: <code>{self._state.get('next_id', '-')}</code>\n"
             f"Not Found Streak: <code>{self._state.get('consecutive_not_found', 0)}</code>\n"
             f"Delay: <code>{self._state.get('delay', DEFAULT_DELAY)}s</code>\n"
@@ -463,6 +497,27 @@ class HelperManager:
             except Exception as exc:
                 await message.reply(f"Helper error: {exc}")
             return True
+        # Catch FW video-only backfill. This is deliberately separate from
+        # the normal Catch FW command so /startfwcatchbot keeps its exact behavior.
+        if cmd == "/startfwcatchbotvd":
+            try:
+                delay = self._start_delay(text)
+                await self.start_forward(
+                    "catch",
+                    delay=delay,
+                    media_filter="video",
+                )
+                await message.reply(
+                    "✅ Started forward catch (VIDEO ONLY).\n"
+                    f"Source: {FORWARD_SOURCES['catch']}\n"
+                    f"Delay: {delay}s\n"
+                    "Photo/Animation/Document posts are skipped.\n"
+                    "History scan is running in background."
+                )
+            except Exception as exc:
+                await message.reply(f"Forward helper error: {exc}")
+            return True
+
         for key, source in FORWARD_SOURCES.items():
             starts = (f"/startfw{key}bot", f"/startfw{key}")
             resumes = (f"/resumefw{key}bot", f"/resumefw{key}")
@@ -526,6 +581,7 @@ class HelperManager:
             "/startsenpaibot [delay]\n"
             "/resumesenpaibot &lt;next_id&gt; [delay]\n"
             "/startfwcatchbot [delay]\n"
+            "/startfwcatchbotvd [delay]  (video only)\n"
             "/resumefwcatchbot &lt;count&gt; [delay]\n\n"
             "Controls: /helperstatus /stophelper /resethelperprogress"
         )
