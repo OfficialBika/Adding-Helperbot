@@ -342,9 +342,17 @@ async def lookup_media(message: Message):
     if message.chat.type != "private" and not settings.lookup_in_groups:
         return
 
-    # Senpai auto lookup only: keep all other sources strictly source-scoped.
+    # Senpai direct Bot-to-Bot messages: Telegram delivers the original
+    # message from @SenpaiCatcherBot as a bot sender (ID 8532697507).
+    # Handle this path explicitly so it never depends on forward metadata.
+    # Forwarded messages and every other source keep their existing routing.
+    direct_senpai_bot = (
+        getattr(getattr(message, "from_user", None), "id", None) == 8532697507
+        and bool(getattr(getattr(message, "from_user", None), "is_bot", False))
+    )
     senpai_auto_global_uid = (
-        resolve_source_collection(message) == "items_senpai_catcher"
+        direct_senpai_bot
+        or resolve_source_collection(message) == "items_senpai_catcher"
     )
     lookup_target = message
     # Senpai may send its media as a reply to another message. For this bot-to-bot
