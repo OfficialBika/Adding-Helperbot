@@ -342,7 +342,15 @@ async def lookup_media(message: Message):
     if message.chat.type != "private" and not settings.lookup_in_groups:
         return
 
-    doc, reason = await lookup_message(message.bot, message)
+    # Senpai auto lookup only: keep all other sources strictly source-scoped.
+    senpai_auto_global_uid = (
+        resolve_source_collection(message) == "items_senpai_catcher"
+    )
+    doc, reason = await lookup_message(
+        message.bot,
+        message,
+        allow_global_fallback=senpai_auto_global_uid,
+    )
     log.info(
         "LOOKUP chat=%s message=%s result=%s reason=%s",
         message.chat.id,
