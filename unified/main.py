@@ -346,9 +346,14 @@ async def lookup_media(message: Message):
     senpai_auto_global_uid = (
         resolve_source_collection(message) == "items_senpai_catcher"
     )
+    lookup_target = message
+    # Senpai may send its media as a reply to another message. For this bot-to-bot
+    # path, always treat the actual incoming Senpai media as the lookup target.
+    if senpai_auto_global_uid and is_media(message) and getattr(message, "reply_to_message", None):
+        lookup_target = message.model_copy(update={"reply_to_message": None})
     doc, reason = await lookup_message(
         message.bot,
-        message,
+        lookup_target,
         allow_global_fallback=senpai_auto_global_uid,
     )
     log.info(
