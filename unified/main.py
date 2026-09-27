@@ -415,7 +415,7 @@ HELPER_COMMANDS = [
     "startpickerbot", "resumepickerbot", "startzicekobot", "resumezicekobot",
     "startorinbot", "resumeorinbot", "startdaobot", "resumedaobot",
     "startbika", "resumebika", "startsenpaibot", "resumesenpaibot",
-    "startfwcatchbot", "resumefwcatchbot",
+    "startfwcatchbot", "startfwcatchbotvd", "resumefwcatchbot",
     "startsmashbot", "resumesmashbot", "startwaifuxgrabbot", "resumewaifuxgrabbot",
     "startwaifugrabberbot", "resumewaifugrabberbot", "startcatchyourwaifubot",
     "resumecatchyourwaifubot", "startcatchyourhusbandobot", "resumecatchyourhusbandobot",
