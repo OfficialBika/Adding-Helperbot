@@ -121,7 +121,9 @@ def _catch_log_name(text: str) -> str | None:
             if value:
                 return value
 
-    # Some logs may put the character directly after "added new Character".
+    # Some log captions say "added new Character (Video)" and put the
+    # actual character name in a following "Character Name:" field. The
+    # parenthesized media type is metadata, not the character name.
     m = re.search(
         r"\badded\s+new\s+Character[ \t]+(.+?)(?:\n|$)",
         raw,
@@ -129,9 +131,15 @@ def _catch_log_name(text: str) -> str | None:
     )
     if m:
         value = clean_name(m.group(1))
-        if value:
+        if value and not re.fullmatch(
+            r"\((?:video|photo|animation|document|media)\)",
+            value,
+            re.I,
+        ):
             return value
 
+    # If the event header contains only the media type, let the normal
+    # Character Name parser below extract the real name from the labeled field.
     return None
 
 
