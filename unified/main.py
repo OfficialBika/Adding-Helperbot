@@ -280,7 +280,14 @@ async def adding_ingest(message: Message):
     is_authorized_sender = bool(
         current_user_id and await is_authorized(current_user_id)
     )
-    if not is_forwarded and not is_helper_inline and not is_authorized_sender:
+    # Allow only the explicitly requested source bots to send original media
+    # directly into Adding. Existing forwarded/helper/authorized paths remain
+    # unchanged.
+    direct_adding_source_bot = current_user_id in {
+        8688011915,  # @Characters_Hallow_bot
+        8649913814,  # @WaifuxGrabBot
+    } and bool(getattr(getattr(message, "from_user", None), "is_bot", False))
+    if not is_forwarded and not is_helper_inline and not is_authorized_sender and not direct_adding_source_bot:
         log.info(
             "ADDING skip untrusted media message=%s from_user=%s via_bot=%s",
             message.message_id,
