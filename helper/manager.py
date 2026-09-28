@@ -330,6 +330,7 @@ class HelperManager:
                 delay,
                 resume=resume,
                 requested_count=requested_count,
+                prefer_checkpoint=prefer_checkpoint,
             )
         )
         self.runners[key] = Runner(task, key, "inline")
@@ -385,7 +386,7 @@ class HelperManager:
             next_offset = result.next_offset or ""
             if not next_offset:
                 if seen == target:
-                    return "", n, page_number, seen - n, seen, True
+                    return offset, n, page_number, seen - n, seen, True
                 raise RuntimeError(
                     f"Resume count {target} exceeds available results ({seen})"
                 )
@@ -432,8 +433,15 @@ class HelperManager:
 
         return None
 
-    async def _resolve_inline_resume(self, key, bot, progress, requested_count):
-        """Resolve the safest restart point: saved result ID first, then count."""
+    async def _resolve_inline_resume(
+        self,
+        key,
+        bot,
+        progress,
+        requested_count,
+        prefer_checkpoint=True,
+    ):
+        """Resolve the safest restart point: checkpoint when requested, otherwise count."""
         saved_offset = str(progress.get("page_offset", "") or "")
         saved_index = int(progress.get("result_index", 0) or 0)
         saved_page = int(progress.get("page_number", 1) or 1)
@@ -442,7 +450,8 @@ class HelperManager:
 
         # A saved result ID is the strongest checkpoint because inline result
         # pages can move when the source bot changes its database ordering.
-        if last_result_id:
+        # Explicit /resume <count> always wins over the saved checkpoint.
+        if prefer_checkpoint and last_result_id:
             if saved_index > 0:
                 result = await self._get_inline_page(bot, saved_offset)
                 results = result.results or []
@@ -525,6 +534,7 @@ class HelperManager:
         delay,
         resume=False,
         requested_count=0,
+        prefer_checkpoint=True,
     ):
         progress = self._inline_progress(key)
         try:
@@ -541,6 +551,7 @@ class HelperManager:
                     bot,
                     progress,
                     requested_count,
+                    prefer_checkpoint=prefer_checkpoint,
                 )
             else:
                 offset = ""
@@ -1008,6 +1019,7 @@ class HelperManager:
                         delay,
                         resume=True,
                         resume_count=count,
+                        prefer_checkpoint=count is None,
                     )
                     checkpoint = self._inline_progress(key)
                     start_from = int(checkpoint.get("completed_count", 0) or 0)
