@@ -267,6 +267,7 @@ class HelperManager:
         delay=DEFAULT_DELAY,
         resume=False,
         resume_count=None,
+        prefer_checkpoint=True,
     ):
         """Run an inline source with per-source, restart-safe pagination checkpoints."""
         if key in self.runners and not self.runners[key].task.done():
