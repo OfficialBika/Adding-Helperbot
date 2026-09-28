@@ -491,7 +491,6 @@ HELPER_COMMANDS = [
     "startfwwaifuxbot", "resumefwwaifuxbot",
     "startfwwaifux", "resumefwwaifux",
     "startfwsenaibot", "resumefwsenaibot",
-    "startfwsennai", "resumefwsennai",
     "startfwbikabot", "resumefwbikabot",
     "startfwbika", "resumefwbika",
     "startfwzicekobot", "resumefwzicekobot",
