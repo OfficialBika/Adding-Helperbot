@@ -157,16 +157,28 @@ async def save_character(
         ids.append(str(file_id).strip())
     sha = getattr(media_hash, "sha256", None) if media_hash is not None else None
 
-    # Source character ID is the primary identity. A source guarantees that
-    # one character ID refers to one character, so a changed media payload or
-    # renamed character must update that same record instead of creating one.
-    # Media identity remains the fallback for formats without an ID.
-    if character_id:
+    # Most source bots expose a stable character ID, so keep the existing
+    # source+character_id identity for them. Hallow is different: its visible
+    # character IDs can be reused/reset, so using ID as the primary identity
+    # makes a genuinely new Hallow media record look like an update.
+    # Hallow therefore uses Telegram's native file_unique_id as its identity.
+    if source_key == "items_characters_hallow":
+        if uid:
+            key = {"source_key": source_key, "file_unique_ids": uid}
+        elif sha:
+            key = {"source_key": source_key, "sha256": sha}
+        elif character_id:
+            key = {"source_key": source_key, "character_id": character_id}
+        else:
+            key = None
+    elif character_id:
         key = {"source_key": source_key, "character_id": character_id}
     elif sha:
         key = {"source_key": source_key, "sha256": sha}
     elif uid:
         key = {"source_key": source_key, "file_unique_ids": uid}
+    else:
+        key = None
     elif source_origin:
         key = {
             "source_origin.chat_id": source_origin[0],
