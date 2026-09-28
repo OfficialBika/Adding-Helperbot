@@ -176,6 +176,44 @@ def _senpai_inline_name(text: str) -> str | None:
                 return value
     return None
 
+def _waifux_global_name(text: str) -> str | None:
+    """Parse WaifuxGrabBot's Global Character Info card.
+
+    Example::
+        ➤ Tsunade Senju 🟠
+        • Series: Naruto/Boruto
+        • ID: 1
+
+    Only the character name is returned. Trailing rarity/status emoji are
+    treated as card metadata and are never persisted as part of the name.
+    """
+    raw = norm(text)
+    if not raw or not re.search(r"global\\s+character\\s+info", raw, re.I):
+        return None
+
+    for line in raw.splitlines():
+        line = line.strip()
+        m = re.match(r"^➤\\s*(.+?)\\s*$", line)
+        if not m:
+            continue
+
+        value = m.group(1).strip()
+        # Waifux puts rarity/status emoji at the end of this line, e.g. 🟠.
+        # Remove only trailing Unicode symbol/modifier characters, leaving
+        # normal punctuation inside a character name untouched.
+        while value:
+            last = value[-1]
+            if last in "\\ufe0f\\u200d\\u20e3" or unicodedata.category(last) in {"So", "Sk"}:
+                value = value[:-1].rstrip()
+                continue
+            break
+
+        value = clean_name(value)
+        if value:
+            return value
+    return None
+
+
 def _smash_name(text: str) -> str | None:
     raw = norm(text)
     m = re.search(
@@ -261,7 +299,7 @@ def extract_name(text: str | None) -> str | None:
     if not raw:
         return None
 
-    for parser in (_catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
+    for parser in (_waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name
