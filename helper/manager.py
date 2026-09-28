@@ -80,9 +80,29 @@ class HelperManager:
 
     def _save(self):
         try:
-            STATE_PATH.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
+            payload = json.dumps(self._state, ensure_ascii=False, indent=2)
+            # Atomic replace prevents a VPS/PM2 restart from leaving a half-written
+            # checkpoint file. This is helper progress only; MongoDB is untouched.
+            tmp = STATE_PATH.with_name(f"{STATE_PATH.name}.tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(STATE_PATH)
         except Exception:
             log.exception("failed to save helper state")
+
+    def _inline_progress_map(self):
+        progress = self._state.get("inline_progress")
+        if not isinstance(progress, dict):
+            progress = {}
+            self._state["inline_progress"] = progress
+        return progress
+
+    def _inline_progress(self, key):
+        progress = self._inline_progress_map()
+        item = progress.get(key)
+        if not isinstance(item, dict):
+            item = {}
+            progress[key] = item
+        return item
 
     @property
     def client(self):
@@ -241,69 +261,519 @@ class HelperManager:
             self._save()
             self.runners.pop(key, None)
 
-    async def start_inline(self, key, delay=DEFAULT_DELAY, resume_count=None):
+    async def start_inline(
+        self,
+        key,
+        delay=DEFAULT_DELAY,
+        resume=False,
+        resume_count=None,
+    ):
+        """Run an inline source with per-source, restart-safe pagination checkpoints."""
         if key in self.runners and not self.runners[key].task.done():
             raise RuntimeError(f"{key} is already running")
+
         bot, _, _ = SOURCES[key]
         delay = max(1, min(int(delay), MAX_DELAY))
-        offset = ""
-        index = 0
-        sent = int(resume_count or 0)
-        if resume_count:
-            offset, index = await self._locate(bot, int(resume_count))
-        self._state.update({"source": key, "mode": "inline", "current_index": sent, "delay": delay, "running": True})
+        progress = self._inline_progress(key)
+
+        if resume:
+            if resume_count is None:
+                requested_count = max(0, int(progress.get("completed_count", 0) or 0))
+                resume_reason = "saved checkpoint"
+            else:
+                requested_count = max(0, int(resume_count))
+                resume_reason = f"explicit count {requested_count}"
+            reset = False
+        else:
+            requested_count = 0
+            resume_reason = "fresh start"
+            reset = True
+
+        if reset:
+            progress.clear()
+
+        progress.update({
+            "source": key,
+            "bot": bot,
+            "mode": "inline",
+            "status": "running",
+            "phase": "resolving" if resume else "scanning",
+            "resume_reason": resume_reason,
+            "requested_count": requested_count,
+            "completed_count": requested_count if resume and requested_count else 0,
+            "total_items": progress.get("total_items") if resume else None,
+            "scanned_count": int(progress.get("scanned_count", 0) or 0) if resume else 0,
+            "page_number": int(progress.get("page_number", 1) or 1) if resume else 1,
+            "page_offset": str(progress.get("page_offset", "") or "") if resume else "",
+            "page_start_count": int(progress.get("page_start_count", 0) or 0) if resume else 0,
+            "result_index": int(progress.get("result_index", 0) or 0) if resume else 0,
+            "last_result_id": str(progress.get("last_result_id", "") or "") if resume else "",
+            "delay": delay,
+            "running": True,
+            "last_error": "",
+        })
+        self._state.update({
+            "source": key,
+            "mode": "inline",
+            "current_index": progress["completed_count"],
+            "total_items": progress.get("total_items"),
+            "delay": delay,
+            "running": True,
+            "history_scanning": False,
+        })
         self._save()
-        task = asyncio.create_task(self._inline_worker(key, bot, delay, offset, index, sent))
+
+        task = asyncio.create_task(
+            self._inline_worker(
+                key,
+                bot,
+                delay,
+                resume=resume,
+                requested_count=requested_count,
+            )
+        )
         self.runners[key] = Runner(task, key, "inline")
 
-    async def _locate(self, bot, target):
+    async def _get_inline_page(self, bot, offset=""):
+        """Fetch one inline page, waiting through Telegram FloodWaits."""
+        from pyrogram.errors import FloodWait
+
+        while True:
+            try:
+                return await self.client.get_inline_bot_results(
+                    bot,
+                    "",
+                    offset=offset,
+                )
+            except FloodWait as exc:
+                wait_seconds = max(1, int(getattr(exc, "value", 1) or 1))
+                log.warning(
+                    "inline FloodWait bot=%s offset=%s wait=%ss",
+                    bot,
+                    offset,
+                    wait_seconds,
+                )
+                await asyncio.sleep(wait_seconds)
+
+    async def _locate_inline_count(self, bot, target):
+        """Locate an absolute result position by scanning inline pagination once."""
         offset = ""
         seen = 0
-        while True:
-            result = await self.client.get_inline_bot_results(bot, "", offset=offset)
-            n = len(result.results or [])
-            if n <= 0:
-                raise RuntimeError(f"Resume count {target} exceeds available results ({seen})")
-            if seen + n > target:
-                return offset, target - seen
-            seen += n
-            offset = result.next_offset or ""
-            if not offset:
-                raise RuntimeError(f"Resume count {target} exceeds available results ({seen})")
+        page_number = 1
+        visited_offsets = set()
 
-    async def _inline_worker(self, key, bot, delay, offset, index, sent):
+        while True:
+            if offset in visited_offsets:
+                raise RuntimeError(
+                    f"Inline pagination loop detected for {bot} at offset {offset!r}"
+                )
+            visited_offsets.add(offset)
+
+            result = await self._get_inline_page(bot, offset)
+            results = result.results or []
+            n = len(results)
+
+            if n <= 0:
+                raise RuntimeError(
+                    f"Resume count {target} exceeds available results ({seen})"
+                )
+
+            if seen + n > target:
+                return offset, target - seen, page_number, seen, seen + n, False
+
+            seen += n
+            next_offset = result.next_offset or ""
+            if not next_offset:
+                if seen == target:
+                    return "", n, page_number, seen - n, seen, True
+                raise RuntimeError(
+                    f"Resume count {target} exceeds available results ({seen})"
+                )
+
+            offset = next_offset
+            page_number += 1
+
+    async def _locate_inline_result_id(self, bot, target_id):
+        """Find a previously-added result ID and return the position after it."""
+        offset = ""
+        page_number = 1
+        page_start_count = 0
+        visited_offsets = set()
+
+        while True:
+            if offset in visited_offsets:
+                raise RuntimeError(
+                    f"Inline pagination loop detected for {bot} at offset {offset!r}"
+                )
+            visited_offsets.add(offset)
+
+            result = await self._get_inline_page(bot, offset)
+            results = result.results or []
+            if not results:
+                break
+
+            for i, item in enumerate(results):
+                if str(getattr(item, "id", "")) == target_id:
+                    return (
+                        offset,
+                        i + 1,
+                        page_number,
+                        page_start_count,
+                        False,
+                    )
+
+            page_start_count += len(results)
+            next_offset = result.next_offset or ""
+            if not next_offset:
+                break
+
+            offset = next_offset
+            page_number += 1
+
+        return None
+
+    async def _resolve_inline_resume(self, key, bot, progress, requested_count):
+        """Resolve the safest restart point: saved result ID first, then count."""
+        saved_offset = str(progress.get("page_offset", "") or "")
+        saved_index = int(progress.get("result_index", 0) or 0)
+        saved_page = int(progress.get("page_number", 1) or 1)
+        saved_page_start = int(progress.get("page_start_count", 0) or 0)
+        last_result_id = str(progress.get("last_result_id", "") or "")
+
+        # A saved result ID is the strongest checkpoint because inline result
+        # pages can move when the source bot changes its database ordering.
+        if last_result_id:
+            if saved_index > 0:
+                result = await self._get_inline_page(bot, saved_offset)
+                results = result.results or []
+                if (
+                    saved_index <= len(results)
+                    and str(getattr(results[saved_index - 1], "id", "")) == last_result_id
+                ):
+                    scanned = max(
+                        int(progress.get("scanned_count", 0) or 0),
+                        saved_page_start + len(results),
+                    )
+                    return (
+                        saved_offset,
+                        saved_index,
+                        saved_page,
+                        saved_page_start,
+                        scanned,
+                        False,
+                    )
+
+            located = await self._locate_inline_result_id(bot, last_result_id)
+            if located:
+                offset, index, page, page_start, complete = located
+                result = await self._get_inline_page(bot, offset)
+                scanned = page_start + len(result.results or [])
+                return offset, index, page, page_start, scanned, complete
+
+            log.warning(
+                "inline checkpoint result_id=%s no longer exists for %s; "
+                "falling back to count=%s",
+                last_result_id,
+                key,
+                requested_count,
+            )
+
+        return await self._locate_inline_count(bot, requested_count)
+
+    async def _send_inline_result(self, bot, offset, query_id, result_id):
+        """Send one inline result, recovering an expired inline query ID."""
+        from pyrogram.errors import FloodWait
+
+        while True:
+            try:
+                await self.client.send_inline_bot_result(
+                    self.runtime.adding_chat_id,
+                    query_id,
+                    result_id,
+                )
+                return
+            except FloodWait as exc:
+                wait_seconds = max(1, int(getattr(exc, "value", 1) or 1))
+                log.warning(
+                    "inline send FloodWait bot=%s result=%s wait=%ss",
+                    bot,
+                    result_id,
+                    wait_seconds,
+                )
+                await asyncio.sleep(wait_seconds)
+            except Exception as exc:
+                error_text = str(exc).upper()
+                if "QUERY_ID_INVALID" not in error_text and "QUERY_ID_EXPIRED" not in error_text:
+                    raise
+
+                # The query ID can expire while a long page is being drained.
+                # Refresh the same page and send the same result ID with the new
+                # query ID so the checkpoint can remain exact.
+                fresh = await self._get_inline_page(bot, offset)
+                fresh_results = fresh.results or []
+                if not any(str(getattr(item, "id", "")) == str(result_id) for item in fresh_results):
+                    raise RuntimeError(
+                        f"Inline result {result_id} disappeared from {bot} "
+                        f"while refreshing an expired query ID"
+                    ) from exc
+                query_id = fresh.query_id
+
+    async def _inline_worker(
+        self,
+        key,
+        bot,
+        delay,
+        resume=False,
+        requested_count=0,
+    ):
+        progress = self._inline_progress(key)
         try:
+            if resume:
+                (
+                    offset,
+                    index,
+                    page_number,
+                    page_start_count,
+                    discovered,
+                    complete,
+                ) = await self._resolve_inline_resume(
+                    key,
+                    bot,
+                    progress,
+                    requested_count,
+                )
+            else:
+                offset = ""
+                index = 0
+                page_number = 1
+                page_start_count = 0
+                discovered = 0
+                complete = False
+
+            if complete:
+                progress.update({
+                    "status": "complete",
+                    "phase": "complete",
+                    "running": False,
+                    "completed_count": requested_count,
+                    "total_items": discovered,
+                    "scanned_count": discovered,
+                    "page_number": page_number,
+                    "page_offset": offset,
+                    "page_start_count": page_start_count,
+                    "result_index": index,
+                    "last_error": "",
+                })
+                self._state.update({
+                    "source": key,
+                    "mode": "inline",
+                    "current_index": progress["completed_count"],
+                    "total_items": progress["total_items"],
+                    "running": False,
+                    "history_scanning": False,
+                })
+                self._save()
+                return
+
+            progress.update({
+                "status": "running",
+                "phase": "scanning",
+                "page_number": page_number,
+                "page_offset": offset,
+                "page_start_count": page_start_count,
+                "result_index": index,
+                "scanned_count": max(int(progress.get("scanned_count", 0) or 0), discovered),
+                "last_error": "",
+                "running": True,
+            })
+            self._state.update({
+                "current_index": progress.get("completed_count", 0),
+                "total_items": progress.get("total_items"),
+                "running": True,
+            })
+            self._save()
+
+            visited_offsets = set()
             while True:
-                result = await self.client.get_inline_bot_results(bot, "", offset=offset)
+                if offset in visited_offsets:
+                    raise RuntimeError(
+                        f"Inline pagination loop detected for {bot} at offset {offset!r}"
+                    )
+                visited_offsets.add(offset)
+
+                result = await self._get_inline_page(bot, offset)
                 results = result.results or []
                 if not results:
-                    break
-                for i in range(max(0, index), len(results)):
-                    if asyncio.current_task().cancelled():
-                        return
-                    await self.client.send_inline_bot_result(
-                        self.runtime.adding_chat_id,
-                        result.query_id,
-                        results[i].id,
+                    total = max(
+                        int(progress.get("scanned_count", 0) or 0),
+                        page_start_count,
                     )
-                    sent += 1
-                    self._state.update({"source": key, "current_index": sent, "running": True})
+                    progress.update({
+                        "status": "complete",
+                        "phase": "complete",
+                        "running": False,
+                        "completed_count": min(
+                            int(progress.get("completed_count", 0) or 0),
+                            total,
+                        ),
+                        "total_items": total,
+                        "scanned_count": total,
+                        "result_index": 0,
+                        "last_error": "",
+                    })
+                    self._state.update({
+                        "source": key,
+                        "mode": "inline",
+                        "current_index": progress["completed_count"],
+                        "total_items": total,
+                        "running": False,
+                    })
+                    self._save()
+                    return
+
+                discovered = max(discovered, page_start_count + len(results))
+                progress.update({
+                    "page_number": page_number,
+                    "page_offset": offset,
+                    "page_start_count": page_start_count,
+                    "result_index": index,
+                    "scanned_count": discovered,
+                    "total_items": None,
+                    "phase": "scanning",
+                    "running": True,
+                })
+                self._state.update({
+                    "source": key,
+                    "mode": "inline",
+                    "current_index": progress.get("completed_count", 0),
+                    "total_items": None,
+                    "running": True,
+                })
+                self._save()
+
+                for i in range(max(0, index), len(results)):
+                    item = results[i]
+                    result_id = str(getattr(item, "id", "") or "")
+                    if not result_id:
+                        raise RuntimeError(
+                            f"Inline result at page {page_number}, index {i} "
+                            f"has no result ID"
+                        )
+
+                    await self._send_inline_result(
+                        bot,
+                        offset,
+                        result.query_id,
+                        result_id,
+                    )
+
+                    completed_count = page_start_count + i + 1
+                    progress.update({
+                        "page_number": page_number,
+                        "page_offset": offset,
+                        "page_start_count": page_start_count,
+                        "result_index": i + 1,
+                        "completed_count": completed_count,
+                        "scanned_count": discovered,
+                        "total_items": None,
+                        "last_result_id": result_id,
+                        "phase": "scanning",
+                        "status": "running",
+                        "running": True,
+                        "last_error": "",
+                    })
+                    self._state.update({
+                        "source": key,
+                        "mode": "inline",
+                        "current_index": completed_count,
+                        "total_items": None,
+                        "running": True,
+                    })
                     self._save()
                     await asyncio.sleep(delay)
-                offset = result.next_offset or ""
+
+                next_offset = result.next_offset or ""
+                if not next_offset:
+                    total = page_start_count + len(results)
+                    progress.update({
+                        "source": key,
+                        "status": "complete",
+                        "phase": "complete",
+                        "running": False,
+                        "completed_count": total,
+                        "total_items": total,
+                        "scanned_count": total,
+                        "page_number": page_number,
+                        "page_offset": offset,
+                        "page_start_count": page_start_count,
+                        "result_index": len(results),
+                        "last_error": "",
+                    })
+                    self._state.update({
+                        "source": key,
+                        "mode": "inline",
+                        "current_index": total,
+                        "total_items": total,
+                        "running": False,
+                        "history_scanning": False,
+                    })
+                    self._save()
+                    return
+
+                page_start_count += len(results)
+                page_number += 1
+                offset = next_offset
                 index = 0
-                if not offset:
-                    break
+
+                # Persist the next page before fetching it. A restart between
+                # pages therefore resumes exactly at the first result of the
+                # next page instead of replaying the previous page.
+                progress.update({
+                    "page_number": page_number,
+                    "page_offset": offset,
+                    "page_start_count": page_start_count,
+                    "result_index": 0,
+                    "completed_count": page_start_count,
+                    "scanned_count": discovered,
+                    "total_items": None,
+                    "phase": "scanning",
+                    "running": True,
+                })
+                self._state.update({
+                    "source": key,
+                    "mode": "inline",
+                    "current_index": page_start_count,
+                    "total_items": None,
+                    "running": True,
+                })
+                self._save()
         except asyncio.CancelledError:
+            progress["status"] = "stopped"
+            progress["phase"] = "paused"
+            progress["running"] = False
+            progress["last_error"] = ""
+            self._save()
             raise
         except Exception as exc:
-            self._state["last_error"] = str(exc)
+            progress["status"] = "error"
+            progress["phase"] = "paused"
+            progress["running"] = False
+            progress["last_error"] = str(exc)
+            self._state.update({
+                "source": key,
+                "mode": "inline",
+                "current_index": progress.get("completed_count", 0),
+                "total_items": progress.get("total_items"),
+                "running": False,
+                "history_scanning": False,
+            })
+            self._save()
             log.exception("inline helper failed: %s", key)
         finally:
-            self._state["running"] = False
-            self._save()
+            if not asyncio.current_task().cancelled():
+                progress["running"] = False
+                self._save()
             self.runners.pop(key, None)
-
     async def start_forward(
         self,
         key,
@@ -434,21 +904,65 @@ class HelperManager:
 
     async def status_text(self):
         running = [r.source for r in self.runners.values() if not r.task.done()]
-        return (
-            "🛠 <b>HELPER STATUS</b>\n"
-            f"Running: <code>{'YES' if running else 'NO'}</code>\n"
-            f"Jobs: <code>{', '.join(running) or '-'}</code>\n"
-            f"Mode: <code>{self._state.get('mode', '-')}</code>\n"
-            f"Source: <code>{self._state.get('source', '-')}</code>\n"
-            f"Index: <code>{self._state.get('current_index', 0)}</code>\n"
-            f"Total: <code>{self._state.get('total_items', '-')}</code>\n"
-            f"History scan: <code>{'YES' if self._state.get('history_scanning') else 'NO'}</code>\n"
-            f"Media filter: <code>{self._state.get('media_filter') or 'all'}</code>\n"
-            f"Next ID: <code>{self._state.get('next_id', '-')}</code>\n"
-            f"Not Found Streak: <code>{self._state.get('consecutive_not_found', 0)}</code>\n"
-            f"Delay: <code>{self._state.get('delay', DEFAULT_DELAY)}s</code>\n"
-            f"Last error: <code>{self._state.get('last_error', '-')}</code>"
-        )
+        lines = [
+            "🛠 <b>HELPER STATUS</b>",
+            f"Running: <code>{'YES' if running else 'NO'}</code>",
+            f"Jobs: <code>{', '.join(running) or '-'}</code>",
+            "",
+            "<b>INLINE CHECKPOINTS</b>",
+        ]
+
+        inline = self._state.get("inline_progress") or {}
+        if isinstance(inline, dict) and inline:
+            for key in SOURCES:
+                progress = inline.get(key)
+                if not isinstance(progress, dict):
+                    continue
+                status = str(progress.get("status") or "idle")
+                completed = int(progress.get("completed_count", 0) or 0)
+                total = progress.get("total_items")
+                scanned = int(progress.get("scanned_count", 0) or 0)
+                if total is not None:
+                    total = int(total or 0)
+                    percent = (completed / total * 100.0) if total else 100.0
+                    progress_text = f"{completed:,}/{total:,} ({percent:.1f}%)"
+                elif scanned:
+                    progress_text = f"{completed:,}/{scanned:,}+"
+                else:
+                    progress_text = f"{completed:,}/-"
+
+                next_number = completed + 1
+                page = int(progress.get("page_number", 1) or 1)
+                result_index = int(progress.get("result_index", 0) or 0)
+                last_id = str(progress.get("last_result_id", "") or "—")
+                if len(last_id) > 24:
+                    last_id = last_id[:21] + "..."
+
+                lines.extend([
+                    f"• <b>{key}</b> — <code>{status}</code>",
+                    f"  Progress: <code>{progress_text}</code>",
+                    f"  Page/Index: <code>{page}/{result_index}</code>",
+                    f"  Resume from: <code>#{next_number:,}</code>",
+                    f"  Last result: <code>{h(last_id)}</code>",
+                ])
+        else:
+            lines.append("• <code>No inline checkpoint yet.</code>")
+
+        lines.extend([
+            "",
+            "<b>ACTIVE/LEGACY HELPER</b>",
+            f"Mode: <code>{self._state.get('mode', '-')}</code>",
+            f"Source: <code>{self._state.get('source', '-')}</code>",
+            f"Index: <code>{self._state.get('current_index', 0)}</code>",
+            f"Total: <code>{self._state.get('total_items', '-')}</code>",
+            f"History scan: <code>{'YES' if self._state.get('history_scanning') else 'NO'}</code>",
+            f"Media filter: <code>{self._state.get('media_filter') or 'all'}</code>",
+            f"Next ID: <code>{self._state.get('next_id', '-')}</code>",
+            f"Not Found Streak: <code>{self._state.get('consecutive_not_found', 0)}</code>",
+            f"Delay: <code>{self._state.get('delay', DEFAULT_DELAY)}s</code>",
+            f"Last error: <code>{h(str(self._state.get('last_error', '-') or '-'))}</code>",
+        ])
+        return "\n".join(lines)
 
     async def handle_command(self, message):
         text = (message.text or "").strip()
@@ -489,11 +1003,30 @@ class HelperManager:
                             "Auto-stop: 3 consecutive not-found responses."
                         )
                 elif kind == "resume":
-                    await self.start_inline(key, delay, count or 0)
-                    await message.reply(f"Resumed {key}.\\nCount: {count or 0}\\nDelay: {delay}s")
+                    await self.start_inline(
+                        key,
+                        delay,
+                        resume=True,
+                        resume_count=count,
+                    )
+                    checkpoint = self._inline_progress(key)
+                    start_from = int(checkpoint.get("completed_count", 0) or 0)
+                    mode_text = "saved checkpoint" if count is None else f"explicit count {count}"
+                    await message.reply(
+                        f"✅ Resumed {key} from <code>#{start_from:,}</code>.\n"
+                        f"Mode: {mode_text}\n"
+                        f"Source: {SOURCES[key][0]}\n"
+                        f"Delay: {delay}s\n"
+                        "Checkpoint will update after every result."
+                    )
                 else:
-                    await self.start_inline(key, delay)
-                    await message.reply(f"Started {key}.\\nSource: {SOURCES[key][0]}\\nDelay: {delay}s")
+                    await self.start_inline(key, delay, resume=False)
+                    await message.reply(
+                        f"✅ Started {key} from <code>#0</code>.\n"
+                        f"Source: {SOURCES[key][0]}\n"
+                        f"Delay: {delay}s\n"
+                        "Existing progress for this source was reset; other sources are untouched."
+                    )
             except Exception as exc:
                 await message.reply(f"Helper error: {exc}")
             return True
@@ -559,25 +1092,25 @@ class HelperManager:
         return (
             "AddHelper ready ✅\n\n"
             "/startcatchbot [delay]\n"
-            "/resumecatchbot &lt;count&gt; [delay]\n"
+            "/resumecatchbot [count] [delay]\n"
             "/starthallowbot [delay]\n"
-            "/resumehallowbot &lt;count&gt; [delay]\n"
+            "/resumehallowbot [count] [delay]\n"
             "/startcapturebot [delay]\n"
-            "/resumecapturebot &lt;count&gt; [delay]\n"
+            "/resumecapturebot [count] [delay]\n"
             "/startseizerbot [delay]\n"
-            "/resumeseizerbot &lt;count&gt; [delay]\n"
+            "/resumeseizerbot [count] [delay]\n"
             "/startgrabbot [delay]\n"
-            "/resumegrabbot &lt;count&gt; [delay]\n"
+            "/resumegrabbot [count] [delay]\n"
             "/starttakersbot [delay]\n"
-            "/resumetakersbot &lt;count&gt; [delay]\n"
+            "/resumetakersbot [count] [delay]\n"
             "/startpickerbot [delay]\n"
-            "/resumepickerbot &lt;count&gt; [delay]\n"
+            "/resumepickerbot [count] [delay]\n"
             "/startzicekobot [delay]\n"
-            "/resumezicekobot &lt;count&gt; [delay]\n"
+            "/resumezicekobot [count] [delay]\n"
             "/startorinbot [delay]\n"
-            "/resumeorinbot &lt;count&gt; [delay]\n"
+            "/resumeorinbot [count] [delay]\n"
             "/startdaobot [delay]\n"
-            "/resumedaobot &lt;count&gt; [delay]\n"
+            "/resumedaobot [count] [delay]\n"
             "/startsenpaibot [delay]\n"
             "/resumesenpaibot &lt;next_id&gt; [delay]\n"
             "/startfwcatchbot [delay]\n"
