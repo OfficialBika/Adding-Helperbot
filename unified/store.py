@@ -169,6 +169,11 @@ async def save_character(
             key = {"source_key": source_key, "sha256": sha}
         elif character_id:
             key = {"source_key": source_key, "character_id": character_id}
+        elif source_origin:
+            key = {
+                "source_origin.chat_id": source_origin[0],
+                "source_origin.message_id": source_origin[1],
+            }
         else:
             key = None
     elif character_id:
@@ -177,8 +182,6 @@ async def save_character(
         key = {"source_key": source_key, "sha256": sha}
     elif uid:
         key = {"source_key": source_key, "file_unique_ids": uid}
-    else:
-        key = None
     elif source_origin:
         key = {
             "source_origin.chat_id": source_origin[0],
