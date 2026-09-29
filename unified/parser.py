@@ -143,6 +143,21 @@ def _catch_log_name(text: str) -> str | None:
     return None
 
 
+def _catch_your_waifu_name(text: str) -> str | None:
+    """Parse Catch_Your_Waifu_Bot's /w Character Details card."""
+    raw = norm(text)
+    if not raw:
+        return None
+    for line in raw.splitlines():
+        line = line.strip()
+        match = re.match(r"^[•●▪️🔹🔸]\s*(?:Name|Character\s*Name)\s*[:：]\s*(.+?)\s*$", line, re.I)
+        if match:
+            value = clean_name(match.group(1))
+            if value:
+                return value
+    return None
+
+
 def _senpai_name(text: str) -> str | None:
     for line in norm(text).splitlines():
         v = _line_label_value(line, r"(?:👤\s*)?NAME")
@@ -299,7 +314,7 @@ def extract_name(text: str | None) -> str | None:
     if not raw:
         return None
 
-    for parser in (_waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
+    for parser in (_catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name

@@ -13,6 +13,8 @@ log = logging.getLogger("helper-manager")
 STATE_PATH = Path("addhelper_state.json")
 DEFAULT_DELAY = 5
 MAX_DELAY = 30
+CATCH_YOUR_WAIFU_RESPONSE_TIMEOUT = 10
+CATCH_YOUR_WAIFU_MAX_MISSES = 20
 
 # Keep the established Adding/Helper source map and command aliases.
 SOURCES = {
@@ -54,6 +56,7 @@ DM_SOURCES = {
     "catch": ("@CharacterCatcherBot", "/check"),
     "grab": ("@GrabGardenBot", "/check"),
     "senpai": ("@SenpaiCatcherBot", "/see"),
+    "catch_waifu": ("@Catch_Your_Waifu_Bot", "/w"),
     "hallow": ("@CharacterHallowBot", "/show"),
     "takers": ("@TakersBot", "/detect"),
 }
@@ -161,6 +164,131 @@ class HelperManager:
             if cmd in resumes:
                 return key, "resume"
         return None, None
+
+    async def start_catch_your_waifu(self, start_id: int = 1, delay: int = DEFAULT_DELAY):
+        """Sequentially collect Catch_Your_Waifu_Bot /w IDs without inline mode."""
+        key = "catch_waifu"
+        if key in self.runners and not self.runners[key].task.done():
+            raise RuntimeError("catch_waifu is already running")
+        start_id = max(1, int(start_id))
+        delay = max(1, min(int(delay), MAX_DELAY))
+        self._state.update({
+            "source": key,
+            "mode": "catch_your_waifu_w",
+            "next_id": start_id,
+            "consecutive_no_response": 0,
+            "delay": delay,
+            "response_timeout": CATCH_YOUR_WAIFU_RESPONSE_TIMEOUT,
+            "max_no_response": CATCH_YOUR_WAIFU_MAX_MISSES,
+            "running": True,
+        })
+        self._save()
+        task = asyncio.create_task(self._catch_your_waifu_worker(start_id, delay))
+        self.runners[key] = Runner(task, key, "catch_your_waifu_w")
+
+    async def _catch_your_waifu_worker(self, start_id: int, delay: int):
+        key = "catch_waifu"
+        bot, command = DM_SOURCES[key]
+        current_id = max(1, int(start_id))
+        consecutive_no_response = 0
+        q = self.responses.setdefault(key, asyncio.Queue())
+        try:
+            while True:
+                while not q.empty():
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+                await self.client.send_message(bot, f"{command} {current_id}")
+                try:
+                    response = await asyncio.wait_for(
+                        q.get(), timeout=CATCH_YOUR_WAIFU_RESPONSE_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    consecutive_no_response += 1
+                    self._state.update({
+                        "source": key,
+                        "mode": "catch_your_waifu_w",
+                        "last_checked_id": current_id,
+                        "next_id": current_id + 1,
+                        "consecutive_no_response": consecutive_no_response,
+                        "running": True,
+                    })
+                    self._save()
+                    log.warning(
+                        "CatchYourWaifu /w no response id=%s consecutive=%s",
+                        current_id,
+                        consecutive_no_response,
+                    )
+                    if consecutive_no_response >= CATCH_YOUR_WAIFU_MAX_MISSES:
+                        log.info(
+                            "CatchYourWaifu auto-stop after %s consecutive no-response IDs at id=%s",
+                            CATCH_YOUR_WAIFU_MAX_MISSES,
+                            current_id,
+                        )
+                        break
+                    current_id += 1
+                    await asyncio.sleep(delay)
+                    continue
+
+                # Any actual bot response resets the no-response streak. Only
+                # media-bearing responses are forwarded to Adding because the
+                # lookup DB requires media identity; text-only replies are logged
+                # and skipped without stopping the sequence.
+                consecutive_no_response = 0
+                has_media = bool(
+                    getattr(response, "photo", None)
+                    or getattr(response, "video", None)
+                    or getattr(response, "animation", None)
+                    or getattr(response, "document", None)
+                )
+                response_text = "\\n".join(
+                    str(v) for v in (
+                        getattr(response, "text", None),
+                        getattr(response, "caption", None),
+                    ) if isinstance(v, str) and v.strip()
+                )
+                if has_media:
+                    await self.client.forward_messages(
+                        self.runtime.adding_chat_id,
+                        response.chat.id,
+                        response.id,
+                    )
+                    log.info(
+                        "CatchYourWaifu forwarded id=%s response=%s text=%r",
+                        current_id,
+                        response.id,
+                        response_text[:180],
+                    )
+                else:
+                    log.info(
+                        "CatchYourWaifu response without media id=%s response=%s text=%r",
+                        current_id,
+                        response.id,
+                        response_text[:180],
+                    )
+
+                self._state.update({
+                    "source": key,
+                    "mode": "catch_your_waifu_w",
+                    "last_checked_id": current_id,
+                    "next_id": current_id + 1,
+                    "consecutive_no_response": 0,
+                    "running": True,
+                })
+                self._save()
+                current_id += 1
+                await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._state["last_error"] = str(exc)
+            log.exception("CatchYourWaifu /w helper failed")
+        finally:
+            self._state["running"] = False
+            self._save()
+            self.runners.pop(key, None)
 
     async def start_senpai(self, start_id: int = 1, delay: int = DEFAULT_DELAY):
         """Sequentially collect @SenpaiCatcherBot /see IDs through the helper account."""
@@ -994,6 +1122,37 @@ class HelperManager:
             self._save()
             await message.reply("AddHelper progress cleared.")
             return True
+        # Catch_Your_Waifu_Bot is deliberately DM-sequential, not inline.
+        if cmd in {"/startcatchyourwaifubot", "/startcatchyourwaifu"}:
+            try:
+                delay = self._start_delay(text)
+                await self.start_catch_your_waifu(1, delay)
+                await message.reply(
+                    "✅ Started Catch Your Waifu /w from <code>1</code>.\\n"
+                    f"Source: {DM_SOURCES['catch_waifu'][0]}\\n"
+                    f"Command: <code>{DM_SOURCES['catch_waifu'][1]} N</code>\\n"
+                    f"Delay: {delay}s\\n"
+                    f"Response timeout: {CATCH_YOUR_WAIFU_RESPONSE_TIMEOUT}s\\n"
+                    f"Auto-stop: {CATCH_YOUR_WAIFU_MAX_MISSES} consecutive no-response IDs."
+                )
+            except Exception as exc:
+                await message.reply(f"Catch Your Waifu helper error: {exc}")
+            return True
+
+        if cmd in {"/resumecatchyourwaifubot", "/resumecatchyourwaifu"}:
+            try:
+                start_id = max(1, int(self._state.get("next_id", 1) or 1))
+                delay = max(1, min(int(self._state.get("delay", DEFAULT_DELAY) or DEFAULT_DELAY), MAX_DELAY))
+                await self.start_catch_your_waifu(start_id, delay)
+                await message.reply(
+                    f"✅ Resumed Catch Your Waifu /w from <code>{start_id}</code>.\\n"
+                    f"Delay: {delay}s\\n"
+                    f"Auto-stop: {CATCH_YOUR_WAIFU_MAX_MISSES} consecutive no-response IDs."
+                )
+            except Exception as exc:
+                await message.reply(f"Catch Your Waifu helper error: {exc}")
+            return True
+
         key, kind = self._source_for_command(cmd)
         if kind:
             count, delay = self._parse(text)
@@ -1125,6 +1284,8 @@ class HelperManager:
             "/startdaobot [delay]\n"
             "/resumedaobot [count] [delay]\n"
             "/startsenpaibot [delay]\n"
+            "/startcatchyourwaifubot [delay]  (DM /w 1, /w 2, ...; no inline)\n"
+            "/resumecatchyourwaifubot [delay]  (saved next ID)\n"
             "/resumesenpaibot &lt;next_id&gt; [delay]\n"
             "/startfwcatchbot [delay]\n"
             "/startfwcatchbotvd [delay]  (video only)\n"
