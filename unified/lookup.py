@@ -425,14 +425,38 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 global_docs[0].get("name"),
             )
             return global_docs[0], "uid_global_recovery"
+
         if len(global_docs) > 1:
+            # When source scope is unavailable, prefer the primary Catch source
+            # before treating the UID as ambiguous. This changes only the global
+            # UID recovery selection; source-scoped lookup remains untouched.
+            preferred = next(
+                (
+                    doc
+                    for doc in global_docs
+                    if str(doc.get("source_key") or "").strip().lower()
+                    == "items_character_catcher"
+                ),
+                None,
+            )
+            if preferred:
+                log.info(
+                    "UID DEBUG global_exact_priority message=%s preferred_source=%s candidates=%s name=%s",
+                    getattr(message, "message_id", None),
+                    preferred.get("source_key"),
+                    len(global_docs),
+                    preferred.get("name"),
+                )
+                return preferred, "uid_global_recovery"
+
             log.warning(
                 "UID global recovery ambiguous message=%s source=%s candidates=%s",
                 getattr(message, "message_id", None),
                 collections,
                 len(global_docs),
             )
-            # Do not cross-match an ambiguous Telegram UID.
+            # Do not cross-match an ambiguous Telegram UID when the preferred
+            # Catch source is not among the exact global matches.
 
     # UID failed. Now download and compute hashes for BOTH auto and manual.
     # Auto remains source-scoped; manual may go global only when source is unknown.
