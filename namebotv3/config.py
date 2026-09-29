@@ -356,7 +356,7 @@ class Settings:
     enable_hash_fallback: bool = _bool("ENABLE_HASH_FALLBACK", True)
     v3_global_exact_fallback: bool = _bool("V3_GLOBAL_EXACT_FALLBACK", True)
     v3_global_similarity_fallback: bool = _bool("V3_GLOBAL_SIMILARITY_FALLBACK", True)
-
+    # Allow auto lookup to recover an exact Telegram UID when source metadata is absent/different.\n    v3_global_exact_fallback: bool = _bool("V3_GLOBAL_EXACT_FALLBACK", True)\n
     blocked_source_user_ids: Set[int] = field(default_factory=lambda: _ids("BLOCKED_SOURCE_USER_IDS") or {8303168571})
     blocked_source_usernames: Set[str] = field(default_factory=lambda: _normalized_usernames("BLOCKED_SOURCE_USERNAMES", ["@CharactersCatcher_Bot"]))
     blocked_source_titles: List[str] = field(default_factory=lambda: _csv("BLOCKED_SOURCE_TITLES") or ["Character Catcher Bot [Beta]"])
