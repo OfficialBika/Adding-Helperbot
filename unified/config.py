@@ -37,7 +37,7 @@ class Settings:
     lookup_in_private: bool = _bool("LOOKUP_IN_PRIVATE", True)
     lookup_in_groups: bool = _bool("LOOKUP_IN_GROUPS", True)
     reply_not_found: bool = _bool("LOOKUP_REPLY_NOT_FOUND", True)
-
+    # Enable exact Telegram file_unique_id recovery when forwarded media has no source scope.\n    v3_global_exact_fallback: bool = _bool("V3_GLOBAL_EXACT_FALLBACK", True)\n
     run_mode: str = os.getenv("RUN_MODE", "auto").strip().lower()
     public_url: str = os.getenv("PUBLIC_URL", "").rstrip("/")
     webhook_path: str = os.getenv("WEBHOOK_PATH", "/webhook")
