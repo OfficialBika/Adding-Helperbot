@@ -955,7 +955,7 @@ class HelperManager:
                     f"  Progress: <code>{progress_text}</code>",
                     f"  Page/Index: <code>{page}/{result_index}</code>",
                     f"  Resume from: <code>#{next_number:,}</code>",
-                    f"  Last result: <code>{h(last_id)}</code>",
+                    f"  Last result: <code>{last_id}</code>",
                 ])
         else:
             lines.append("• <code>No inline checkpoint yet.</code>")
@@ -972,7 +972,7 @@ class HelperManager:
             f"Next ID: <code>{self._state.get('next_id', '-')}</code>",
             f"Not Found Streak: <code>{self._state.get('consecutive_not_found', 0)}</code>",
             f"Delay: <code>{self._state.get('delay', DEFAULT_DELAY)}s</code>",
-            f"Last error: <code>{h(str(self._state.get('last_error', '-') or '-'))}</code>",
+            f"Last error: <code>{str(self._state.get('last_error', '-') or '-')}</code>",
         ])
         return "\n".join(lines)
 
