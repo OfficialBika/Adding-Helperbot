@@ -411,11 +411,19 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 collections,
             )
 
-    # UID failed. Manual lookup may recover an exact UID globally, but
-    # auto lookup must never cross source boundaries.
+    # UID failed. Manual lookup and forwarded/saved media recovery may use
+    # an exact global UID fallback. This is safe because file_unique_id is
+    # Telegram's native exact media identity. Source-scoped lookup always wins.
     if allow_global_fallback:
         global_docs = await _exact_global_candidates(uids, limit=2)
         if len(global_docs) == 1:
+            log.info(
+                "UID DEBUG global_exact_recovery message=%s requested_sources=%s db_source=%s name=%s",
+                getattr(message, "message_id", None),
+                collections,
+                global_docs[0].get("source_key"),
+                global_docs[0].get("name"),
+            )
             return global_docs[0], "uid_global_recovery"
         if len(global_docs) > 1:
             log.warning(
