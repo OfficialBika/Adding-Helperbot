@@ -357,9 +357,15 @@ async def lookup_media(message: Message):
         getattr(getattr(message, "from_user", None), "id", None) == 8532697507
         and bool(getattr(getattr(message, "from_user", None), "is_bot", False))
     )
+    # Auto lookup uses source-first matching, then the exact Telegram UID
+    # global fallback. This recovers media forwarded from the Adding Group or
+    # another intermediary while preserving source separation because only a
+    # unique exact UID is accepted globally. Similarity fallback stays guarded.
+    auto_global_exact = bool(settings.v3_global_exact_fallback)
     senpai_auto_global_uid = (
         direct_senpai_bot
         or resolve_source_collection(message) == "items_senpai_catcher"
+        or auto_global_exact
     )
     lookup_target = message
     # Senpai may send its media as a reply to another message. For this bot-to-bot
