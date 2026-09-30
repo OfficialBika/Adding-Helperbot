@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import threading
 from collections import OrderedDict
@@ -88,6 +89,7 @@ class LookupRAMCache:
     def __init__(self, max_items: int = 30000):
         self.max_items = max(1000, int(max_items))
         self._data: OrderedDict[tuple[str, str], tuple[str, str, str]] = OrderedDict()
+        self._lock = threading.RLock()
 
     def get(self, uid: str, source: str) -> dict | None:
         key = (_text(uid), _text(source).lower())
@@ -391,21 +393,24 @@ class LookupSQLiteIndex:
             if len(batch) >= 1000:
                 await self._bulk_upsert(batch, populate_ram=False)
                 batch = []
+
         if batch:
             await self._bulk_upsert(batch, populate_ram=False)
 
-        if max_ts:
-            with self._lock:
-                self._meta_set_sync("last_updated_ts", str(max_ts))
-        self._meta_set_sync("build_complete", "1")
-        self._conn.commit()
+        await asyncio.to_thread(self._finish_rebuild, max_ts)
         self._ready = True
+
+    def _finish_rebuild(self, max_ts: float):
+        with self._lock:
+            if max_ts:
+                self._meta_set_sync("last_updated_ts", str(max_ts))
+            self._meta_set_sync("build_complete", "1")
+            self._conn.commit()
 
     async def sync_from_mongo(self):
         await asyncio.to_thread(self._connect_if_needed)
-        schema, build_complete = await asyncio.to_thread(
-            self._read_meta_pair
-        )
+        schema, build_complete = await asyncio.to_thread(self._read_meta_pair)
+
         if schema != str(_SCHEMA_VERSION) or build_complete != "1":
             await self.rebuild_from_mongo()
             return
@@ -415,7 +420,7 @@ class LookupSQLiteIndex:
             await self.rebuild_from_mongo()
             return
 
-        last_ts = _updated_ts(self._meta_get_sync("last_updated_ts"))
+        last_ts = await asyncio.to_thread(self._read_last_updated_ts)
         from_dt = datetime.fromtimestamp(
             max(0.0, last_ts - 60.0),
             tz=timezone.utc,
@@ -430,25 +435,15 @@ class LookupSQLiteIndex:
             if len(batch) >= 1000:
                 await self._bulk_upsert(batch, populate_ram=True)
                 batch = []
+
         if batch:
             await self._bulk_upsert(batch, populate_ram=True)
 
         self._ready = True
 
-    def _connect_if_needed(self):
+    def _read_last_updated_ts(self) -> float:
         with self._lock:
-            self._connect_sync()
-
-    def _locked_clear(self):
-        with self._lock:
-            self._clear_sync()
-
-    def _read_meta_pair(self):
-        with self._lock:
-            return (
-                self._meta_get_sync("schema_version"),
-                self._meta_get_sync("build_complete"),
-            )
+            return _updated_ts(self._meta_get_sync("last_updated_ts"))
 
     async def ensure_ready(self):
         await asyncio.to_thread(self._connect_if_needed)
