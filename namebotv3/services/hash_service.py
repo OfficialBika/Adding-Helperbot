@@ -66,6 +66,7 @@ def crop_hash_distance(a: str | None, b: str | None) -> float | None:
     if not a or not b:
         return None
     try:
+        import imagehash
         left = imagehash.hex_to_multihash(str(a))
         right = imagehash.hex_to_multihash(str(b))
         value = left - right
@@ -114,6 +115,7 @@ def _frame_bundle(frame) -> tuple[str, str]:
 
 
 def _read_sample(cap, frame_count: int, position: float) -> VideoSampleHash | None:
+    import cv2
     index = max(0, min(frame_count - 1, int(frame_count * position)))
     cap.set(cv2.CAP_PROP_POS_FRAMES, index)
     ok, frame = cap.read()
