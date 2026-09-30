@@ -258,6 +258,7 @@ class LookupSQLiteIndex:
         self._conn.execute("DELETE FROM uid_index")
         self._meta_set_sync("last_updated_ts", "0")
         self._meta_set_sync("schema_version", str(_SCHEMA_VERSION))
+        self._meta_set_sync("build_complete", "0")
         self._conn.commit()
         self.ram.clear()
 
@@ -377,12 +378,15 @@ class LookupSQLiteIndex:
 
         if max_ts:
             self._meta_set_sync("last_updated_ts", str(max_ts))
+        self._meta_set_sync("build_complete", "1")
+        self._conn.commit()
         self._ready = True
 
     async def sync_from_mongo(self):
         self._connect_if_needed()
         schema = self._meta_get_sync("schema_version")
-        if schema != str(_SCHEMA_VERSION):
+        build_complete = self._meta_get_sync("build_complete")
+        if schema != str(_SCHEMA_VERSION) or build_complete != "1":
             await self.rebuild_from_mongo()
             return
 
