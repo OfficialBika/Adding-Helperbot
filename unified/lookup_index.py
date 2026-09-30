@@ -354,6 +354,8 @@ class LookupSQLiteIndex:
         }
 
     async def lookup_source(self, uids: list[str], sources: list[str]) -> dict | None:
+        if not self._ready:
+            return None
         return await asyncio.to_thread(self._locked_lookup_source, uids, sources)
 
     def _locked_lookup_source(self, uids: list[str], sources: list[str]) -> dict | None:
@@ -361,6 +363,8 @@ class LookupSQLiteIndex:
             return self._lookup_source_sync(uids, sources)
 
     async def lookup_global(self, uids: list[str], limit: int = 3) -> list[dict]:
+        if not self._ready:
+            return []
         return await asyncio.to_thread(self._locked_lookup_global, uids, limit)
 
     def _locked_lookup_global(self, uids: list[str], limit: int = 3) -> list[dict]:
@@ -380,6 +384,29 @@ class LookupSQLiteIndex:
         if not docs:
             return
         await asyncio.to_thread(self._locked_upsert, docs, populate_ram)
+
+    @property
+    def ready(self) -> bool:
+        return bool(self._ready)
+
+    def _connect_if_needed(self):
+        with self._lock:
+            self._connect_sync()
+
+    def _read_meta_pair(self) -> tuple[str, str]:
+        with self._lock:
+            return (
+                self._meta_get_sync("schema_version"),
+                self._meta_get_sync("build_complete"),
+            )
+
+    def _read_last_updated_ts(self) -> float:
+        with self._lock:
+            return _updated_ts(self._meta_get_sync("last_updated_ts"))
+
+    def _locked_clear(self):
+        with self._lock:
+            self._clear_sync()
 
     async def rebuild_from_mongo(self):
         self._ready = False
