@@ -9,7 +9,7 @@ from aiogram import Bot
 from aiogram.types import Message
 
 from services.hash_service import hamming_hex, hash_photo, hash_video
-from services.source_resolver import resolve_lookup_scope
+from services.source_resolver import resolve_lookup_scope, source_origin_key
 from unified.config import settings
 from unified.store import characters
 from unified.lookup_index import lookup_index
@@ -98,6 +98,48 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
     if doc:
         return doc
     return await characters.find_one({**prefix, **_uid_query_legacy(uids)})
+
+
+
+async def _origin_exact_find(scope: list[str] | None, message: Message):
+    """Recover records from the original forwarded source message identity.
+
+    Some older records may have a valid source-origin record but lack the
+    currently presented Telegram file_unique_id (for example after a historical
+    Telegram file_unique_id migration). This fallback is still source-scoped
+    and only accepts a unique source-origin match.
+    """
+    origin = source_origin_key(message)
+    if not origin:
+        return None
+
+    chat_id, message_id = origin
+    prefix = {"source_key": {"$in": scope}} if scope else {}
+    query = {
+        **prefix,
+        "source_origin.chat_id": int(chat_id),
+        "source_origin.message_id": int(message_id),
+    }
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "file_unique_ids": 1,
+        "telegram_file_unique_id": 1,
+        "source_origin": 1,
+    }
+    docs = await characters.find(query, projection).limit(2).to_list(length=2)
+    if len(docs) == 1:
+        return docs[0]
+    if len(docs) > 1:
+        log.warning(
+            "SOURCE ORIGIN ambiguous chat=%s message=%s sources=%s",
+            chat_id,
+            message_id,
+            [doc.get("source_key") for doc in docs],
+        )
+    return None
 
 
 async def _exact_global_candidates(uids: list[str], limit: int = 2) -> list[dict]:
@@ -458,6 +500,22 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 getattr(message, "message_id", None),
                 collections,
             )
+
+        # Forwarded-source recovery: keep this source-scoped and exact. This
+        # does not replace Telegram UID identity; it only recovers legacy rows
+        # whose source-origin is known but whose UID changed or was not imported.
+        origin_doc = await _origin_exact_find(collections, source_message)
+        if origin_doc:
+            lookup_index.ram.put(origin_doc)
+            log.info(
+                "UID DEBUG source_origin_match message=%s source=%s origin=%s:%s name=%s",
+                getattr(message, "message_id", None),
+                origin_doc.get("source_key"),
+                getattr(getattr(source_message, "forward_origin", None), "chat", None),
+                getattr(getattr(source_message, "forward_origin", None), "message_id", None),
+                origin_doc.get("name"),
+            )
+            return origin_doc, "source_origin"
 
     # UID failed. Manual lookup and forwarded/saved media recovery may use
     # an exact global UID fallback. Source-scoped lookup always wins.
