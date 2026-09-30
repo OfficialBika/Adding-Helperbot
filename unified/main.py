@@ -27,7 +27,7 @@ from unified.config import settings
 from unified.store import characters, close, ensure_indexes
 from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized
 from unified.ingest import ingest_message
-from unified.lookup import lookup_message
+from unified.lookup import lookup_hash_fallback_only, lookup_message
 from unified.lookup_index import lookup_index
 from unified.force_join import force_join
 from helper.runtime import HelperUserbot
@@ -92,6 +92,11 @@ def _ms_text(value: float | None) -> str:
 router = Router(name="unified")
 helper_userbot = HelperUserbot()
 helper_manager = HelperManager(helper_userbot)
+
+# Slow media hashing is kept off the webhook handler. Exact UID/source lookup
+# remains synchronous; hash recovery is completed in a bounded background task.
+_AUTO_HASH_TASKS: set[asyncio.Task] = set()
+_AUTO_HASH_TASK_LIMIT = 24
 
 
 def owner(message: Message) -> bool:
@@ -403,7 +408,7 @@ async def ping(message: Message):
 
 @router.message(Command("status"))
 async def status(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     helper = await helper_manager.status_text()
     count = await characters.count_documents({})
@@ -430,7 +435,7 @@ async def status(message: Message):
 
 @router.message(Command("stats"))
 async def stats(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     count = await characters.count_documents({})
     index_stats = await lookup_index.stats()
@@ -473,6 +478,93 @@ async def adding_status(message: Message):
         f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
         "DM worker/crawler: <code>disabled</code>"
     )
+
+
+async def _background_auto_hash_lookup(
+    placeholder: Message,
+    target: Message,
+    *,
+    allow_global_fallback: bool,
+):
+    try:
+        doc, reason = await asyncio.wait_for(
+            lookup_hash_fallback_only(
+                placeholder.bot,
+                target,
+                allow_global_fallback=allow_global_fallback,
+            ),
+            timeout=max(5, int(settings.auto_hash_timeout_seconds)),
+        )
+        if doc:
+            await placeholder.edit_text(
+                format_result(doc),
+                disable_web_page_preview=True,
+                reply_markup=result_buttons(
+                    type(
+                        "LookupItem",
+                        (),
+                        {
+                            "command": doc.get("command", "/name"),
+                            "name": doc.get("name", ""),
+                        },
+                    )()
+                ),
+            )
+            log.info(
+                "BACKGROUND HASH LOOKUP chat=%s message=%s result=True reason=%s",
+                placeholder.chat.id,
+                target.message_id,
+                reason,
+            )
+            return
+
+        if settings.reply_not_found:
+            await placeholder.edit_text("❌ Character not found.")
+        log.info(
+            "BACKGROUND HASH LOOKUP chat=%s message=%s result=False reason=%s",
+            placeholder.chat.id,
+            target.message_id,
+            reason,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception(
+            "BACKGROUND HASH LOOKUP failed chat=%s message=%s",
+            placeholder.chat.id,
+            target.message_id,
+        )
+        try:
+            if settings.reply_not_found:
+                await placeholder.edit_text("❌ Character not found.")
+        except Exception:
+            pass
+
+
+def _schedule_background_auto_hash(
+    placeholder: Message,
+    target: Message,
+    *,
+    allow_global_fallback: bool,
+) -> bool:
+    if len(_AUTO_HASH_TASKS) >= _AUTO_HASH_TASK_LIMIT:
+        log.warning(
+            "AUTO HASH queue full chat=%s message=%s",
+            placeholder.chat.id,
+            target.message_id,
+        )
+        return False
+
+    task = asyncio.create_task(
+        _background_auto_hash_lookup(
+            placeholder,
+            target,
+            allow_global_fallback=allow_global_fallback,
+        )
+    )
+    _AUTO_HASH_TASKS.add(task)
+    task.add_done_callback(_AUTO_HASH_TASKS.discard)
+    return True
 
 
 @router.message(F.chat.id == settings.adding_chat_id, F.func(is_ingest_candidate))
@@ -590,13 +682,16 @@ async def lookup_media(message: Message):
     # path, always treat the actual incoming Senpai media as the lookup target.
     if senpai_auto_global_uid and is_media(message) and getattr(message, "reply_to_message", None):
         lookup_target = message.model_copy(update={"reply_to_message": None})
+    # Fast phase: exact UID, source-origin and global exact recovery only.
+    # This path must finish quickly and never wait for a Telegram file download.
     doc, reason = await lookup_message(
         message.bot,
         lookup_target,
         allow_global_fallback=senpai_auto_global_uid,
+        allow_hash_fallback=False,
     )
     log.info(
-        "LOOKUP chat=%s message=%s result=%s reason=%s",
+        "LOOKUP FAST chat=%s message=%s result=%s reason=%s",
         message.chat.id,
         message.message_id,
         bool(doc),
@@ -617,7 +712,30 @@ async def lookup_media(message: Message):
                 )()
             ),
         )
-    elif settings.reply_not_found:
+        return
+
+    # Hash recovery is the expensive phase. Run it after sending an immediate
+    # acknowledgement, then edit that acknowledgement instead of keeping the
+    # webhook update open for 10-30+ seconds.
+    if settings.auto_hash_lookup_enabled:
+        try:
+            placeholder = await message.reply("🔎 Looking up…")
+            scheduled = _schedule_background_auto_hash(
+                placeholder,
+                lookup_target,
+                allow_global_fallback=senpai_auto_global_uid,
+            )
+            if not scheduled:
+                await placeholder.edit_text("❌ Character not found.")
+            return
+        except Exception:
+            log.exception(
+                "AUTO hash acknowledgement failed chat=%s message=%s",
+                message.chat.id,
+                message.message_id,
+            )
+
+    if settings.reply_not_found:
         await message.reply("❌ Character not found.")
 
 
