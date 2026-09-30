@@ -2,8 +2,9 @@ services:
   - type: web
     name: bika-adding-lookup
     runtime: python
+    branch: LookupV4
     buildCommand: pip install -r requirements.txt
-    startCommand: python unified/main.py
+    startCommand: python -m unified.main
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
