@@ -414,7 +414,7 @@ async def status(message: Message):
         "♻ <b>ADDING + LOOKUP V4 STATUS</b>\n"
         f"‣ Total Media : <code>{count:,}</code>\n"
         f"‣ Uptime : <code>{_uptime_text()}</code>\n"
-        f"‣ Process RAM : <code>{_process_rss_mb():.1f} MB</code>\n"
+        f"‣ Process Max RAM : <code>{_process_rss_mb():.1f} MB</code>\n"
         f"‣ Adding Group : <code>{settings.adding_chat_id or 'DISABLED'}</code>\n"
         f"‣ Helper Userbot : <code>{helper_state}</code>\n\n"
         "⚡ <b>LOOKUP ENGINE V4</b>\n"
