@@ -666,6 +666,20 @@ async def helper_commands(message: Message):
 
 
 async def lookup_index_sync_worker(stop_event: asyncio.Event):
+    """Build the local snapshot in the background so Render can bind its port first."""
+    try:
+        await lookup_index.ensure_ready()
+        log.info(
+            "LOOKUP V4 index ready path=%s ram_items=%s",
+            settings.lookup_sqlite_path,
+            lookup_index.ram.size(),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Exact Mongo lookup remains available while the local snapshot is unavailable.
+        log.exception("LOOKUP SQLITE initial snapshot build failed")
+
     interval = max(30, int(settings.lookup_index_sync_seconds or 300))
     while not stop_event.is_set():
         try:
@@ -676,7 +690,11 @@ async def lookup_index_sync_worker(stop_event: asyncio.Event):
 
         try:
             await lookup_index.sync_from_mongo()
-            log.info("LOOKUP SQLITE snapshot sync complete")
+            log.info(
+                "LOOKUP SQLITE snapshot sync complete rows=%s ram=%s",
+                (await lookup_index.stats()).get("rows", 0),
+                lookup_index.ram.size(),
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -708,14 +726,6 @@ async def run():
 
     await ensure_indexes()
     await ensure_auth_indexes()
-    await lookup_index.ensure_ready()
-    log.info(
-        "LOOKUP V4 index ready path=%s ram_items=%s",
-        settings.lookup_sqlite_path,
-        lookup_index.ram.size(),
-    )
-    await helper_userbot.start()
-    helper_manager.bind()
 
     bot = Bot(
         settings.bot_token,
@@ -752,6 +762,16 @@ async def run():
         await runner.setup()
         site = web.TCPSite(runner, settings.host, settings.port)
         await site.start()
+        log.info("HTTP port bound on %s:%s", settings.host, settings.port)
+
+        # Port is already open before optional Telegram userbot/index initialization.
+        try:
+            await helper_userbot.start()
+            helper_manager.bind()
+            log.info("Helper userbot ready")
+        except Exception:
+            log.exception("Helper userbot startup failed; lookup bot will continue")
+
         await bot.set_webhook(
             settings.public_url + path,
             secret_token=settings.webhook_secret,
@@ -782,6 +802,15 @@ async def run():
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, settings.host, settings.port).start()
+        log.info("HTTP port bound on %s:%s", settings.host, settings.port)
+
+        try:
+            await helper_userbot.start()
+            helper_manager.bind()
+            log.info("Helper userbot ready")
+        except Exception:
+            log.exception("Helper userbot startup failed; polling will continue")
+
         log.info("Polling ready; Adding mode=forward-only")
         try:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
