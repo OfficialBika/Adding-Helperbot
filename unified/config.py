@@ -56,7 +56,7 @@ class Settings:
     max_video_candidates: int = _int("MAX_VIDEO_CANDIDATES", 1500)
     # LookupV4 local exact-UID acceleration.
     lookup_sqlite_path: str = os.getenv("LOOKUP_SQLITE_PATH", "data/lookup_index.sqlite3").strip() or "data/lookup_index.sqlite3"
-    lookup_ram_cache_max_items: int = _int("LOOKUP_RAM_CACHE_MAX_ITEMS", 30000)
+    lookup_ram_cache_max_items: int = _int("LOOKUP_RAM_CACHE_MAX_ITEMS", 5000)
     lookup_index_sync_seconds: int = _int("LOOKUP_INDEX_SYNC_SECONDS", 300)
 
     # Optional Force Join / membership verification gate for user lookups.
