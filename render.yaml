@@ -58,6 +58,10 @@ services:
         value: "5000"
       - key: LOOKUP_INDEX_SYNC_SECONDS
         value: "300"
+      - key: AUTO_HASH_LOOKUP_ENABLED
+        value: "true"
+      - key: AUTO_HASH_TIMEOUT_SECONDS
+        value: "10"
       - key: FORCE_JOIN_ENABLED
         value: "true"
       - key: FORCE_JOIN_CHANNELS
