@@ -71,6 +71,8 @@ async def ensure_indexes():
         ([("file_ids", 1)], "idx_global_file_id"),
         ([("source_key", 1), ("sha256", 1)], "idx_source_sha256"),
         ([("source_key", 1), ("sha256_aliases", 1)], "idx_source_sha256_alias"),
+        ([("source_key", 1), ("pixel_sha256", 1)], "idx_source_pixel_sha256"),
+        ([("pixel_sha256", 1)], "idx_global_pixel_sha256"),
         ([("source_key", 1), ("phash_chunks", 1)], "idx_source_phash_chunk"),
         ([("source_key", 1), ("dhash_chunks", 1)], "idx_source_dhash_chunk"),
         ([("phash_chunks", 1)], "idx_global_phash_chunk"),
