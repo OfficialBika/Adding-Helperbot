@@ -12,6 +12,7 @@ from services.hash_service import hamming_hex, hash_photo, hash_video
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import characters
+from unified.lookup_index import lookup_index
 from utils.media import extract_media
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,31 @@ def _telegram_uids(message: Message, media_type: str, media_obj) -> list[str]:
     if uid and uid not in values:
         values.append(uid)
     return values
+
+
+
+
+def _ram_exact_find(uids: list[str], collections: list[str]) -> dict | None:
+    for source in collections:
+        for uid in uids:
+            doc = lookup_index.ram.get(uid, source)
+            if doc:
+                return doc
+    return None
+
+
+def _select_global_candidate(candidates: list[dict]) -> dict | None:
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        catch_matches = [
+            doc for doc in candidates
+            if str(doc.get("source_key") or "").strip().lower()
+            == "items_character_catcher"
+        ]
+        if len(catch_matches) == 1:
+            return catch_matches[0]
+    return None
 
 
 def _uid_query_new(uids: list[str]) -> dict:
@@ -385,6 +411,28 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     )
 
     if collections:
+        # LookupV4 hot path: source-aware RAM first, then local SQLite.
+        doc = _ram_exact_find(uids, collections)
+        if doc:
+            log.info(
+                "UID DEBUG ram_match message=%s source=%s name=%s",
+                getattr(message, "message_id", None),
+                doc.get("source_key"),
+                doc.get("name"),
+            )
+            return doc, "uid_ram"
+
+        doc = await lookup_index.lookup_source(uids, collections)
+        if doc:
+            lookup_index.ram.put(doc)
+            log.info(
+                "UID DEBUG sqlite_match message=%s source=%s name=%s",
+                getattr(message, "message_id", None),
+                doc.get("source_key"),
+                doc.get("name"),
+            )
+            return doc, "uid_sqlite"
+
         doc = await _exact_find(collections, uids)
         if doc:
             log.info(
@@ -412,10 +460,21 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
             )
 
     # UID failed. Manual lookup and forwarded/saved media recovery may use
-    # an exact global UID fallback. This is safe because file_unique_id is
-    # Telegram's native exact media identity. Source-scoped lookup always wins.
+    # an exact global UID fallback. Source-scoped lookup always wins.
     if allow_global_fallback:
-        global_docs = await _exact_global_candidates(uids, limit=2)
+        sqlite_global = await lookup_index.lookup_global(uids, limit=3)
+        sqlite_selected = _select_global_candidate(sqlite_global)
+        if sqlite_selected:
+            lookup_index.ram.put(sqlite_selected)
+            log.info(
+                "UID DEBUG sqlite_global_recovery message=%s source=%s name=%s",
+                getattr(message, "message_id", None),
+                sqlite_selected.get("source_key"),
+                sqlite_selected.get("name"),
+            )
+            return sqlite_selected, "uid_sqlite_global_recovery"
+
+        global_docs = await _exact_global_candidates(uids, limit=3)
         if len(global_docs) == 1:
             log.info(
                 "UID DEBUG global_exact_recovery message=%s requested_sources=%s db_source=%s name=%s",
