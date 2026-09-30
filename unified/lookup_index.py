@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-import threading
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -89,7 +88,6 @@ class LookupRAMCache:
     def __init__(self, max_items: int = 30000):
         self.max_items = max(1000, int(max_items))
         self._data: OrderedDict[tuple[str, str], tuple[str, str, str]] = OrderedDict()
-        self._lock = threading.RLock()
 
     def get(self, uid: str, source: str) -> dict | None:
         key = (_text(uid), _text(source).lower())
@@ -341,29 +339,24 @@ class LookupSQLiteIndex:
         }
 
     async def lookup_source(self, uids: list[str], sources: list[str]) -> dict | None:
-        with self._lock:
-            return await asyncio.to_thread(self._lookup_source_sync, uids, sources)
+        return self._lookup_source_sync(uids, sources)
 
     async def lookup_global(self, uids: list[str], limit: int = 3) -> list[dict]:
-        with self._lock:
-            return await asyncio.to_thread(self._lookup_global_sync, uids, limit)
+        return self._lookup_global_sync(uids, limit)
 
     async def upsert_document(self, doc: dict):
         if not isinstance(doc, dict):
             return
-        with self._lock:
-            await asyncio.to_thread(self._upsert_docs_sync, [doc])
+        self._upsert_docs_sync([doc])
 
     async def _bulk_upsert(self, docs: list[dict]):
         if not docs:
             return
-        with self._lock:
-            await asyncio.to_thread(self._upsert_docs_sync, docs)
+        self._upsert_docs_sync(docs)
 
     async def rebuild_from_mongo(self):
         self._ready = False
-        with self._lock:
-            await asyncio.to_thread(self._clear_sync)
+        self._clear_sync()
 
         batch: list[dict] = []
         max_ts = 0.0
@@ -377,8 +370,7 @@ class LookupSQLiteIndex:
             await self._bulk_upsert(batch)
 
         if max_ts:
-            with self._lock:
-                await asyncio.to_thread(self._meta_set_sync, "last_updated_ts", str(max_ts))
+            self._meta_set_sync("last_updated_ts", str(max_ts))
         self._ready = True
 
     async def sync_from_mongo(self):
@@ -414,8 +406,7 @@ class LookupSQLiteIndex:
         self._ready = True
 
     def _connect_if_needed(self):
-        with self._lock:
-            self._connect_sync()
+        self._connect_sync()
 
     async def ensure_ready(self):
         self._connect_if_needed()
@@ -424,12 +415,10 @@ class LookupSQLiteIndex:
 
     async def stats(self) -> dict:
         self._connect_if_needed()
-        with self._lock:
-            return await asyncio.to_thread(self._stats_sync)
+        return self._stats_sync()
 
     async def close(self):
-        with self._lock:
-            await asyncio.to_thread(self._close_sync)
+        self._close_sync()
 
     def _close_sync(self):
         if self._conn is not None:
