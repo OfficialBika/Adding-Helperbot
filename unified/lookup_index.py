@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import sqlite3
-import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from unified.store import characters
 from unified.config import settings
+from unified.store import characters
 
 _LOOKUP_PROJECTION = {
     "_id": 1,
@@ -221,12 +219,17 @@ class LookupSQLiteIndex:
             for uid in _doc_uids(doc)
         ]
 
-    def _upsert_docs_sync(self, docs: Iterable[dict]):
+    def _upsert_docs_sync(self, docs: Iterable[dict], *, populate_ram: bool = False):
         self._connect_sync()
+        docs = list(docs)
         rows: list[tuple[str, str, str, str, str, float]] = []
+        max_ts = 0.0
+
         for doc in docs:
             rows.extend(self._record_rows(doc))
-            self.ram.put(doc)
+            max_ts = max(max_ts, _updated_ts(doc.get("updated_at")))
+            if populate_ram:
+                self.ram.put(doc)
 
         if rows:
             self._conn.executemany(
@@ -241,14 +244,12 @@ class LookupSQLiteIndex:
                 """,
                 rows,
             )
-            self._conn.commit()
 
-        for doc in docs:
-            ts = _updated_ts(doc.get("updated_at"))
-            if ts:
-                current = _updated_ts(self._meta_get_sync("last_updated_ts"))
-                if ts > current:
-                    self._meta_set_sync("last_updated_ts", str(ts))
+        if max_ts:
+            current = _updated_ts(self._meta_get_sync("last_updated_ts"))
+            if max_ts > current:
+                self._meta_set_sync("last_updated_ts", str(max_ts))
+
         self._meta_set_sync("schema_version", str(_SCHEMA_VERSION))
         self._conn.commit()
 
@@ -269,21 +270,23 @@ class LookupSQLiteIndex:
 
         uid_marks = ",".join("?" for _ in uids)
         source_marks = ",".join("?" for _ in sources)
-        row = self._conn.execute(
+        rows = self._conn.execute(
             f"""
-            SELECT uid, source_key, name, command
+            SELECT uid, source_key, name, command, updated_ts
             FROM uid_index
             WHERE uid IN ({uid_marks})
               AND source_key IN ({source_marks})
             ORDER BY updated_ts DESC
-            LIMIT 1
+            LIMIT 50
             """,
             [*uids, *sources],
-        ).fetchone()
-        if not row:
+        ).fetchall()
+        if not rows:
             return None
 
-        uid, source_key, name, command = row
+        priority = {source: i for i, source in enumerate(sources)}
+        rows.sort(key=lambda row: (priority.get(row[1], 999), -float(row[4] or 0)))
+        uid, source_key, name, command, _updated_ts_value = rows[0]
         return {
             "name": name,
             "command": command or "/name",
@@ -350,12 +353,12 @@ class LookupSQLiteIndex:
     async def upsert_document(self, doc: dict):
         if not isinstance(doc, dict):
             return
-        self._upsert_docs_sync([doc])
+        self._upsert_docs_sync([doc], populate_ram=True)
 
     async def _bulk_upsert(self, docs: list[dict]):
         if not docs:
             return
-        self._upsert_docs_sync(docs)
+        self._upsert_docs_sync(docs, populate_ram=False)
 
     async def rebuild_from_mongo(self):
         self._ready = False
