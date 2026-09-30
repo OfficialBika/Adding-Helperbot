@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,11 +93,12 @@ class LookupRAMCache:
         key = (_text(uid), _text(source).lower())
         if not key[0] or not key[1]:
             return None
-        item = self._data.get(key)
-        if item is None:
-            return None
-        self._data.move_to_end(key)
-        name, command, source_key = item
+        with self._lock:
+            item = self._data.get(key)
+            if item is None:
+                return None
+            self._data.move_to_end(key)
+            name, command, source_key = item
         return {
             "name": name,
             "command": command,
@@ -111,16 +113,19 @@ class LookupRAMCache:
         command = _text(doc.get("command")) or "/name"
         for uid in _doc_uids(doc):
             key = (uid, source)
-            self._data[key] = (name, command, source)
-            self._data.move_to_end(key)
-            while len(self._data) > self.max_items:
-                self._data.popitem(last=False)
+            with self._lock:
+                self._data[key] = (name, command, source)
+                self._data.move_to_end(key)
+                while len(self._data) > self.max_items:
+                    self._data.popitem(last=False)
 
     def clear(self):
-        self._data.clear()
+        with self._lock:
+            self._data.clear()
 
     def size(self) -> int:
-        return len(self._data)
+        with self._lock:
+            return len(self._data)
 
 
 class LookupSQLiteIndex:
@@ -138,6 +143,7 @@ class LookupSQLiteIndex:
         self.path = Path(path)
         self.ram = LookupRAMCache(ram_cache_max_items)
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.RLock()
         self._ready = False
 
     def _connect_sync(self):
@@ -346,24 +352,36 @@ class LookupSQLiteIndex:
         }
 
     async def lookup_source(self, uids: list[str], sources: list[str]) -> dict | None:
-        return self._lookup_source_sync(uids, sources)
+        return await asyncio.to_thread(self._locked_lookup_source, uids, sources)
+
+    def _locked_lookup_source(self, uids: list[str], sources: list[str]) -> dict | None:
+        with self._lock:
+            return self._lookup_source_sync(uids, sources)
 
     async def lookup_global(self, uids: list[str], limit: int = 3) -> list[dict]:
-        return self._lookup_global_sync(uids, limit)
+        return await asyncio.to_thread(self._locked_lookup_global, uids, limit)
+
+    def _locked_lookup_global(self, uids: list[str], limit: int = 3) -> list[dict]:
+        with self._lock:
+            return self._lookup_global_sync(uids, limit)
 
     async def upsert_document(self, doc: dict):
         if not isinstance(doc, dict):
             return
-        self._upsert_docs_sync([doc], populate_ram=True)
+        await asyncio.to_thread(self._locked_upsert, [doc], True)
+
+    def _locked_upsert(self, docs: list[dict], populate_ram: bool = False):
+        with self._lock:
+            self._upsert_docs_sync(docs, populate_ram=populate_ram)
 
     async def _bulk_upsert(self, docs: list[dict], *, populate_ram: bool = False):
         if not docs:
             return
-        self._upsert_docs_sync(docs, populate_ram=populate_ram)
+        await asyncio.to_thread(self._locked_upsert, docs, populate_ram)
 
     async def rebuild_from_mongo(self):
         self._ready = False
-        self._clear_sync()
+        await asyncio.to_thread(self._locked_clear)
 
         batch: list[dict] = []
         max_ts = 0.0
@@ -377,20 +395,22 @@ class LookupSQLiteIndex:
             await self._bulk_upsert(batch, populate_ram=False)
 
         if max_ts:
-            self._meta_set_sync("last_updated_ts", str(max_ts))
+            with self._lock:
+                self._meta_set_sync("last_updated_ts", str(max_ts))
         self._meta_set_sync("build_complete", "1")
         self._conn.commit()
         self._ready = True
 
     async def sync_from_mongo(self):
-        self._connect_if_needed()
-        schema = self._meta_get_sync("schema_version")
-        build_complete = self._meta_get_sync("build_complete")
+        await asyncio.to_thread(self._connect_if_needed)
+        schema, build_complete = await asyncio.to_thread(
+            self._read_meta_pair
+        )
         if schema != str(_SCHEMA_VERSION) or build_complete != "1":
             await self.rebuild_from_mongo()
             return
 
-        indexed_rows = self._count_sync()
+        indexed_rows = await asyncio.to_thread(self._locked_count)
         if indexed_rows == 0:
             await self.rebuild_from_mongo()
             return
@@ -416,19 +436,43 @@ class LookupSQLiteIndex:
         self._ready = True
 
     def _connect_if_needed(self):
-        self._connect_sync()
+        with self._lock:
+            self._connect_sync()
+
+    def _locked_clear(self):
+        with self._lock:
+            self._clear_sync()
+
+    def _read_meta_pair(self):
+        with self._lock:
+            return (
+                self._meta_get_sync("schema_version"),
+                self._meta_get_sync("build_complete"),
+            )
 
     async def ensure_ready(self):
-        self._connect_if_needed()
+        await asyncio.to_thread(self._connect_if_needed)
         await self.sync_from_mongo()
         self._ready = True
 
     async def stats(self) -> dict:
-        self._connect_if_needed()
-        return self._stats_sync()
+        await asyncio.to_thread(self._connect_if_needed)
+        return await asyncio.to_thread(self._locked_stats)
+
+    def _locked_count(self) -> int:
+        with self._lock:
+            return self._count_sync()
+
+    def _locked_stats(self) -> dict:
+        with self._lock:
+            return self._stats_sync()
 
     async def close(self):
-        self._close_sync()
+        await asyncio.to_thread(self._locked_close)
+
+    def _locked_close(self):
+        with self._lock:
+            self._close_sync()
 
     def _close_sync(self):
         if self._conn is not None:
