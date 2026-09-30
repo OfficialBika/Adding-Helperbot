@@ -192,7 +192,8 @@ async def forcejoin_verify(callback_query):
         return
 
     user_id = int(user.id)
-    if owner(callback_query.message) if getattr(callback_query, "message", None) else False:
+    callback_message = getattr(callback_query, "message", None)
+    if callback_message is not None and owner(callback_message):
         verified = True
         error = ""
     elif settings.force_join_bypass_authorized and await is_authorized(user_id):
