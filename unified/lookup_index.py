@@ -89,8 +89,10 @@ class LookupRAMCache:
     entry is only (name, command, source), keyed by Telegram UID + source.
     """
 
-    def __init__(self, max_items: int = 30000):
-        self.max_items = max(1000, int(max_items))
+    def __init__(self, max_items: int = 5000):
+        # Render Free is memory constrained; keep only a small positive hot cache.
+        # The SQLite index remains the complete exact-UID local index.
+        self.max_items = max(1000, min(5000, int(max_items)))
         self._data: OrderedDict[tuple[str, str], tuple[str, str, str]] = OrderedDict()
         self._lock = threading.RLock()
 
@@ -162,8 +164,9 @@ class LookupSQLiteIndex:
         )
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("PRAGMA cache_size=-32768")
+        conn.execute("PRAGMA temp_store=FILE")
+        # Keep SQLite page cache small on 512 MB Render instances.
+        conn.execute("PRAGMA cache_size=-4096")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
             """
@@ -419,11 +422,11 @@ class LookupSQLiteIndex:
         max_ts = 0.0
         scanned = 0
         log.info("LOOKUP V4 snapshot rebuild started")
-        async for doc in characters.find({}, _LOOKUP_PROJECTION).batch_size(2000):
+        async for doc in characters.find({}, _LOOKUP_PROJECTION).batch_size(500):
             batch.append(doc)
             scanned += 1
             max_ts = max(max_ts, _updated_ts(doc.get("updated_at")))
-            if len(batch) >= 1000:
+            if len(batch) >= 500:
                 await self._bulk_upsert(batch, populate_ram=False)
                 batch = []
             if scanned % 10000 == 0:
@@ -469,7 +472,7 @@ class LookupSQLiteIndex:
         async for doc in characters.find(
             {"updated_at": {"$gt": from_dt}},
             _LOOKUP_PROJECTION,
-        ).sort("updated_at", 1).batch_size(2000):
+        ).sort("updated_at", 1).batch_size(500):
             batch.append(doc)
             if len(batch) >= 1000:
                 await self._bulk_upsert(batch, populate_ram=True)
