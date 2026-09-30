@@ -714,8 +714,16 @@ async def run():
         raise RuntimeError("MONGO_URI is required")
     if not settings.owner_ids:
         raise RuntimeError("OWNER_IDS is required")
+    # ADDING_CHAT_ID is optional for LookupV4 lookup-only deployments.
+    # When it is missing, the Adding-group ingest/Helper forwarding paths stay
+    # disabled, while Bot API lookup, MongoDB, SQLite snapshot and Force Join
+    # continue to run normally. Supplying ADDING_CHAT_ID later re-enables them
+    # without any code change.
     if not settings.adding_chat_id:
-        raise RuntimeError("ADDING_CHAT_ID is required")
+        log.warning(
+            "ADDING_CHAT_ID is not configured; running in lookup-only mode "
+            "(Adding-group ingest/Helper forwarding disabled)"
+        )
 
     mode = settings.run_mode
     if mode not in {"auto", "polling", "webhook"}:
