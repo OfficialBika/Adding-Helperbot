@@ -17,7 +17,8 @@ client = AsyncIOMotorClient(
     serverSelectionTimeoutMS=5000,
     connectTimeoutMS=5000,
     socketTimeoutMS=15000,
-    maxPoolSize=50,
+    maxPoolSize=10,
+    minPoolSize=0,
 )
 db = client[settings.db_name]
 characters = db.characters
