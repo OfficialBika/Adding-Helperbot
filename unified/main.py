@@ -761,7 +761,18 @@ async def run():
         await site.start()
         log.info("HTTP port bound on %s:%s", settings.host, settings.port)
 
-        # Render can detect the open port while Mongo/index initialization runs.
+        # Set the Telegram webhook immediately after the port is available.
+        # Local snapshot/Mongo index building happens independently in the background.
+        try:
+            await bot.set_webhook(
+                settings.public_url + path,
+                secret_token=settings.webhook_secret,
+                drop_pending_updates=True,
+            )
+            log.info("Webhook ready: %s%s", settings.public_url, path)
+        except Exception:
+            log.exception("Webhook setup failed")
+
         try:
             await ensure_indexes()
             await ensure_auth_indexes()
@@ -775,13 +786,6 @@ async def run():
             log.info("Helper userbot ready")
         except Exception:
             log.exception("Helper userbot startup failed; lookup bot will continue")
-
-        await bot.set_webhook(
-            settings.public_url + path,
-            secret_token=settings.webhook_secret,
-            drop_pending_updates=True,
-        )
-        log.info("Webhook ready: %s%s", settings.public_url, path)
         try:
             await asyncio.Event().wait()
         finally:
