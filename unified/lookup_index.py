@@ -300,9 +300,16 @@ class LookupSQLiteIndex:
         uid_marks = ",".join("?" for _ in uids)
         rows = self._conn.execute(
             f"""
-            SELECT uid, source_key, name, command, doc_id, updated_ts
+            SELECT
+                MIN(uid) AS uid,
+                source_key,
+                name,
+                command,
+                doc_id,
+                MAX(updated_ts) AS updated_ts
             FROM uid_index
             WHERE uid IN ({uid_marks})
+            GROUP BY source_key, doc_id, name, command
             ORDER BY updated_ts DESC
             LIMIT ?
             """,
