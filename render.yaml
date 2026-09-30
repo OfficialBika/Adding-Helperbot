@@ -51,6 +51,22 @@ services:
         value: "true"
       - key: LOOKUP_REPLY_NOT_FOUND
         value: "true"
+      - key: LOOKUP_SQLITE_PATH
+        value: data/lookup_index.sqlite3
+      - key: LOOKUP_RAM_CACHE_MAX_ITEMS
+        value: "30000"
+      - key: LOOKUP_INDEX_SYNC_SECONDS
+        value: "300"
+      - key: FORCE_JOIN_ENABLED
+        value: "false"
+      - key: FORCE_JOIN_CHANNELS
+        sync: false
+      - key: FORCE_JOIN_CACHE_TTL_SECONDS
+        value: "60"
+      - key: FORCE_JOIN_CACHE_MAX_USERS
+        value: "10000"
+      - key: FORCE_JOIN_BYPASS_AUTHORIZED
+        value: "true"
       - key: MAX_PHOTO_CANDIDATES
         value: "1200"
       - key: MAX_VIDEO_CANDIDATES
