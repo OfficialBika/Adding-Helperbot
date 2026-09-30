@@ -3,7 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import time
 from pathlib import Path
+
+try:
+    import resource
+except ImportError:  # pragma: no cover
+    resource = None
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "namebotv3"))
@@ -35,6 +41,53 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 log = logging.getLogger("unified")
+PROCESS_STARTED_AT = time.monotonic()
+
+
+def _uptime_text() -> str:
+    seconds = max(0, int(time.monotonic() - PROCESS_STARTED_AT))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _process_rss_mb() -> float:
+    if resource is None:
+        return 0.0
+    try:
+        return float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) / 1024.0
+    except Exception:
+        return 0.0
+
+
+async def _ping_db_ms() -> float | None:
+    try:
+        started = time.perf_counter()
+        await characters.database.command("ping")
+        return (time.perf_counter() - started) * 1000.0
+    except Exception:
+        return None
+
+
+async def _ping_bot_ms(message: Message) -> float | None:
+    try:
+        started = time.perf_counter()
+        await message.bot.get_me()
+        return (time.perf_counter() - started) * 1000.0
+    except Exception:
+        return None
+
+
+def _ms_text(value: float | None) -> str:
+    return "N/A" if value is None else f"{value:.0f} ms"
+
 
 router = Router(name="unified")
 helper_userbot = HelperUserbot()
@@ -329,18 +382,21 @@ async def auth_list(message: Message):
 
 @router.message(Command("start"))
 async def start(message: Message):
-    # /start is a public entry/health command. Admin-only commands remain
-    # protected by has_admin_access(). Helper credentials are never required.
+    # Public entry point. The optional Pyrogram userbot never blocks /start.
     helper_state = "ONLINE" if helper_userbot.client else "DISABLED (optional)"
     await message.reply(
-        "🤖 <b>Adding & Lookup V4</b>\n\n"
-        "Bot API: <code>ONLINE</code>\n"
-        f"Helper Userbot: <code>{helper_state}</code>\n"
-        "Lookup: <code>ONLINE</code>\n\n"
-        "Reply to character media with <code>.w</code> or <code>/w</code> "
-        "for manual lookup."
+        "🇲🇲 <b>မင်္ဂလာပါ။ Bika Adding & Lookup V4 မှ ကြိုဆိုပါတယ်။</b>\n\n"
+        "အသုံးပြုနည်း:\n"
+        "• Group ထဲမှာ photo/video ပို့ရင် auto lookup လုပ်ပေးပါမယ်။\n"
+        "• Media ကို reply ပြန်ပြီး <code>/waifu</code> <code>/w</code> <code>.wa</code> <code>.w</code> "
+        "သုံးပြီး manual lookup လုပ်နိုင်ပါတယ်။\n\n"
+        f"🤖 Bot API: <code>ONLINE</code>\n"
+        f"🔧 Helper Userbot: <code>{helper_state}</code>\n"
+        "⚡ Lookup Engine: <code>SQLITE + MONGO</code>\n"
+        "🛡 Force Join: <code>/verify</code> ဖြင့် စစ်ဆေးနိုင်ပါတယ်။"
     )
 
+@router.message(Command("ping"))
 
 @router.message(Command("ping"))
 async def ping(message: Message):
@@ -353,38 +409,54 @@ async def status(message: Message):
         return
     helper = await helper_manager.status_text()
     count = await characters.count_documents({})
-    helper_state = "ONLINE" if helper_userbot.client else "OFFLINE"
+    helper_state = "ONLINE" if helper_userbot.client else "DISABLED (optional)"
     index_stats = await lookup_index.stats()
     force_status = force_join.status()
     await message.reply(
-        f"🛠 <b>ADDING BOT STATUS</b>\n"
-        f"Characters: <code>{count}</code>\n"
-        f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
-        f"Helper Userbot: <code>{helper_state}</code>\n\n"
-        f"⚡ <b>LOOKUP V4</b>\n"
-        f"SQLite: <code>{'READY' if index_stats.get('ready') else 'NOT READY'}</code>\n"
-        f"SQLite rows: <code>{int(index_stats.get('rows', 0)):,}</code>\n"
-        f"RAM hot-cache: <code>{int(index_stats.get('ram_items', 0)):,}</code>\n"
-        f"SQLite path: <code>{h(settings.lookup_sqlite_path)}</code>\n"
-        f"Force Join: <code>{'ACTIVE' if force_status.get('active') else 'OFF'}</code>\n"
-        f"Required channels: <code>{int(force_status.get('targets', 0))}</code>\n\n"
+        "♻ <b>ADDING + LOOKUP V4 STATUS</b>\n"
+        f"‣ Total Media : <code>{count:,}</code>\n"
+        f"‣ Uptime : <code>{_uptime_text()}</code>\n"
+        f"‣ Process RAM : <code>{_process_rss_mb():.1f} MB</code>\n"
+        f"‣ Adding Group : <code>{settings.adding_chat_id or 'DISABLED'}</code>\n"
+        f"‣ Helper Userbot : <code>{helper_state}</code>\n\n"
+        "⚡ <b>LOOKUP ENGINE V4</b>\n"
+        f"‣ Engine : <code>SQLite + Mongo</code>\n"
+        f"‣ SQLite Ready : <code>{'YES' if index_stats.get('ready') else 'NO'}</code>\n"
+        f"‣ SQLite Rows : <code>{int(index_stats.get('rows', 0)):,}</code>\n"
+        f"‣ RAM Hot Cache : <code>{int(index_stats.get('ram_items', 0)):,} / {settings.lookup_ram_cache_max_items:,}</code>\n"
+        f"‣ SQLite Path : <code>{h(settings.lookup_sqlite_path)}</code>\n"
+        f"‣ Force Join : <code>{'ACTIVE' if force_status.get('active') else 'OFF'}</code>\n"
+        f"‣ Required Channels : <code>{int(force_status.get('targets', 0))}</code>\n\n"
         f"{helper}"
     )
-
 
 @router.message(Command("stats"))
 async def stats(message: Message):
     if not await has_admin_access(message):
         return
     count = await characters.count_documents({})
+    index_stats = await lookup_index.stats()
+    db_ping = await _ping_db_ms()
+    bot_ping = await _ping_bot_ms(message)
+    force_status = force_join.status()
     await message.reply(
-        f"📊 <b>Unified Adding + Lookup</b>\n"
-        f"Characters: <code>{count}</code>\n"
-        f"DB: <code>{h(settings.db_name)}</code>\n"
-        f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
-        "Mode: <code>forward-only adding</code>"
+        "📊 <b>UNIFIED ADDING + LOOKUP V4 STATS</b>\n\n"
+        f"‣ Uptime : <code>{_uptime_text()}</code>\n"
+        f"‣ DB Ping : <code>{_ms_text(db_ping)}</code>\n"
+        f"‣ Bot Ping : <code>{_ms_text(bot_ping)}</code>\n"
+        f"‣ Process RAM : <code>{_process_rss_mb():.1f} MB</code>\n"
+        f"‣ Total Media : <code>{count:,}</code>\n"
+        f"‣ DB : <code>{h(settings.db_name)}</code>\n\n"
+        "⚡ <b>LOOKUP ENGINE V4</b>\n"
+        f"‣ SQLite Ready : <code>{'YES' if index_stats.get('ready') else 'NO'}</code>\n"
+        f"‣ SQLite Rows : <code>{int(index_stats.get('rows', 0)):,}</code>\n"
+        f"‣ RAM Hot Cache : <code>{int(index_stats.get('ram_items', 0)):,} / {settings.lookup_ram_cache_max_items:,}</code>\n"
+        f"‣ Last Sync : <code>{h(str(index_stats.get('last_updated_ts') or '0'))}</code>\n"
+        f"‣ Force Join : <code>{'ACTIVE' if force_status.get('active') else 'OFF'}</code>\n"
+        f"‣ Adding Mode : <code>{'forward-only' if settings.adding_chat_id else 'lookup-only'}</code>"
     )
 
+@router.message(Command("helperstatus"))
 
 @router.message(Command("helperstatus"))
 async def helper_status(message: Message):
