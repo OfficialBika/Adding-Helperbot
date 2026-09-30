@@ -22,6 +22,8 @@ from unified.store import characters, close, ensure_indexes
 from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
+from unified.lookup_index import lookup_index
+from unified.force_join import force_join
 from helper.runtime import HelperUserbot
 from helper.manager import HelperManager
 from services.result_formatter import result_buttons
@@ -57,6 +59,48 @@ def is_media(message: Message) -> bool:
         or getattr(message, "animation", None)
         or getattr(message, "document", None)
     )
+
+async def enforce_lookup_access(message: Message) -> bool:
+    """Require channel membership for human-initiated lookups.
+
+    Bot-to-bot/source messages and channel-originated messages have no human
+    actor to verify, so they are intentionally not blocked by Force Join.
+    Owners always bypass. Authorized helper users can bypass when configured.
+    """
+    user = getattr(message, "from_user", None)
+    if not user or bool(getattr(user, "is_bot", False)):
+        return True
+
+    user_id = getattr(user, "id", None)
+    if not user_id:
+        return True
+
+    if owner(message):
+        return True
+
+    if settings.force_join_bypass_authorized and await is_authorized(int(user_id)):
+        return True
+
+    result = await force_join.verify(message.bot, int(user_id))
+    if result.verified:
+        return True
+
+    if result.error:
+        await message.reply(
+            "⚠️ <b>Verification temporarily unavailable.</b>\n\n"
+            "Please try the <b>✅ Verify</b> button again shortly.",
+            reply_markup=force_join.keyboard(),
+            disable_web_page_preview=True,
+        )
+        return False
+
+    await message.reply(
+        force_join.prompt(),
+        reply_markup=force_join.keyboard(),
+        disable_web_page_preview=True,
+    )
+    return False
+
 
 
 def is_ingest_candidate(message: Message) -> bool:
@@ -138,6 +182,81 @@ def format_result(doc: dict) -> str:
         f"🔸 <b>Full :</b> <code>{full}</code>\n\n"
         "Powered by <b>Bika</b>"
     )
+
+
+@router.callback_query(F.data == "forcejoin:verify")
+async def forcejoin_verify(callback_query):
+    user = getattr(callback_query, "from_user", None)
+    if not user:
+        await callback_query.answer("Unable to identify the user.", show_alert=True)
+        return
+
+    user_id = int(user.id)
+    if owner(callback_query.message) if getattr(callback_query, "message", None) else False:
+        verified = True
+        error = ""
+    elif settings.force_join_bypass_authorized and await is_authorized(user_id):
+        verified = True
+        error = ""
+    else:
+        result = await force_join.verify(callback_query.bot, user_id)
+        verified = result.verified
+        error = result.error
+
+    if verified:
+        await callback_query.answer("✅ Verified successfully.", show_alert=False)
+        message = getattr(callback_query, "message", None)
+        if message:
+            try:
+                await message.edit_text(force_join.success_text(), reply_markup=None)
+            except Exception:
+                pass
+        return
+
+    if error:
+        await callback_query.answer("Verification is temporarily unavailable.", show_alert=True)
+    else:
+        await callback_query.answer("Please join all required channels first.", show_alert=True)
+
+    message = getattr(callback_query, "message", None)
+    if message:
+        try:
+            await message.edit_text(
+                force_join.prompt(),
+                reply_markup=force_join.keyboard(),
+            )
+        except Exception:
+            pass
+
+
+@router.message(Command("verify"))
+async def forcejoin_verify_command(message: Message):
+    user = getattr(message, "from_user", None)
+    if not user or bool(getattr(user, "is_bot", False)):
+        return
+
+    if owner(message) or (
+        settings.force_join_bypass_authorized
+        and await is_authorized(int(user.id))
+    ):
+        await message.reply(force_join.success_text())
+        return
+
+    result = await force_join.verify(message.bot, int(user.id))
+    if result.verified:
+        await message.reply(force_join.success_text())
+    elif result.error:
+        await message.reply(
+            "⚠️ <b>Verification temporarily unavailable.</b>\n\n"
+            "Please try again shortly.",
+            reply_markup=force_join.keyboard(),
+        )
+    else:
+        await message.reply(
+            force_join.prompt(),
+            reply_markup=force_join.keyboard(),
+            disable_web_page_preview=True,
+        )
 
 
 @router.message(Command("auth"))
@@ -320,6 +439,15 @@ async def adding_ingest(message: Message):
             status,
         )
         if isinstance(result, dict):
+            saved_doc = result.get("document") or {}
+            if saved_doc:
+                try:
+                    await lookup_index.upsert_document(saved_doc)
+                except Exception:
+                    log.exception(
+                        "LOOKUP SQLITE snapshot upsert failed message=%s",
+                        message.message_id,
+                    )
             notice = format_ingest_notice(result)
             if notice:
                 try:
@@ -347,6 +475,9 @@ async def lookup_media(message: Message):
     if message.chat.type == "private" and not settings.lookup_in_private:
         return
     if message.chat.type != "private" and not settings.lookup_in_groups:
+        return
+
+    if not await enforce_lookup_access(message):
         return
 
     # Senpai direct Bot-to-Bot messages: Telegram delivers the original
@@ -404,6 +535,9 @@ async def lookup_media(message: Message):
 
 
 async def _manual_lookup(message: Message):
+    if not await enforce_lookup_access(message):
+        return
+
     target = getattr(message, "reply_to_message", None)
     if not target or not is_media(target):
         await message.reply("❌ Reply to a character media with .w / .wa / .waifu.")
@@ -521,7 +655,26 @@ async def helper_commands(message: Message):
     await helper_manager.handle_command(message)
 
 
+async def lookup_index_sync_worker(stop_event: asyncio.Event):
+    interval = max(30, int(settings.lookup_index_sync_seconds or 300))
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            continue
+        except asyncio.TimeoutError:
+            pass
+
+        try:
+            await lookup_index.sync_from_mongo()
+            log.info("LOOKUP SQLITE snapshot sync complete")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("LOOKUP SQLITE snapshot sync failed")
+
+
 async def cleanup(bot: Bot):
+    await lookup_index.close()
     await close()
     await bot.session.close()
 
@@ -545,6 +698,12 @@ async def run():
 
     await ensure_indexes()
     await ensure_auth_indexes()
+    await lookup_index.ensure_ready()
+    log.info(
+        "LOOKUP V4 index ready path=%s ram_items=%s",
+        settings.lookup_sqlite_path,
+        lookup_index.ram.size(),
+    )
     await helper_userbot.start()
     helper_manager.bind()
 
@@ -554,6 +713,11 @@ async def run():
     )
     dp = Dispatcher()
     dp.include_router(router)
+
+    index_sync_stop = asyncio.Event()
+    index_sync_task = asyncio.create_task(
+        lookup_index_sync_worker(index_sync_stop)
+    )
 
     if webhook:
         path = settings.webhook_path if settings.webhook_path.startswith("/") else "/" + settings.webhook_path
@@ -587,6 +751,9 @@ async def run():
         try:
             await asyncio.Event().wait()
         finally:
+            index_sync_stop.set()
+            index_sync_task.cancel()
+            await asyncio.gather(index_sync_task, return_exceptions=True)
             await helper_userbot.stop()
             await cleanup(bot)
             await runner.cleanup()
@@ -609,6 +776,9 @@ async def run():
         try:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         finally:
+            index_sync_stop.set()
+            index_sync_task.cancel()
+            await asyncio.gather(index_sync_task, return_exceptions=True)
             await helper_userbot.stop()
             await cleanup(bot)
             await runner.cleanup()
