@@ -329,15 +329,22 @@ async def auth_list(message: Message):
 
 @router.message(Command("start"))
 async def start(message: Message):
-    if not await has_admin_access(message):
-        return
+    # /start is a public entry/health command. Admin-only commands remain
+    # protected by has_admin_access(). Helper credentials are never required.
+    helper_state = "ONLINE" if helper_userbot.client else "DISABLED (optional)"
     await message.reply(
-        "🤖 <b>Adding & Helper Main</b>\n\n"
-        "Adding: <code>ONLINE</code>\n"
-        "Helper: <code>ONLINE</code>\n\n"
-        "Use /status for system status.\n"
-        "Use /helper for Helper controls."
+        "🤖 <b>Adding & Lookup V4</b>\n\n"
+        "Bot API: <code>ONLINE</code>\n"
+        f"Helper Userbot: <code>{helper_state}</code>\n"
+        "Lookup: <code>ONLINE</code>\n\n"
+        "Reply to character media with <code>.w</code> or <code>/w</code> "
+        "for manual lookup."
     )
+
+
+@router.message(Command("ping"))
+async def ping(message: Message):
+    await message.reply("🏓 <b>PONG</b> — Bot API is responding.")
 
 
 @router.message(Command("status"))
