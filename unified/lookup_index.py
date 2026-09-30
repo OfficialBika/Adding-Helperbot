@@ -355,10 +355,10 @@ class LookupSQLiteIndex:
             return
         self._upsert_docs_sync([doc], populate_ram=True)
 
-    async def _bulk_upsert(self, docs: list[dict]):
+    async def _bulk_upsert(self, docs: list[dict], *, populate_ram: bool = False):
         if not docs:
             return
-        self._upsert_docs_sync(docs, populate_ram=False)
+        self._upsert_docs_sync(docs, populate_ram=populate_ram)
 
     async def rebuild_from_mongo(self):
         self._ready = False
@@ -370,10 +370,10 @@ class LookupSQLiteIndex:
             batch.append(doc)
             max_ts = max(max_ts, _updated_ts(doc.get("updated_at")))
             if len(batch) >= 1000:
-                await self._bulk_upsert(batch)
+                await self._bulk_upsert(batch, populate_ram=False)
                 batch = []
         if batch:
-            await self._bulk_upsert(batch)
+            await self._bulk_upsert(batch, populate_ram=False)
 
         if max_ts:
             self._meta_set_sync("last_updated_ts", str(max_ts))
@@ -404,10 +404,10 @@ class LookupSQLiteIndex:
         ).sort("updated_at", 1).batch_size(2000):
             batch.append(doc)
             if len(batch) >= 1000:
-                await self._bulk_upsert(batch)
+                await self._bulk_upsert(batch, populate_ram=True)
                 batch = []
         if batch:
-            await self._bulk_upsert(batch)
+            await self._bulk_upsert(batch, populate_ram=True)
 
         self._ready = True
 
