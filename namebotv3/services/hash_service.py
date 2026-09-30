@@ -7,10 +7,6 @@ import tempfile
 from dataclasses import dataclass
 from typing import Tuple
 
-import cv2
-import imagehash
-from PIL import Image, ImageOps
-
 from config import settings
 
 
@@ -79,6 +75,11 @@ def crop_hash_distance(a: str | None, b: str | None) -> float | None:
 
 
 def hash_photo(data: bytes) -> MediaHash:
+    # Load image libraries only when a hash is actually requested. This keeps
+    # the Bot API / exact-UID lookup process lightweight on Render Free.
+    import imagehash
+    from PIL import Image, ImageOps
+
     digest = sha256_bytes(data)
     try:
         with Image.open(io.BytesIO(data)) as opened:
@@ -103,6 +104,10 @@ def hash_photo(data: bytes) -> MediaHash:
 
 
 def _frame_bundle(frame) -> tuple[str, str]:
+    import imagehash
+    from PIL import Image
+    import cv2
+
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     image = Image.fromarray(rgb)
     return str(imagehash.phash(image)), str(imagehash.dhash(image))
@@ -119,6 +124,9 @@ def _read_sample(cap, frame_count: int, position: float) -> VideoSampleHash | No
 
 
 def hash_video(data: bytes) -> MediaHash:
+    # OpenCV is intentionally imported lazily; it is one of the largest
+    # native memory consumers in this service and is not needed for exact UID lookup.
+    import cv2
     digest = sha256_bytes(data)
     tmp_path: str | None = None
     cap = None
