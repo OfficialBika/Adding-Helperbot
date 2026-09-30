@@ -460,8 +460,6 @@ async def stats(message: Message):
     )
 
 @router.message(Command("helperstatus"))
-
-@router.message(Command("helperstatus"))
 async def helper_status(message: Message):
     if not await has_admin_access(message):
         return
