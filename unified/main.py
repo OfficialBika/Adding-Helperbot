@@ -724,9 +724,6 @@ async def run():
     if webhook and not settings.public_url:
         raise RuntimeError("PUBLIC_URL is required in webhook mode")
 
-    await ensure_indexes()
-    await ensure_auth_indexes()
-
     bot = Bot(
         settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -764,7 +761,14 @@ async def run():
         await site.start()
         log.info("HTTP port bound on %s:%s", settings.host, settings.port)
 
-        # Port is already open before optional Telegram userbot/index initialization.
+        # Render can detect the open port while Mongo/index initialization runs.
+        try:
+            await ensure_indexes()
+            await ensure_auth_indexes()
+            log.info("Mongo indexes ready")
+        except Exception:
+            log.exception("Mongo/index initialization failed; exact Mongo lookup remains available")
+
         try:
             await helper_userbot.start()
             helper_manager.bind()
@@ -803,6 +807,13 @@ async def run():
         await runner.setup()
         await web.TCPSite(runner, settings.host, settings.port).start()
         log.info("HTTP port bound on %s:%s", settings.host, settings.port)
+
+        try:
+            await ensure_indexes()
+            await ensure_auth_indexes()
+            log.info("Mongo indexes ready")
+        except Exception:
+            log.exception("Mongo/index initialization failed; polling will continue")
 
         try:
             await helper_userbot.start()
