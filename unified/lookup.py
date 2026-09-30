@@ -210,6 +210,42 @@ def _sha_query(sha: str) -> dict:
     }
 
 
+
+async def _video_signature_find(scope: list[str] | None, signature: str):
+    if not signature:
+        return None
+    prefix = {"source_key": {"$in": scope}} if scope else {}
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "video_signature": 1,
+        "media_type": 1,
+    }
+    return await characters.find_one(
+        {**prefix, "video_signature": signature},
+        projection,
+    )
+
+
+async def _video_signature_global_candidates(signature: str, limit: int = 2) -> list[dict]:
+    if not signature:
+        return []
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "video_signature": 1,
+        "media_type": 1,
+    }
+    return await characters.find(
+        {"video_signature": signature},
+        projection,
+    ).limit(limit).to_list(length=limit)
+
+
 async def _hash_exact_find(scope: list[str] | None, sha: str):
     if not sha:
         return None
@@ -423,6 +459,28 @@ async def _hash_fallback(
         hash_photo if media.media_type == "photo" else hash_video,
         data,
     )
+
+    # Video signature is an exact content fingerprint over the sampled
+    # frames. It is especially important for video messages whose Telegram UID
+    # was not present in an older imported record.
+    if media.media_type == "video" and media_hash.video_signature:
+        doc = await _video_signature_find(collections, media_hash.video_signature)
+        if doc:
+            return doc, "video_signature"
+
+        if allow_global_fallback:
+            global_docs = await _video_signature_global_candidates(
+                media_hash.video_signature,
+                limit=2,
+            )
+            if len(global_docs) == 1:
+                return global_docs[0], "video_signature_global"
+            if len(global_docs) > 1:
+                log.warning(
+                    "VIDEO signature global recovery ambiguous message=%s candidates=%s",
+                    getattr(source_message, "message_id", None),
+                    len(global_docs),
+                )
 
     # SHA-256 is byte-exact. It is the first fallback after Telegram UID.
     if media_hash.sha256:
