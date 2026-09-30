@@ -397,8 +397,6 @@ async def start(message: Message):
     )
 
 @router.message(Command("ping"))
-
-@router.message(Command("ping"))
 async def ping(message: Message):
     await message.reply("🏓 <b>PONG</b> — Bot API is responding.")
 
