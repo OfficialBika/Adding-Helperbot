@@ -246,6 +246,42 @@ async def _video_signature_global_candidates(signature: str, limit: int = 2) -> 
     ).limit(limit).to_list(length=limit)
 
 
+
+async def _pixel_sha_find(scope: list[str] | None, pixel_sha: str):
+    if not pixel_sha:
+        return None
+    prefix = {"source_key": {"$in": scope}} if scope else {}
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "pixel_sha256": 1,
+        "media_type": 1,
+    }
+    return await characters.find_one(
+        {**prefix, "pixel_sha256": pixel_sha},
+        projection,
+    )
+
+
+async def _pixel_sha_global_candidates(pixel_sha: str, limit: int = 2) -> list[dict]:
+    if not pixel_sha:
+        return []
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "pixel_sha256": 1,
+        "media_type": 1,
+    }
+    return await characters.find(
+        {"pixel_sha256": pixel_sha},
+        projection,
+    ).limit(limit).to_list(length=limit)
+
+
 async def _hash_exact_find(scope: list[str] | None, sha: str):
     if not sha:
         return None
@@ -478,6 +514,27 @@ async def _hash_fallback(
             if len(global_docs) > 1:
                 log.warning(
                     "VIDEO signature global recovery ambiguous message=%s candidates=%s",
+                    getattr(source_message, "message_id", None),
+                    len(global_docs),
+                )
+
+    # Pixel SHA is exact after decoding/normalizing the image pixels. It
+    # recovers photos that were re-encoded but still have identical pixels.
+    if media.media_type == "photo" and media_hash.pixel_sha256:
+        doc = await _pixel_sha_find(collections, media_hash.pixel_sha256)
+        if doc:
+            return doc, "pixel_sha256"
+
+        if allow_global_fallback:
+            global_docs = await _pixel_sha_global_candidates(
+                media_hash.pixel_sha256,
+                limit=2,
+            )
+            if len(global_docs) == 1:
+                return global_docs[0], "pixel_sha256_global"
+            if len(global_docs) > 1:
+                log.warning(
+                    "PIXEL SHA global recovery ambiguous message=%s candidates=%s",
                     getattr(source_message, "message_id", None),
                     len(global_docs),
                 )
