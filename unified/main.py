@@ -346,11 +346,20 @@ async def status(message: Message):
     helper = await helper_manager.status_text()
     count = await characters.count_documents({})
     helper_state = "ONLINE" if helper_userbot.client else "OFFLINE"
+    index_stats = await lookup_index.stats()
+    force_status = force_join.status()
     await message.reply(
         f"🛠 <b>ADDING BOT STATUS</b>\n"
         f"Characters: <code>{count}</code>\n"
         f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
         f"Helper Userbot: <code>{helper_state}</code>\n\n"
+        f"⚡ <b>LOOKUP V4</b>\n"
+        f"SQLite: <code>{'READY' if index_stats.get('ready') else 'NOT READY'}</code>\n"
+        f"SQLite rows: <code>{int(index_stats.get('rows', 0)):,}</code>\n"
+        f"RAM hot-cache: <code>{int(index_stats.get('ram_items', 0)):,}</code>\n"
+        f"SQLite path: <code>{h(settings.lookup_sqlite_path)}</code>\n"
+        f"Force Join: <code>{'ACTIVE' if force_status.get('active') else 'OFF'}</code>\n"
+        f"Required channels: <code>{int(force_status.get('targets', 0))}</code>\n\n"
         f"{helper}"
     )
 
