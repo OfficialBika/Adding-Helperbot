@@ -23,7 +23,7 @@ _LOOKUP_PROJECTION = {
     "updated_at": 1,
 }
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 def _text(value: Any) -> str:
