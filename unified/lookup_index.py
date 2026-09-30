@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 import threading
 from collections import OrderedDict
@@ -10,6 +11,8 @@ from typing import Any, Iterable
 
 from unified.config import settings
 from unified.store import characters
+
+log = logging.getLogger("lookup-index")
 
 _LOOKUP_PROJECTION = {
     "_id": 1,
@@ -415,7 +418,6 @@ class LookupSQLiteIndex:
         batch: list[dict] = []
         max_ts = 0.0
         scanned = 0
-        log = __import__("logging").getLogger("lookup-index")
         log.info("LOOKUP V4 snapshot rebuild started")
         async for doc in characters.find({}, _LOOKUP_PROJECTION).batch_size(2000):
             batch.append(doc)
@@ -439,7 +441,7 @@ class LookupSQLiteIndex:
                 self._meta_set_sync("last_updated_ts", str(max_ts))
             self._meta_set_sync("build_complete", "1")
             self._conn.commit()
-        __import__("logging").getLogger("lookup-index").info(
+        log.info(
             "LOOKUP V4 snapshot rebuild complete docs=%s",
             int(scanned or 0),
         )
