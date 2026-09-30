@@ -414,25 +414,35 @@ class LookupSQLiteIndex:
 
         batch: list[dict] = []
         max_ts = 0.0
+        scanned = 0
+        log = __import__("logging").getLogger("lookup-index")
+        log.info("LOOKUP V4 snapshot rebuild started")
         async for doc in characters.find({}, _LOOKUP_PROJECTION).batch_size(2000):
             batch.append(doc)
+            scanned += 1
             max_ts = max(max_ts, _updated_ts(doc.get("updated_at")))
             if len(batch) >= 1000:
                 await self._bulk_upsert(batch, populate_ram=False)
                 batch = []
+            if scanned % 10000 == 0:
+                log.info("LOOKUP V4 snapshot rebuild progress docs=%s", scanned)
 
         if batch:
             await self._bulk_upsert(batch, populate_ram=False)
 
-        await asyncio.to_thread(self._finish_rebuild, max_ts)
+        await asyncio.to_thread(self._finish_rebuild, max_ts, scanned)
         self._ready = True
 
-    def _finish_rebuild(self, max_ts: float):
+    def _finish_rebuild(self, max_ts: float, scanned: int = 0):
         with self._lock:
             if max_ts:
                 self._meta_set_sync("last_updated_ts", str(max_ts))
             self._meta_set_sync("build_complete", "1")
             self._conn.commit()
+        __import__("logging").getLogger("lookup-index").info(
+            "LOOKUP V4 snapshot rebuild complete docs=%s",
+            int(scanned or 0),
+        )
 
     async def sync_from_mongo(self):
         await asyncio.to_thread(self._connect_if_needed)
@@ -467,10 +477,6 @@ class LookupSQLiteIndex:
             await self._bulk_upsert(batch, populate_ram=True)
 
         self._ready = True
-
-    def _read_last_updated_ts(self) -> float:
-        with self._lock:
-            return _updated_ts(self._meta_get_sync("last_updated_ts"))
 
     async def ensure_ready(self):
         await asyncio.to_thread(self._connect_if_needed)
