@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from unified.store import characters
+from unified.config import settings
 
 _LOOKUP_PROJECTION = {
     "_id": 1,
@@ -375,7 +376,7 @@ class LookupSQLiteIndex:
             await self.rebuild_from_mongo()
             return
 
-        indexed_rows = await asyncio.to_thread(self._count_sync)
+        indexed_rows = self._count_sync()
         if indexed_rows == 0:
             await self.rebuild_from_mongo()
             return
@@ -424,4 +425,7 @@ class LookupSQLiteIndex:
         self._ready = False
 
 
-lookup_index = LookupSQLiteIndex()
+lookup_index = LookupSQLiteIndex(
+    path=settings.lookup_sqlite_path,
+    ram_cache_max_items=settings.lookup_ram_cache_max_items,
+)
