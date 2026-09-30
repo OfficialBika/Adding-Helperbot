@@ -24,7 +24,7 @@ _LOOKUP_PROJECTION = {
     "file_unique_id": 1,
     "photo_file_unique_id": 1,
     "video_file_unique_id": 1,
-    "media": 1,
+    "media.file_unique_id": 1,
     "updated_at": 1,
 }
 
