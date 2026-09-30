@@ -58,7 +58,7 @@ services:
       - key: LOOKUP_INDEX_SYNC_SECONDS
         value: "300"
       - key: FORCE_JOIN_ENABLED
-        value: "false"
+        value: "true"
       - key: FORCE_JOIN_CHANNELS
         sync: false
       - key: FORCE_JOIN_CACHE_TTL_SECONDS
