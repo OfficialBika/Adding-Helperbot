@@ -579,7 +579,13 @@ async def _hash_fallback(
     return None, "hash_not_found"
 
 
-async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: bool = False):
+async def lookup_message(
+    bot: Bot,
+    message: Message,
+    *,
+    allow_global_fallback: bool = False,
+    allow_hash_fallback: bool = True,
+):
     """Lookup order: Telegram UID -> SHA-256 -> pHash.
 
     Auto lookup remains strictly source-scoped. Manual lookup performs the same
@@ -642,21 +648,10 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
             )
             return doc, "uid"
 
-        probe = (await _exact_global_candidates(uids, limit=1) or [None])[0]
-        if probe:
-            log.warning(
-                "UID DEBUG cross_source_match message=%s requested_sources=%s db_source=%s name=%s",
-                getattr(message, "message_id", None),
-                collections,
-                probe.get("source_key"),
-                probe.get("name"),
-            )
-        else:
-            log.warning(
-                "UID DEBUG database_uid_miss message=%s requested_sources=%s",
-                getattr(message, "message_id", None),
-                collections,
-            )
+        if allow_global_fallback:
+            # Global exact recovery below is authoritative. Do not issue a
+            # second Mongo probe here merely to log a cross-source candidate.
+            pass
 
         # Forwarded-source recovery: keep this source-scoped and exact. This
         # does not replace Telegram UID identity; it only recovers legacy rows
@@ -747,6 +742,12 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
             # Do not cross-match an ambiguous Telegram UID when the preferred
             # Catch source is not among the exact global matches.
 
+    # Exact lookup is complete. Auto callers normally run hash fallback
+    # asynchronously from main.py so slow Telegram downloads do not hold the
+    # webhook/update handler open.
+    if not allow_hash_fallback:
+        return None, "uid_miss"
+
     # UID failed. Now download and compute hashes for BOTH auto and manual.
     # Auto remains source-scoped; manual may go global only when source is unknown.
     hash_scope = collections
@@ -769,3 +770,27 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         return doc, reason
 
     return None, reason
+
+
+async def lookup_hash_fallback_only(
+    bot: Bot,
+    message: Message,
+    *,
+    allow_global_fallback: bool = False,
+):
+    """Run only the slow hash phase after the exact lookup phase has failed."""
+    media = extract_media(message)
+    if not media:
+        return None, "no_media"
+
+    source_message = media.source_message
+    collections = _scope(source_message)
+    hash_scope = collections
+    hash_global = bool(allow_global_fallback and not collections)
+    return await _hash_fallback(
+        bot,
+        media,
+        source_message,
+        hash_scope,
+        allow_global_fallback=hash_global,
+    )
