@@ -129,6 +129,8 @@ class HelperUserbot:
         return ADDING_CHAT_ID
 
     def configured(self) -> bool:
+        # Helper Userbot is an optional sidecar. The main Bot API lookup must
+        # never depend on Pyrogram credentials being present.
         return bool(
             API_ID
             and API_HASH
@@ -137,11 +139,30 @@ class HelperUserbot:
             and SOURCE_CHATS
         )
 
+    def disabled_reason(self) -> str:
+        missing: list[str] = []
+        if not API_ID:
+            missing.append("API_ID")
+        if not API_HASH:
+            missing.append("API_HASH")
+        if not SESSION_STRING and not _SESSION_PATH.exists():
+            missing.append("SESSION_STRING")
+        if not ADDING_CHAT_ID:
+            missing.append("ADDING_CHAT_ID")
+        if not SOURCE_CHATS:
+            missing.append("SOURCE_CHANNELS")
+        return ", ".join(missing)
+
     async def start(self) -> None:
         if self._started:
             return
         if not self.configured():
-            log.warning("Helper userbot disabled: incomplete helper configuration")
+            reason = self.disabled_reason() or "incomplete helper configuration"
+            log.warning(
+                "Helper userbot disabled (optional): missing %s; "
+                "Bot API lookup remains enabled",
+                reason,
+            )
             return
 
         await _ensure_persistent_session()
