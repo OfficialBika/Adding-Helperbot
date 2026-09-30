@@ -55,7 +55,7 @@ services:
       - key: LOOKUP_SQLITE_PATH
         value: data/lookup_index.sqlite3
       - key: LOOKUP_RAM_CACHE_MAX_ITEMS
-        value: "30000"
+        value: "5000"
       - key: LOOKUP_INDEX_SYNC_SECONDS
         value: "300"
       - key: FORCE_JOIN_ENABLED
