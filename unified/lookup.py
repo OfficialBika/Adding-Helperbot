@@ -101,6 +101,48 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
 
 
 
+
+async def _bot_message_origin_fallback(scope: list[str] | None, message: Message):
+    """Recover direct bot-to-bot media using the source message id.
+
+    Bot-to-bot delivery can have no forward_origin at all. When the same source
+    message was previously archived with source_origin, a unique source-scoped
+    message-id match is safe enough to use as a final exact recovery path.
+    """
+    from_user = getattr(message, "from_user", None)
+    if not getattr(from_user, "is_bot", False):
+        return None
+
+    message_id = getattr(message, "message_id", None)
+    if message_id is None:
+        return None
+
+    prefix = {"source_key": {"$in": scope}} if scope else {}
+    query = {
+        **prefix,
+        "source_origin.message_id": int(message_id),
+    }
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "file_unique_ids": 1,
+        "telegram_file_unique_id": 1,
+        "source_origin": 1,
+    }
+    docs = await characters.find(query, projection).limit(2).to_list(length=2)
+    if len(docs) == 1:
+        return docs[0]
+    if len(docs) > 1:
+        log.warning(
+            "BOT SOURCE MESSAGE ambiguous message=%s sources=%s",
+            message_id,
+            [doc.get("source_key") for doc in docs],
+        )
+    return None
+
+
 async def _origin_exact_find(scope: list[str] | None, message: Message):
     """Recover records from the original forwarded source message identity.
 
@@ -507,15 +549,30 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         origin_doc = await _origin_exact_find(collections, source_message)
         if origin_doc:
             lookup_index.ram.put(origin_doc)
+            origin = source_origin_key(source_message)
             log.info(
                 "UID DEBUG source_origin_match message=%s source=%s origin=%s:%s name=%s",
                 getattr(message, "message_id", None),
                 origin_doc.get("source_key"),
-                getattr(getattr(source_message, "forward_origin", None), "chat", None),
-                getattr(getattr(source_message, "forward_origin", None), "message_id", None),
+                origin[0] if origin else None,
+                origin[1] if origin else None,
                 origin_doc.get("name"),
             )
             return origin_doc, "source_origin"
+
+        # Direct bot-to-bot messages can have no forward_origin. If the source
+        # bot's message was previously archived with source_origin, recover it
+        # by a unique source-scoped source-message-id match.
+        bot_origin_doc = await _bot_message_origin_fallback(collections, source_message)
+        if bot_origin_doc:
+            lookup_index.ram.put(bot_origin_doc)
+            log.info(
+                "UID DEBUG bot_source_message_match message=%s source=%s name=%s",
+                getattr(message, "message_id", None),
+                bot_origin_doc.get("source_key"),
+                bot_origin_doc.get("name"),
+            )
+            return bot_origin_doc, "bot_source_message"
 
     # UID failed. Manual lookup and forwarded/saved media recovery may use
     # an exact global UID fallback. Source-scoped lookup always wins.
