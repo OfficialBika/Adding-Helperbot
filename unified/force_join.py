@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from unified.config import settings
+
 log = logging.getLogger("force-join")
 
 _ACTIVE_STATUSES = {"member", "administrator", "creator", "owner"}
@@ -194,4 +196,9 @@ class ForceJoinService:
         }
 
 
-force_join = ForceJoinService()
+force_join = ForceJoinService(
+    enabled=settings.force_join_enabled,
+    channels=settings.force_join_channels,
+    cache_ttl_seconds=settings.force_join_cache_ttl_seconds,
+    cache_max_users=settings.force_join_cache_max_users,
+)
