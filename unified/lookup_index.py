@@ -93,12 +93,11 @@ class LookupRAMCache:
         key = (_text(uid), _text(source).lower())
         if not key[0] or not key[1]:
             return None
-        with self._lock:
-            item = self._data.get(key)
-            if item is None:
-                return None
-            self._data.move_to_end(key)
-            name, command, source_key = item
+        item = self._data.get(key)
+        if item is None:
+            return None
+        self._data.move_to_end(key)
+        name, command, source_key = item
         return {
             "name": name,
             "command": command,
@@ -113,19 +112,16 @@ class LookupRAMCache:
         command = _text(doc.get("command")) or "/name"
         for uid in _doc_uids(doc):
             key = (uid, source)
-            with self._lock:
-                self._data[key] = (name, command, source)
-                self._data.move_to_end(key)
-                while len(self._data) > self.max_items:
-                    self._data.popitem(last=False)
+            self._data[key] = (name, command, source)
+            self._data.move_to_end(key)
+            while len(self._data) > self.max_items:
+                self._data.popitem(last=False)
 
     def clear(self):
-        with self._lock:
-            self._data.clear()
+        self._data.clear()
 
     def size(self) -> int:
-        with self._lock:
-            return len(self._data)
+        return len(self._data)
 
 
 class LookupSQLiteIndex:
@@ -143,7 +139,6 @@ class LookupSQLiteIndex:
         self.path = Path(path)
         self.ram = LookupRAMCache(ram_cache_max_items)
         self._conn: sqlite3.Connection | None = None
-        self._lock = threading.RLock()
         self._ready = False
 
     def _connect_sync(self):
