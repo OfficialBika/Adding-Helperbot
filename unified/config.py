@@ -59,6 +59,14 @@ class Settings:
     lookup_ram_cache_max_items: int = _int("LOOKUP_RAM_CACHE_MAX_ITEMS", 5000)
     lookup_index_sync_seconds: int = _int("LOOKUP_INDEX_SYNC_SECONDS", 300)
 
+    # Auto lookup uses a fast exact-UID phase first. Hash fallback can run
+    # asynchronously so a slow Telegram media download never blocks webhook
+    # acknowledgement for the normal lookup path.
+    auto_hash_lookup_enabled: bool = _bool("AUTO_HASH_LOOKUP_ENABLED", True)
+    auto_hash_timeout_seconds: int = max(
+        5, _int("AUTO_HASH_TIMEOUT_SECONDS", 10)
+    )
+
     # Optional Force Join / membership verification gate for user lookups.
     # Syntax: @public_channel|https://t.me/public_channel,@another|https://t.me/another
     # Private/numeric chats must provide an explicit join URL.
