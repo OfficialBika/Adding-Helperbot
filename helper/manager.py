@@ -174,14 +174,24 @@ class HelperManager:
             raise RuntimeError("catch_waifu is already running")
         start_id = max(1, int(start_id))
         delay = max(1, min(int(delay), MAX_DELAY))
-        self._state.update({
+        catch_state = self._state.setdefault("catch_your_waifu_progress", {})
+        catch_state.update({
             "source": key,
             "mode": "catch_your_waifu_w",
             "next_id": start_id,
+            "pending_id": None,
+            "last_success_id": None,
             "consecutive_no_response": 0,
             "delay": delay,
             "response_timeout": CATCH_YOUR_WAIFU_RESPONSE_TIMEOUT,
             "max_no_response": CATCH_YOUR_WAIFU_MAX_MISSES,
+            "running": True,
+        })
+        self._state.update({
+            "source": key,
+            "mode": "catch_your_waifu_w",
+            "next_id": start_id,
+            "delay": delay,
             "running": True,
         })
         self._save()
