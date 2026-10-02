@@ -378,15 +378,7 @@ async def gunapprove(message: Message):
 async def status(message: Message):
     if not owner(message):
         return
-    helper = await helper_manager.status_text()
-    helper_state = "ONLINE" if helper_userbot.client else "OFFLINE"
-    await message.reply(
-        await build_status_text(
-            message,
-            helper_state=helper_state,
-            helper_text=helper,
-        )
-    )
+    await message.reply(await build_status_text(message))
 
 
 @router.message(Command("stats"))
