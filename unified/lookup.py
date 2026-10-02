@@ -12,6 +12,7 @@ from services.hash_service import hamming_hex, hash_photo, hash_video
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import characters
+from unified.lookup_cache import PositiveUIDCache
 from utils.media import extract_media
 
 log = logging.getLogger(__name__)
@@ -23,6 +24,9 @@ _HASH_CANDIDATE_LIMIT = 1200
 _PHASH_THRESHOLD = 8
 _PHASH_MIN_SCORE = 0.84
 _PHASH_MIN_MARGIN = 0.035
+_UID_CACHE = PositiveUIDCache(
+    settings.lookup_uid_cache_max_items, settings.lookup_uid_cache_ttl_seconds
+)
 
 
 def _scope(message: Message) -> list[str]:
@@ -83,6 +87,37 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
         "media_type": 1,
     }
     return await characters.find_one(query, projection)
+
+
+def _cache_doc(doc: dict | None, uids: list[str]) -> None:
+    if not doc or not uids:
+        return
+    source = str(doc.get("source_key") or "").strip().lower() or None
+    _UID_CACHE.remember(uids, doc, source)
+    _UID_CACHE.remember(uids, doc, None)
+
+
+def _cache_lookup(uids: list[str], scope: list[str] | None) -> dict | None:
+    for uid in uids:
+        if scope:
+            for source in scope:
+                cached = _UID_CACHE.get(uid, source)
+                if cached:
+                    return {
+                        "name": cached.name,
+                        "command": cached.command,
+                        "source_key": source,
+                        "media_type": "photo",
+                    }
+        cached = _UID_CACHE.get(uid)
+        if cached:
+            return {
+                "name": cached.name,
+                "command": cached.command,
+                "source_key": None,
+                "media_type": "photo",
+            }
+    return None
 
 
 async def _exact_global_candidates(uids: list[str], limit: int = 2) -> list[dict]:
@@ -395,6 +430,14 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     if not uids:
         return None, "no_file_unique_id"
 
+    cached_doc = _cache_lookup(uids, collections)
+    if cached_doc:
+        log.info(
+            "UID CACHE HIT message=%s collections=%s uids=%s",
+            getattr(message, "message_id", None), collections, uids,
+        )
+        return cached_doc, "uid_cache"
+
     log.info(
         "UID DEBUG message=%s source_message=%s media_type=%s collections=%s uids=%s",
         getattr(message, "message_id", None),
@@ -413,6 +456,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 doc.get("source_key"),
                 doc.get("name"),
             )
+            _cache_doc(doc, uids)
             return doc, "uid"
 
         # Source-scoped auto lookup must not perform an extra global probe.
@@ -438,6 +482,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 global_docs[0].get("source_key"),
                 global_docs[0].get("name"),
             )
+            _cache_doc(global_docs[0], uids)
             return global_docs[0], "uid_global_recovery"
 
         if len(global_docs) > 1:
@@ -461,6 +506,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                     len(global_docs),
                     preferred.get("name"),
                 )
+                _cache_doc(preferred, uids)
                 return preferred, "uid_global_recovery"
 
             log.warning(
