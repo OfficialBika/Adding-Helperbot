@@ -51,4 +51,4 @@ jobs:
       - name: Verify runtime and native imports
         run: |
           python --version
-          python -c "import aiogram, aiohttp, numpy, cv2, PIL, imagehash, pymongo, motor, pyrogram; print('Python 3.14 runtime imports OK')"
+          python -c "import asyncio; asyncio.set_event_loop(asyncio.new_event_loop()); import aiogram, aiohttp, numpy, cv2, PIL, imagehash, pymongo, motor, pyrogram; print('Python 3.14 runtime imports OK')"
