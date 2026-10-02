@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,7 @@ from helper.manager import HelperManager
 from services.result_formatter import result_buttons
 from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
+from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -209,14 +211,17 @@ async def auth_list(message: Message):
 
 @router.message(Command("start"))
 async def start(message: Message):
-    if not await has_admin_access(message):
-        return
     await message.reply(
-        "🤖 <b>Adding & Helper Main</b>\n\n"
-        "Adding: <code>ONLINE</code>\n"
-        "Helper: <code>ONLINE</code>\n\n"
-        "Use /status for system status.\n"
-        "Use /helper for Helper controls."
+        "👋 <b>Welcome to Bika Adding & Helper</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "⚡ <b>Fast Character Lookup</b>\n"
+        "• Send a photo/video for auto lookup.\n"
+        "• Reply to media with <code>.w</code>, <code>.wa</code> or <code>.waifu</code>.\n\n"
+        "🛠 <b>System</b>\n"
+        "• <code>/status</code> — runtime & database status\n"
+        "• <code>/stats</code> — performance statistics\n"
+        "• <code>/ping</code> — Bot/Mongo latency\n\n"
+        "Powered by <b>Bika</b>."
     )
 
 
@@ -225,14 +230,13 @@ async def status(message: Message):
     if not await has_admin_access(message):
         return
     helper = await helper_manager.status_text()
-    count = await characters.count_documents({})
     helper_state = "ONLINE" if helper_userbot.client else "OFFLINE"
     await message.reply(
-        f"🛠 <b>ADDING BOT STATUS</b>\n"
-        f"Characters: <code>{count}</code>\n"
-        f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
-        f"Helper Userbot: <code>{helper_state}</code>\n\n"
-        f"{helper}"
+        await build_status_text(
+            message,
+            helper_state=helper_state,
+            helper_text=helper,
+        )
     )
 
 
@@ -240,14 +244,18 @@ async def status(message: Message):
 async def stats(message: Message):
     if not await has_admin_access(message):
         return
-    count = await characters.count_documents({})
+    helper_state = "ONLINE" if helper_userbot.client else "OFFLINE"
     await message.reply(
-        f"📊 <b>Unified Adding + Lookup</b>\n"
-        f"Characters: <code>{count}</code>\n"
-        f"DB: <code>{h(settings.db_name)}</code>\n"
-        f"Adding Group: <code>{settings.adding_chat_id}</code>\n"
-        "Mode: <code>forward-only adding</code>"
+        await build_stats_text(
+            message,
+            helper_state=helper_state,
+        )
     )
+
+
+@router.message(Command("ping"))
+async def ping(message: Message):
+    await message.reply(await build_ping_text(message))
 
 
 @router.message(Command("helperstatus"))
@@ -313,6 +321,7 @@ async def adding_ingest(message: Message):
     )
     if result:
         status = result.get("status") if isinstance(result, dict) else "unknown"
+        metrics.record_ingest(status)
         log.info(
             "INGESTED adding message=%s chat=%s source=resolved status=%s",
             message.message_id,
@@ -372,11 +381,25 @@ async def lookup_media(message: Message):
     # path, always treat the actual incoming Senpai media as the lookup target.
     if senpai_auto_global_uid and is_media(message) and getattr(message, "reply_to_message", None):
         lookup_target = message.model_copy(update={"reply_to_message": None})
-    doc, reason = await lookup_message(
-        message.bot,
-        lookup_target,
-        allow_global_fallback=senpai_auto_global_uid,
-    )
+    lookup_started = time.perf_counter()
+    try:
+        doc, reason = await lookup_message(
+            message.bot,
+            lookup_target,
+            allow_global_fallback=senpai_auto_global_uid,
+        )
+    except Exception:
+        metrics.record_lookup(
+            (time.perf_counter() - lookup_started) * 1000,
+            hit=False,
+            error=True,
+        )
+        raise
+    else:
+        metrics.record_lookup(
+            (time.perf_counter() - lookup_started) * 1000,
+            hit=bool(doc),
+        )
     log.info(
         "LOOKUP chat=%s message=%s result=%s reason=%s",
         message.chat.id,
@@ -408,7 +431,21 @@ async def _manual_lookup(message: Message):
     if not target or not is_media(target):
         await message.reply("❌ Reply to a character media with .w / .wa / .waifu.")
         return
-    doc, reason = await lookup_message(message.bot, target, allow_global_fallback=True)
+    lookup_started = time.perf_counter()
+    try:
+        doc, reason = await lookup_message(message.bot, target, allow_global_fallback=True)
+    except Exception:
+        metrics.record_lookup(
+            (time.perf_counter() - lookup_started) * 1000,
+            hit=False,
+            error=True,
+        )
+        raise
+    else:
+        metrics.record_lookup(
+            (time.perf_counter() - lookup_started) * 1000,
+            hit=bool(doc),
+        )
     log.info(
         "MANUAL LOOKUP chat=%s message=%s result=%s reason=%s",
         message.chat.id,
