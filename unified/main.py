@@ -27,7 +27,7 @@ from unified.lookup import lookup_message
 from helper.runtime import HelperUserbot
 from helper.manager import HelperManager
 from services.result_formatter import result_buttons
-from unified.services.force_join import require_join, router as force_join_router
+from unified.services.force_join import require_join, send_dm_verification, router as force_join_router
 from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
 from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
@@ -311,6 +311,14 @@ async def auth_list(message: Message):
 
 @router.message(Command("start"))
 async def start(message: Message):
+    # Group Force Join sends users here through a Telegram deep-link.
+    # Keep the normal /start welcome screen unchanged for every other start.
+    parts = (message.text or "").strip().split(maxsplit=1)
+    payload = parts[1].strip().lower() if len(parts) > 1 else ""
+    if payload in {"forcejoin", "fj", "verify"}:
+        await send_dm_verification(message)
+        return
+
     await message.reply(
         "👋 <b>Welcome to Bika Adding & Helper</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
