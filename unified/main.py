@@ -20,6 +20,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from unified.config import settings
 from unified.store import db, characters, close, ensure_indexes
+from unified.uid_index import ensure_uid_index, upsert_documents
 from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized, get_global_lookup_enabled, set_global_lookup_enabled
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
@@ -40,6 +41,50 @@ log = logging.getLogger("unified")
 router = Router(name="unified")
 helper_userbot = HelperUserbot()
 helper_manager = HelperManager(helper_userbot)
+
+
+async def _backfill_uid_index() -> None:
+    """Warm the local exact-UID accelerator from Mongo without blocking startup."""
+    batch_size = settings.uid_index_backfill_batch
+    batch: list[dict] = []
+    try:
+        cursor = characters.find(
+            {
+                "$or": [
+                    {"file_unique_ids.0": {"$exists": True}},
+                    {"telegram_file_unique_id": {"$exists": True, "$ne": ""}},
+                ]
+            },
+            {
+                "name": 1,
+                "command": 1,
+                "source_key": 1,
+                "media_type": 1,
+                "file_unique_ids": 1,
+                "telegram_file_unique_id": 1,
+                "updated_at": 1,
+            },
+            batch_size=batch_size,
+        )
+        async for doc in cursor:
+            batch.append(doc)
+            if len(batch) >= batch_size:
+                count = await upsert_documents(batch)
+                log.info("UID INDEX backfill batch=%s rows=%s", len(batch), count)
+                batch.clear()
+        if batch:
+            count = await upsert_documents(batch)
+            log.info("UID INDEX backfill final=%s rows=%s", len(batch), count)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("UID INDEX backfill failed; Mongo remains authoritative")
+
+
+async def _start_uid_index_backfill() -> None:
+    # Backfill is deliberately fire-and-forget: the bot becomes ready immediately
+    # and every SQLite miss still falls through to Mongo for correctness.
+    asyncio.create_task(_backfill_uid_index())
 
 
 def owner(message: Message) -> bool:
@@ -659,6 +704,7 @@ async def run():
 
     await ensure_indexes()
     await ensure_uid_index()
+    await _start_uid_index_backfill()
     await ensure_auth_indexes()
     await helper_userbot.start()
     helper_manager.bind()
