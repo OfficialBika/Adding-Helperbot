@@ -201,8 +201,9 @@ class HelperManager:
     async def _catch_your_waifu_worker(self, start_id: int, delay: int):
         key = "catch_waifu"
         bot, command = DM_SOURCES[key]
+        catch_state = self._state.setdefault("catch_your_waifu_progress", {})
         current_id = max(1, int(start_id))
-        consecutive_no_response = 0
+        consecutive_no_response = int(catch_state.get("consecutive_no_response", 0) or 0)
         q = self.responses.setdefault(key, asyncio.Queue())
         try:
             while True:
@@ -212,6 +213,15 @@ class HelperManager:
                     except asyncio.QueueEmpty:
                         break
 
+                catch_state.update({
+                    "source": key,
+                    "mode": "catch_your_waifu_w",
+                    "pending_id": current_id,
+                    "next_id": current_id,
+                    "delay": delay,
+                    "running": True,
+                })
+                self._save()
                 await self.client.send_message(bot, f"{command} {current_id}")
                 try:
                     response = await asyncio.wait_for(
