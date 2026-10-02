@@ -4,6 +4,8 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
+from unified.config import settings
+
 
 @dataclass(frozen=True, slots=True)
 class LookupCacheItem:
@@ -73,4 +75,7 @@ class PositiveUIDCache:
         return len(self._items)
 
 
-positive_uid_cache = PositiveUIDCache()
+positive_uid_cache = PositiveUIDCache(
+    settings.lookup_uid_cache_max_items,
+    settings.lookup_uid_cache_ttl_seconds,
+)
