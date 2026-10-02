@@ -139,7 +139,7 @@ async def build_ping_text(message: Message) -> str:
     )
 
 
-async def build_status_text(message: Message, *, helper_state: str, helper_text: str) -> str:
+async def build_status_text(message: Message) -> str:
     async def safe_count(query: dict) -> int:
         try:
             return await characters.count_documents(query)
@@ -183,9 +183,6 @@ async def build_status_text(message: Message, *, helper_state: str, helper_text:
         f"‣ Lookup EMA : <code>{_fmt_ms(float(snap['lookup_ema_ms'])) if snap['lookup_total'] else 'N/A'}</code>\n"
         f"‣ Lookup Hits : <code>{_fmt_int(snap['lookup_hits'])}</code>\n"
         f"‣ Lookup Misses : <code>{_fmt_int(snap['lookup_misses'])}</code>\n\n"
-        "🤖 <b>HELPER</b>\n"
-        f"‣ Userbot : <code>{helper_state}</code>\n"
-        f"{helper_text}\n\n"
         f"⏱ Uptime : <code>{_uptime()}</code>\n"
         "━━━━━━━━━━━━━━━━━━"
     )
