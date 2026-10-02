@@ -68,6 +68,10 @@ class PositiveUIDCache:
         for uid in uids:
             self.set(uid, value, source)
 
+    def invalidate(self, uids: list[str], source: str | None = None) -> None:
+        for uid in uids:
+            self._items.pop(self._key(uid, source), None)
+
     def clear(self) -> None:
         self._items.clear()
 
