@@ -93,30 +93,25 @@ def _cache_doc(doc: dict | None, uids: list[str]) -> None:
     if not doc or not uids:
         return
     source = str(doc.get("source_key") or "").strip().lower() or None
-    _UID_CACHE.remember(uids, doc, source)
-    _UID_CACHE.remember(uids, doc, None)
+    # Keep the positive cache source-scoped. Global UID recovery stays in Mongo
+    # so an ambiguous UID can never be silently resolved to the wrong dataset.
+    if source:
+        _UID_CACHE.remember(uids, doc, source)
 
 
 def _cache_lookup(uids: list[str], scope: list[str] | None) -> dict | None:
+    if not scope:
+        return None
     for uid in uids:
-        if scope:
-            for source in scope:
-                cached = _UID_CACHE.get(uid, source)
-                if cached:
-                    return {
-                        "name": cached.name,
-                        "command": cached.command,
-                        "source_key": source,
-                        "media_type": "photo",
-                    }
-        cached = _UID_CACHE.get(uid)
-        if cached:
-            return {
-                "name": cached.name,
-                "command": cached.command,
-                "source_key": None,
-                "media_type": "photo",
-            }
+        for source in scope:
+            cached = _UID_CACHE.get(uid, source)
+            if cached:
+                return {
+                    "name": cached.name,
+                    "command": cached.command,
+                    "source_key": cached.source_key,
+                    "media_type": cached.media_type,
+                }
     return None
 
 
