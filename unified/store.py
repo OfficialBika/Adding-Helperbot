@@ -133,6 +133,9 @@ async def save_character(
 
     source_key = (source_key or "unknown").strip().lower()
     character_id = str(character_id).strip() if character_id is not None and str(character_id).strip() else None
+    # Hallow IDs are not stable identities; new Hallow records use Telegram UID only.
+    if source_key == "items_characters_hallow":
+        character_id = None
 
     # Exact UID invariant: real media records are never persisted without
     # Telegram's native file_unique_id. Metadata-only records are exempt.
