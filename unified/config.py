@@ -43,6 +43,13 @@ class Settings:
     lookup_uid_cache_max_items: int = _int("LOOKUP_UID_CACHE_MAX_ITEMS", 300000)
     lookup_uid_cache_ttl_seconds: int = _int("LOOKUP_UID_CACHE_TTL_SECONDS", 3600)
 
+    # Force Join is opt-in so an unset channel can never block lookup.
+    force_join_enabled: bool = _bool("FORCE_JOIN_ENABLED", False)
+    force_join_chat_id: int = _int("FORCE_JOIN_CHAT_ID", 0)
+    force_join_url: str = os.getenv("FORCE_JOIN_URL", "").strip()
+    force_join_title: str = os.getenv("FORCE_JOIN_TITLE", "").strip()
+    force_join_button_text: str = os.getenv("FORCE_JOIN_BUTTON_TEXT", "Join Channel").strip() or "Join Channel"
+
     run_mode: str = os.getenv("RUN_MODE", "auto").strip().lower()
     public_url: str = os.getenv("PUBLIC_URL", "").rstrip("/")
     webhook_path: str = os.getenv("WEBHOOK_PATH", "/webhook")
