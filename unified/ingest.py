@@ -9,6 +9,7 @@ from aiogram.types import Message
 
 from unified.parser import extract_name, extract_character_id, extract_anime, extract_rarity
 from unified.store import save_character
+from unified.lookup_cache import positive_uid_cache
 from services.hash_service import hash_photo, hash_video
 from services.source_resolver import resolve_source_collection, resolve_trusted_inline_collection, output_command_from_message
 from unified.source_whitelist import is_allowed_source, forwarded_origin_chat
@@ -304,6 +305,17 @@ async def ingest_message(
             source_origin=origin,
             archive=(message.chat.id, message.message_id),
         )
+        if isinstance(saved, dict) and saved.get("document"):
+            cached_doc = saved["document"]
+            cached_uids = [
+                str(x).strip()
+                for x in (cached_doc.get("file_unique_ids") or [])
+                if str(x).strip()
+            ]
+            cached_source = str(cached_doc.get("source_key") or "").strip().lower()
+            if cached_uids and cached_source:
+                positive_uid_cache.remember(cached_uids, cached_doc, cached_source)
+
         log.info(
             "INGEST save completed source=%s message=%s name=%s id=%s status=%s",
             source_key,
