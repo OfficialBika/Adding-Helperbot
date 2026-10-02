@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 # Pyrogram 2.0.106 still calls asyncio.get_event_loop() during import.
 # Python 3.14 no longer creates a default loop implicitly, so create one
@@ -14,7 +15,6 @@ if sys.version_info >= (3, 14):
         asyncio.set_event_loop(asyncio.new_event_loop())
 import os
 import sqlite3
-import sys
 from collections import defaultdict
 from pathlib import Path
 
