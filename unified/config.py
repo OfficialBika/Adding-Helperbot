@@ -55,5 +55,13 @@ class Settings:
     max_photo_candidates: int = _int("MAX_PHOTO_CANDIDATES", 1200)
     max_video_candidates: int = _int("MAX_VIDEO_CANDIDATES", 1500)
 
+    # VPS/Mongo latency tuning; all values remain environment-configurable.
+    mongo_server_selection_timeout_ms: int = _int("MONGO_SERVER_SELECTION_TIMEOUT_MS", 2500)
+    mongo_connect_timeout_ms: int = _int("MONGO_CONNECT_TIMEOUT_MS", 2500)
+    mongo_socket_timeout_ms: int = _int("MONGO_SOCKET_TIMEOUT_MS", 8000)
+    mongo_min_pool_size: int = _int("MONGO_MIN_POOL_SIZE", 2)
+    mongo_max_pool_size: int = _int("MONGO_MAX_POOL_SIZE", 24)
+    mongo_max_idle_time_ms: int = _int("MONGO_MAX_IDLE_TIME_MS", 120000)
+
 
 settings = Settings()
