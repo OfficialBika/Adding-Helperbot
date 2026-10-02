@@ -9,6 +9,8 @@ from dataclasses import dataclass
 class LookupCacheItem:
     name: str
     command: str
+    source_key: str
+    media_type: str
 
 
 class PositiveUIDCache:
@@ -47,12 +49,14 @@ class PositiveUIDCache:
         uid = str(uid or "").strip()
         name = str(value.get("name") or "").strip()
         command = str(value.get("command") or "/name").strip() or "/name"
-        if not uid or not name:
+        source_key = str(source or value.get("source_key") or "").strip().lower()
+        media_type = str(value.get("media_type") or "photo").strip().lower() or "photo"
+        if not uid or not name or not source_key:
             return
         key = self._key(uid, source)
         self._items[key] = (
             time.monotonic() + self.ttl_seconds,
-            LookupCacheItem(name=name, command=command),
+            LookupCacheItem(name=name, command=command, source_key=source_key, media_type=media_type),
         )
         self._items.move_to_end(key)
         while len(self._items) > self.max_items:
