@@ -9,7 +9,7 @@ import unicodedata
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from unified.config import settings
-from unified.uid_index import ensure_uid_index, upsert_document
+from unified.uid_index import upsert_document
 
 log = logging.getLogger(__name__)
 
