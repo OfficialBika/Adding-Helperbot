@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -124,8 +125,10 @@ async def _ping_bot(message: Message) -> float | None:
 
 
 async def build_ping_text(message: Message) -> str:
-    db_ping = await _ping_db()
-    bot_ping = await _ping_bot(message)
+    db_ping, bot_ping = await asyncio.gather(
+        _ping_db(),
+        _ping_bot(message),
+    )
     return (
         "🏓 <b>BIKA PING</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -137,16 +140,27 @@ async def build_ping_text(message: Message) -> str:
 
 
 async def build_status_text(message: Message, *, helper_state: str, helper_text: str) -> str:
-    count = await characters.count_documents({})
-    sources = await characters.distinct("source_key")
-    media_counts = {}
-    for media_type in ("photo", "video", "animation", "document"):
+    async def safe_count(query: dict) -> int:
         try:
-            media_counts[media_type] = await characters.count_documents({"media_type": media_type})
+            return await characters.count_documents(query)
         except Exception:
-            media_counts[media_type] = 0
+            return 0
 
-    db_ping = await _ping_db()
+    count, sources, photo_count, video_count, animation_count, document_count, db_ping = await asyncio.gather(
+        safe_count({}),
+        characters.distinct("source_key"),
+        safe_count({"media_type": "photo"}),
+        safe_count({"media_type": "video"}),
+        safe_count({"media_type": "animation"}),
+        safe_count({"media_type": "document"}),
+        _ping_db(),
+    )
+    media_counts = {
+        "photo": photo_count,
+        "video": video_count,
+        "animation": animation_count,
+        "document": document_count,
+    }
     snap = metrics.snapshot()
     lookup_state = "READY" if db_ping is not None else "DEGRADED"
 
@@ -178,10 +192,12 @@ async def build_status_text(message: Message, *, helper_state: str, helper_text:
 
 
 async def build_stats_text(message: Message, *, helper_state: str) -> str:
-    db_ping = await _ping_db()
-    bot_ping = await _ping_bot(message)
+    db_ping, bot_ping, count = await asyncio.gather(
+        _ping_db(),
+        _ping_bot(message),
+        characters.count_documents({}),
+    )
     used, available, total = _ram_info()
-    count = await characters.count_documents({})
     snap = metrics.snapshot()
 
     hit_rate = (
