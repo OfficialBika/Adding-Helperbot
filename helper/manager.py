@@ -50,6 +50,8 @@ FORWARD_SOURCES = {
     "ziceko": "@zicekodata_1",
     "orin": "@timunagalaya",
     "dao": "-1004397263975",
+    "picker": "@Picker_database",
+    "kairo": "@KairoDatabase",
 }
 
 DM_SOURCES = {
