@@ -44,6 +44,9 @@ class Settings:
     # Positive exact-UID cache: only successful lookups are cached.
     lookup_uid_cache_max_items: int = _int("LOOKUP_UID_CACHE_MAX_ITEMS", 300000)
     lookup_uid_cache_ttl_seconds: int = _int("LOOKUP_UID_CACHE_TTL_SECONDS", 3600)
+    # Local SQLite exact-UID accelerator. MongoDB remains the source of truth.
+    uid_index_path: str = os.getenv("UID_INDEX_PATH", "data/uid_index.sqlite3").strip() or "data/uid_index.sqlite3"
+    uid_index_backfill_batch: int = max(100, min(5000, _int("UID_INDEX_BACKFILL_BATCH", 1000)))
 
     # Force Join is opt-in so an unset channel can never block lookup.
     force_join_enabled: bool = _bool("FORCE_JOIN_ENABLED", False)
