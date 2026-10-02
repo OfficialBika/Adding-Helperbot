@@ -981,12 +981,28 @@ class HelperManager:
         # GetHistory is rate-limited and can take many seconds; doing it here
         # makes /startfw... appear to hang and prevents the bot from replying.
         forward_progress = self._state.setdefault("forward_progress", {})
+        previous_progress = forward_progress.get(key)
+        if not isinstance(previous_progress, dict):
+            previous_progress = {}
+
+        # No-argument resume passes the saved current_index. Preserve the
+        # message-ID checkpoint only when the requested index still matches
+        # that saved checkpoint. An explicit count therefore remains explicit.
+        checkpoint_message_id = ""
+        if resume_count is not None:
+            previous_index = int(previous_progress.get("current_index", -1) or -1)
+            if previous_index == start:
+                checkpoint_message_id = str(
+                    previous_progress.get("last_success_message_id", "") or ""
+                )
+
         forward_progress[key] = {
             "source": key,
             "mode": state_mode,
             "media_filter": media_filter,
             "current_index": start,
             "total_items": None,
+            "last_success_message_id": checkpoint_message_id,
             "delay": delay,
             "running": True,
             "history_scanning": True,
