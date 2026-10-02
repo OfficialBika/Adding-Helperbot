@@ -46,8 +46,9 @@ async def _cached_member(bot, user_id: int) -> bool | None:
     try:
         member = await bot.get_chat_member(settings.force_join_chat_id, int(user_id))
     except Exception:
-        # A broken/missing channel configuration must not turn lookup into a
-        # global outage. The feature is therefore fail-open on API errors.
+        # Force Join is a strict access gate when enabled. A Telegram API
+        # verification failure must never be treated as membership, otherwise
+        # an outage could silently bypass the requirement.
         return None
 
     status = str(getattr(member, "status", "") or "").lower()
@@ -92,9 +93,21 @@ async def require_join(message: Message) -> bool:
     if joined is True:
         return True
 
-    # API/config errors are fail-open; only an explicit non-member result blocks.
+    # Strict mode: an API verification failure is treated as unverified.
+    # This prevents Force Join from being bypassed during Telegram/API errors.
     if joined is None:
-        return True
+        now = time.monotonic()
+        async with _cache_lock:
+            last = _prompt_cache.get(int(user.id), 0.0)
+            if now - last < _PROMPT_TTL:
+                return False
+            _prompt_cache.pop(int(user.id), None)
+            _prompt_cache[int(user.id)] = now
+        await message.reply(
+            "⚠️ <b>Membership check unavailable.</b>\\n\\nPlease try again in a moment.",
+            reply_markup=_keyboard(),
+        )
+        return False
 
     now = time.monotonic()
     async with _cache_lock:
