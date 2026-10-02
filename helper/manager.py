@@ -1182,8 +1182,11 @@ class HelperManager:
 
         if cmd in {"/resumecatchyourwaifubot", "/resumecatchyourwaifu"}:
             try:
-                start_id = max(1, int(self._state.get("next_id", 1) or 1))
-                delay = max(1, min(int(self._state.get("delay", DEFAULT_DELAY) or DEFAULT_DELAY), MAX_DELAY))
+                catch_state = self._state.get("catch_your_waifu_progress") or {}
+                # If the process stopped while waiting for a response, retry the
+                # exact pending ID instead of skipping it.
+                start_id = max(1, int(catch_state.get("pending_id") or catch_state.get("next_id") or 1))
+                delay = max(1, min(int(catch_state.get("delay", DEFAULT_DELAY) or DEFAULT_DELAY), MAX_DELAY))
                 await self.start_catch_your_waifu(start_id, delay)
                 await message.reply(
                     f"✅ Resumed Catch Your Waifu /w from <code>{start_id}</code>.\\n"
