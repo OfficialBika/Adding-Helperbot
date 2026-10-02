@@ -9,6 +9,7 @@ import unicodedata
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from unified.config import settings
+from unified.uid_index import ensure_uid_index, upsert_document
 
 log = logging.getLogger(__name__)
 
@@ -267,9 +268,11 @@ async def save_character(
         doc["created_at"] = now
         doc["updated_at"] = now
         await characters.insert_one(doc)
+        saved_doc = await characters.find_one(key)
+        await upsert_document(saved_doc)
         return {
             "status": "saved",
-            "document": await characters.find_one(key),
+            "document": saved_doc,
             "changes": ["new character record"],
         }
 
@@ -317,6 +320,7 @@ async def save_character(
             update["$addToSet"]["sha256_aliases"] = {"$each": [sha]}
 
     if not update:
+        await upsert_document(existing)
         return {
             "status": "unchanged",
             "document": existing,
@@ -353,9 +357,11 @@ async def save_character(
 
     update.setdefault("$set", {})["updated_at"] = now
     await characters.update_one({"_id": existing["_id"]}, update)
+    updated_doc = await characters.find_one({"_id": existing["_id"]})
+    await upsert_document(updated_doc)
     return {
         "status": "updated",
-        "document": await characters.find_one({"_id": existing["_id"]}),
+        "document": updated_doc,
         "changes": changed_fields,
     }
 
