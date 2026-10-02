@@ -41,6 +41,9 @@ def strip_symbols(value: str) -> str:
 
 def clean_name(value: str) -> str:
     value = norm(value)
+    # Telegram source bots may wrap field values in Markdown code ticks.
+    # The ticks are formatting only and must never become part of the stored name.
+    value = re.sub(r"^\s*`+(.*?)`+\s*$", r"\1", value, flags=re.S).strip()
     value = re.sub(r"^(?:📛|👤|🆔|⭐|💠|🎬|🎭|📤)+\s*", "", value)
     value = re.sub(r"^(?:name|character\s*name|char\s*name)\s*[:：•\-=]\s*", "", value, flags=re.I)
     value = re.split(
@@ -144,16 +147,72 @@ def _catch_log_name(text: str) -> str | None:
 
 
 def _picker_name(text: str) -> str | None:
-    """Parse Picker Database OwO captions, including update posts."""
+    """Parse Picker Database OwO captions in both character/update formats."""
     raw = norm(text)
-    if not raw or not re.search(r"owo!\s*check\s+out\s+this\s+(?:character|update)", raw, re.I):
+    if not raw or not re.search(
+        r"owo!\s*check\s+out\s+this\s+(?:character|update)", raw, re.I
+    ):
         return None
+
     for line in raw.splitlines():
-        m = re.search(r"\bID\s*[:：]\s*\d+\s+(.+?)\s*[」]?$", line, re.I)
+        line = line.strip()
+
+        # Character format:
+        # 🆔️30: Ayaka
+        m = re.match(
+            r"^\s*[「『【\[\(]?\s*(?:🆔\ufe0f?\s*)?(\d+)\s*[:：-]\s*(.+?)\s*[」』】\]\)]?\s*$",
+            line,
+            re.I,
+        )
         if m:
-            value = clean_name(m.group(1))
+            value = clean_name(m.group(2))
             if value:
                 return value
+
+        # Update format:
+        # 「 ID : 2601 Shanks ⛓️ 」
+        m = re.match(
+            r"^\s*[「『【\[\(]?\s*ID\s*[:：-]\s*(\d+)\s+(.+?)\s*[」』】\]\)]?\s*$",
+            line,
+            re.I,
+        )
+        if m:
+            value = clean_name(m.group(2))
+            if value:
+                return value
+
+    return None
+
+
+def _picker_id(text: str) -> str | None:
+    """Parse the numeric ID from Picker Database OwO captions."""
+    raw = norm(text)
+    if not raw or not re.search(
+        r"owo!\s*check\s+out\s+this\s+(?:character|update)", raw, re.I
+    ):
+        return None
+
+    for line in raw.splitlines():
+        line = line.strip()
+
+        # Character format: 🆔️30: Ayaka
+        m = re.match(
+            r"^\s*[「『【\[\(]?\s*(?:🆔\ufe0f?\s*)?(\d+)\s*[:：-]",
+            line,
+            re.I,
+        )
+        if m:
+            return m.group(1)
+
+        # Update format: 「 ID : 2601 Shanks ⛓️ 」
+        m = re.match(
+            r"^\s*[「『【\[\(]?\s*ID\s*[:：-]\s*(\d+)(?:\s|$)",
+            line,
+            re.I,
+        )
+        if m:
+            return m.group(1)
+
     return None
 
 
@@ -278,6 +337,25 @@ def extract_character_id(text: str | None) -> str | None:
     raw = norm(text)
     if not raw:
         return None
+
+    # Picker Database exposes two OwO ID layouts:
+    #   🆔️30: Ayaka
+    #   「 ID : 2601 Shanks ⛓️ 」
+    picker_id = _picker_id(raw)
+    if picker_id:
+        return picker_id
+
+    # Kairo may wrap the numeric ID in Markdown code ticks, e.g. ID: 3.
+    # Formatting ticks are never part of the stored ID.
+    if re.search(r"new\s+card\s+added", raw, re.I):
+        for line in raw.splitlines():
+            m = re.match(
+                r"^\s*[^\w\n\r:：•\-=]{0,8}ID\s*[:：\-]\s*`?(\d+)`?\s*$",
+                line,
+                re.I,
+            )
+            if m:
+                return m.group(1)
 
     # Group the complete ID-label alternation so the delimiter applies
     # to every supported label form.
