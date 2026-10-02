@@ -26,7 +26,7 @@ from unified.lookup import lookup_message
 from helper.runtime import HelperUserbot
 from helper.manager import HelperManager
 from services.result_formatter import result_buttons
-from services.force_join import require_join, router as force_join_router
+from unified.services.force_join import require_join, router as force_join_router
 from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
 from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
