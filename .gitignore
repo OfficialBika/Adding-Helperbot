@@ -3,6 +3,7 @@ __pycache__/
 .env
 .env.*
 data/*.db
+data/*.sqlite3
 namebotv3/data/*.db
 sessions/
 *.session
