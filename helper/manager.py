@@ -980,6 +980,17 @@ class HelperManager:
         # IMPORTANT: never scan Telegram history inside the command handler.
         # GetHistory is rate-limited and can take many seconds; doing it here
         # makes /startfw... appear to hang and prevents the bot from replying.
+        forward_progress = self._state.setdefault("forward_progress", {})
+        forward_progress[key] = {
+            "source": key,
+            "mode": state_mode,
+            "media_filter": media_filter,
+            "current_index": start,
+            "total_items": None,
+            "delay": delay,
+            "running": True,
+            "history_scanning": True,
+        }
         self._state.update({
             "source": key,
             "mode": state_mode,
@@ -1012,6 +1023,7 @@ class HelperManager:
         media_filter=None,
     ):
         media = []
+        forward_progress = self._state.setdefault("forward_progress", {}).setdefault(key, {})
         try:
             # Telegram returns chat history newest -> oldest. Build the media
             # message-ID list in the background, then reverse it so forwarding
@@ -1032,6 +1044,16 @@ class HelperManager:
                 )
 
             state_mode = "forward_video" if media_filter == "video" else "forward"
+            forward_progress.update({
+                "source": key,
+                "mode": state_mode,
+                "media_filter": media_filter,
+                "current_index": start,
+                "total_items": total,
+                "delay": delay,
+                "running": True,
+                "history_scanning": False,
+            })
             self._state.update({
                 "source": key,
                 "mode": state_mode,
@@ -1051,6 +1073,16 @@ class HelperManager:
                     source,
                     media[i],
                 )
+                forward_progress.update({
+                    "source": key,
+                    "mode": state_mode,
+                    "media_filter": media_filter,
+                    "current_index": i + 1,
+                    "total_items": total,
+                    "delay": delay,
+                    "running": True,
+                    "history_scanning": False,
+                })
                 self._state.update({
                     "source": key,
                     "mode": state_mode,
@@ -1069,6 +1101,8 @@ class HelperManager:
             self._state["history_scanning"] = False
             log.exception("forward helper failed: %s", key)
         finally:
+            forward_progress["running"] = False
+            forward_progress["history_scanning"] = False
             self._state["running"] = False
             self._state["history_scanning"] = False
             self._save()
