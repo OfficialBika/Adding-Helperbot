@@ -143,6 +143,34 @@ def _catch_log_name(text: str) -> str | None:
     return None
 
 
+def _picker_name(text: str) -> str | None:
+    """Parse Picker Database OwO captions, including update posts."""
+    raw = norm(text)
+    if not raw or not re.search(r"owo!\s*check\s+out\s+this\s+(?:character|update)", raw, re.I):
+        return None
+    for line in raw.splitlines():
+        m = re.search(r"\bID\s*[:：]\s*\d+\s+(.+?)\s*[」]?$", line, re.I)
+        if m:
+            value = clean_name(m.group(1))
+            if value:
+                return value
+    return None
+
+
+def _kairo_name(text: str) -> str | None:
+    """Parse KairoCollectBot's New Card Added caption."""
+    raw = norm(text)
+    if not raw or not re.search(r"new\s+card\s+added", raw, re.I):
+        return None
+    for line in raw.splitlines():
+        m = re.search(r"^\s*[📛]?\s*Character\s*[:：]\s*(.+?)\s*$", line, re.I)
+        if m:
+            value = clean_name(m.group(1))
+            if value:
+                return value
+    return None
+
+
 def _catch_your_waifu_name(text: str) -> str | None:
     """Parse Catch_Your_Waifu_Bot's /w Character Details card."""
     raw = norm(text)
@@ -314,7 +342,7 @@ def extract_name(text: str | None) -> str | None:
     if not raw:
         return None
 
-    for parser in (_catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
+    for parser in (_picker_name, _kairo_name, _catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name
