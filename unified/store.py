@@ -359,6 +359,13 @@ async def save_character(
     await characters.update_one({"_id": existing["_id"]}, update)
     updated_doc = await characters.find_one({"_id": existing["_id"]})
     await upsert_document(updated_doc)
+    # A changed Mongo record must never leave an older positive UID result in RAM.
+    # Local import avoids a module-level store <-> lookup dependency cycle.
+    from unified.lookup_cache import positive_uid_cache
+    positive_uid_cache.invalidate(
+        list(dict.fromkeys([*old_uids, *unique_ids])),
+        source_key,
+    )
     return {
         "status": "updated",
         "document": updated_doc,
