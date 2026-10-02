@@ -1,16 +1,52 @@
 from __future__ import annotations
 
 from aiogram import Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 from config import settings
-from services.group_access import is_owner_or_sudo, remember_group_from_message, set_group_approved
+from services.group_access import (
+    is_global_mode_enabled,
+    is_owner_or_sudo,
+    remember_group_from_message,
+    set_global_mode,
+    set_group_approved,
+)
 from services.snapshot_cache import snapshot
 from services.sqlite_fingerprint_index import sqlite_index
 from utils.telegram_safe import safe_reply
 
 router = Router(name="admin")
+
+
+@router.message(Command("global"))
+async def global_mode(message: Message, command: CommandObject) -> None:
+    """Toggle global lookup mode without changing any /gapprove records."""
+    if not is_owner_or_sudo(message.from_user.id if message.from_user else None):
+        return
+
+    arg = (command.args or "").strip().lower()
+    if arg not in {"on", "off"}:
+        enabled = await is_global_mode_enabled()
+        await safe_reply(
+            message,
+            "🌐 Global mode: <b>%s</b>\n\nUse /global on or /global off."
+            % ("ON" if enabled else "OFF"),
+            parse_mode="HTML",
+        )
+        return
+
+    enabled = arg == "on"
+    await set_global_mode(enabled)
+    await safe_reply(
+        message,
+        "🌐 Global mode <b>%s</b>.\n"
+        "Public non-approved groups: manual lookup only; media auto lookup stays silent.\n"
+        "DM: auto + manual lookup.\n"
+        "/gapprove groups: unchanged and not affected by global mode."
+        % ("ON" if enabled else "OFF"),
+        parse_mode="HTML",
+    )
 
 
 @router.message(Command("gapprove"))
