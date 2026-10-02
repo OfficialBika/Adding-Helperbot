@@ -128,7 +128,12 @@ def _keyboard() -> InlineKeyboardMarkup:
 
     for index, (_, url, title) in enumerate(channels, start=1):
         if url:
-            button_text = title or f"Channel {index}"
+            # Preserve the old custom button label for legacy single-channel
+            # configuration; multi-channel buttons use their channel titles.
+            if not settings.force_join_chat_ids and len(channels) == 1:
+                button_text = settings.force_join_button_text
+            else:
+                button_text = title or f"Channel {index}"
             rows.append([InlineKeyboardButton(text=f"📢 {button_text}", url=url)])
 
     rows.append(
