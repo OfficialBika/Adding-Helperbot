@@ -1027,7 +1027,9 @@ class HelperManager:
         try:
             # Telegram returns chat history newest -> oldest. Build the media
             # message-ID list in the background, then reverse it so forwarding
-            # remains chronological exactly like the previous implementation.
+            # remains chronological. Resume prefers the last successfully
+            # forwarded Telegram message ID; the saved index is only a fallback
+            # for old checkpoints that predate message-ID checkpoints.
             async for msg in self.client.get_chat_history(source):
                 if media_filter == "video":
                     if getattr(msg, "video", None):
@@ -1038,10 +1040,64 @@ class HelperManager:
             media.reverse()
             total = len(media)
 
+            saved_last_id = str(
+                forward_progress.get("last_success_message_id", "") or ""
+            )
+            if saved_last_id:
+                try:
+                    saved_last_id_int = int(saved_last_id)
+                except (TypeError, ValueError):
+                    saved_last_id_int = 0
+                if saved_last_id_int:
+                    try:
+                        start = media.index(saved_last_id_int) + 1
+                    except ValueError:
+                        # The source message may have been deleted. Preserve
+                        # backward compatibility by falling back to the saved
+                        # index instead of silently jumping to a new position.
+                        start = max(0, int(start))
+                        log.warning(
+                            "forward checkpoint message_id=%s not found for %s; "
+                            "falling back to index=%s",
+                            saved_last_id,
+                            key,
+                            start,
+                        )
+
             if start >= total:
-                raise RuntimeError(
-                    f"Resume index {start} is at/after the end ({total})"
+                state_mode = "forward_video" if media_filter == "video" else "forward"
+                forward_progress.update({
+                    "source": key,
+                    "mode": state_mode,
+                    "media_filter": media_filter,
+                    "current_index": total,
+                    "total_items": total,
+                    "delay": delay,
+                    "running": False,
+                    "history_scanning": False,
+                    "last_success_message_id": (
+                        saved_last_id or (str(media[-1]) if media else "")
+                    ),
+                })
+                self._state.update({
+                    "source": key,
+                    "mode": state_mode,
+                    "media_filter": media_filter,
+                    "current_index": total,
+                    "total_items": total,
+                    "delay": delay,
+                    "running": False,
+                    "history_scanning": False,
+                    "last_error": "",
+                })
+                self._save()
+                log.info(
+                    "forward source %s already complete: checkpoint=%s total=%s",
+                    key,
+                    start,
+                    total,
                 )
+                return
 
             state_mode = "forward_video" if media_filter == "video" else "forward"
             forward_progress.update({
@@ -1079,6 +1135,7 @@ class HelperManager:
                     "media_filter": media_filter,
                     "current_index": i + 1,
                     "total_items": total,
+                    "last_success_message_id": str(media[i]),
                     "delay": delay,
                     "running": True,
                     "history_scanning": False,
@@ -1364,9 +1421,9 @@ class HelperManager:
             "/resumecatchyourwaifubot [delay]  (saved next ID)\n"
             "/resumesenpaibot &lt;next_id&gt; [delay]\n"
             "/startfwpickerbot [delay]\n"
-            "/resumefwpickerbot <count> [delay]\n"
+            "/resumefwpickerbot [count] [delay]  (saved checkpoint if count omitted)\n"
             "/startfwkairobot [delay]\n"
-            "/resumefwkairobot <count> [delay]\n"
+            "/resumefwkairobot [count] [delay]  (saved checkpoint if count omitted)\n"
             "/startfwcatchbot [delay]\n"
             "/startfwcatchbotvd [delay]  (video only)\n"
             "/resumefwcatchbot &lt;count&gt; [delay]\n\n"
