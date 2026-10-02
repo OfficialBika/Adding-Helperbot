@@ -705,6 +705,10 @@ HELPER_COMMANDS = [
     "startfwdonghua", "resumefwdonghua",
 
     # Catch FW extras.
+    "startfwpickerbot", "resumefwpickerbot",
+    "startfwpicker", "resumefwpicker",
+    "startfwkairobot", "resumefwkairobot",
+    "startfwkairo", "resumefwkairo",
     "startfwcatchbot", "startfwcatchbotvd", "resumefwcatchbot",
     "startfwcatch", "resumefwcatch",
 ]
