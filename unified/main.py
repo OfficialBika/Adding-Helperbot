@@ -658,6 +658,7 @@ async def run():
         raise RuntimeError("PUBLIC_URL is required in webhook mode")
 
     await ensure_indexes()
+    await ensure_uid_index()
     await ensure_auth_indexes()
     await helper_userbot.start()
     helper_manager.bind()
