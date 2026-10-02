@@ -68,10 +68,21 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
     if not uids:
         return None
     prefix = {"source_key": {"$in": scope}} if scope else {}
-    doc = await characters.find_one({**prefix, **_uid_query_new(uids)})
-    if doc:
-        return doc
-    return await characters.find_one({**prefix, **_uid_query_legacy(uids)})
+    query = {
+        **prefix,
+        "$or": [
+            _uid_query_new(uids),
+            *_uid_query_legacy(uids)["$or"],
+        ],
+    }
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "media_type": 1,
+    }
+    return await characters.find_one(query, projection)
 
 
 async def _exact_global_candidates(uids: list[str], limit: int = 2) -> list[dict]:
@@ -82,13 +93,15 @@ async def _exact_global_candidates(uids: list[str], limit: int = 2) -> list[dict
         "name": 1,
         "command": 1,
         "source_key": 1,
-        "file_unique_ids": 1,
-        "telegram_file_unique_id": 1,
+        "media_type": 1,
     }
-    docs = await characters.find(_uid_query_new(uids), projection).limit(limit).to_list(length=limit)
-    if docs:
-        return docs
-    return await characters.find(_uid_query_legacy(uids), projection).limit(limit).to_list(length=limit)
+    query = {
+        "$or": [
+            _uid_query_new(uids),
+            *_uid_query_legacy(uids)["$or"],
+        ],
+    }
+    return await characters.find(query, projection).limit(limit).to_list(length=limit)
 
 
 def _sha_query(sha: str) -> dict:
@@ -104,7 +117,14 @@ async def _hash_exact_find(scope: list[str] | None, sha: str):
     if not sha:
         return None
     prefix = {"source_key": {"$in": scope}} if scope else {}
-    return await characters.find_one({**prefix, **_sha_query(sha)})
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "media_type": 1,
+    }
+    return await characters.find_one({**prefix, **_sha_query(sha)}, projection)
 
 
 async def _hash_global_candidates(sha: str, limit: int = 2) -> list[dict]:
@@ -395,16 +415,10 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
             )
             return doc, "uid"
 
-        probe = (await _exact_global_candidates(uids, limit=1) or [None])[0]
-        if probe:
-            log.warning(
-                "UID DEBUG cross_source_match message=%s requested_sources=%s db_source=%s name=%s",
-                getattr(message, "message_id", None),
-                collections,
-                probe.get("source_key"),
-                probe.get("name"),
-            )
-        else:
+        # Source-scoped auto lookup must not perform an extra global probe.
+        # If global recovery is explicitly allowed, the actual global query
+        # below is the only global round-trip needed.
+        if not allow_global_fallback:
             log.warning(
                 "UID DEBUG database_uid_miss message=%s requested_sources=%s",
                 getattr(message, "message_id", None),
