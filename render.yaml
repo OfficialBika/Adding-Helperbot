@@ -8,7 +8,7 @@ services:
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.11
+        value: 3.14.4
       - key: RUN_MODE
         value: webhook
       - key: PUBLIC_URL
