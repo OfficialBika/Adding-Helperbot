@@ -13,6 +13,8 @@ from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import characters
 from unified.lookup_cache import PositiveUIDCache
+from unified.uid_index import lookup_global as sqlite_lookup_global
+from unified.uid_index import lookup_source as sqlite_lookup_source
 from utils.media import extract_media
 
 log = logging.getLogger(__name__)
@@ -433,6 +435,21 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         )
         return cached_doc, "uid_cache"
 
+    # Persistent local accelerator. It is never authoritative: a miss simply
+    # falls through to MongoDB, so stale/missing SQLite entries cannot reduce
+    # lookup correctness.
+    if collections:
+        sqlite_doc = await sqlite_lookup_source(collections, uids)
+        if sqlite_doc:
+            log.info(
+                "UID SQLITE HIT message=%s source=%s name=%s",
+                getattr(message, "message_id", None),
+                sqlite_doc.get("source_key"),
+                sqlite_doc.get("name"),
+            )
+            _cache_doc(sqlite_doc, uids)
+            return sqlite_doc, "uid_sqlite"
+
     log.info(
         "UID DEBUG message=%s source_message=%s media_type=%s collections=%s uids=%s",
         getattr(message, "message_id", None),
@@ -468,6 +485,29 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     # an exact global UID fallback. This is safe because file_unique_id is
     # Telegram's native exact media identity. Source-scoped lookup always wins.
     if allow_global_fallback:
+        # Try the local exact-UID index before the Mongo global recovery query.
+        global_docs = await sqlite_lookup_global(uids, limit=2)
+        if len(global_docs) == 1:
+            _cache_doc(global_docs[0], uids)
+            return global_docs[0], "uid_sqlite_global"
+        if len(global_docs) > 1:
+            # Keep the same ambiguity rules as Mongo; SQLite only accelerates.
+            preferred = next(
+                (
+                    doc for doc in global_docs
+                    if str(doc.get("source_key") or "").strip().lower()
+                    == "items_character_catcher"
+                ),
+                None,
+            )
+            if preferred:
+                _cache_doc(preferred, uids)
+                return preferred, "uid_sqlite_global"
+            log.warning(
+                "UID SQLite global recovery ambiguous message=%s candidates=%s",
+                getattr(message, "message_id", None),
+                len(global_docs),
+            )
         global_docs = await _exact_global_candidates(uids, limit=2)
         if len(global_docs) == 1:
             log.info(
