@@ -50,6 +50,7 @@ COMMAND_TO_COLLECTIONS: dict[str, list[str]] = {
     "/orin": ["items_orinx_waifu"],
     "/dao": ["items_immortal_donghua"],
     "/pick": ["items_character_picker", "items_senpai_catcher"],
+    "/kairo": ["items_kairo_character"],
     "/grab": [
         "items_husbando_grabber",
         "items_grab_your_waifu",
@@ -118,6 +119,9 @@ TITLE_SOURCE_COLLECTION: dict[str, str] = {
     "timunagalaya": "items_orinx_waifu",
     "immortal donghua": "items_immortal_donghua",
     "donghua database": "items_immortal_donghua",
+    "picker database": "items_character_picker",
+    "kairo database": "items_kairo_character",
+    "kairo collect": "items_kairo_character",
 }
 
 TITLE_OUTPUT_COMMAND: dict[str, str] = {
@@ -136,6 +140,9 @@ TITLE_OUTPUT_COMMAND: dict[str, str] = {
     "timunagalaya": "/orin",
     "immortal donghua": "/dao",
     "donghua database": "/dao",
+    "picker database": "/pick",
+    "kairo database": "/kairo",
+    "kairo collect": "/kairo",
 }
 
 CONTENT_SOURCE_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
