@@ -2,8 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+
+# Pyrogram 2.0.106 still calls asyncio.get_event_loop() during import.
+# Python 3.14 no longer creates a default loop implicitly, so create one
+# before importing Pyrogram. asyncio.run() later replaces it with its own
+# managed loop for the actual application runtime.
+if sys.version_info >= (3, 14):
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 import os
 import sqlite3
+import sys
 from collections import defaultdict
 from pathlib import Path
 
