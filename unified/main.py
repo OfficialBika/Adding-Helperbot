@@ -20,7 +20,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from unified.config import settings
 from unified.store import db, characters, close, ensure_indexes
-from unified.uid_index import ensure_uid_index, upsert_documents
+from unified.uid_index import ensure_uid_index, get_meta, set_meta, upsert_documents
 from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized, get_global_lookup_enabled, set_global_lookup_enabled
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
@@ -44,18 +44,40 @@ helper_manager = HelperManager(helper_userbot)
 
 
 async def _backfill_uid_index() -> None:
-    """Warm the local exact-UID accelerator from Mongo without blocking startup."""
+    """Incrementally warm SQLite from Mongo and resume safely after restart.
+
+    MongoDB remains authoritative. The checkpoint only controls which Mongo
+    documents the accelerator has already scanned; normal ingest hot-sync keeps
+    newly inserted/updated records current while the backfill is running.
+    """
+    from bson import ObjectId
+
     batch_size = settings.uid_index_backfill_batch
-    batch: list[dict] = []
+    meta_complete = "backfill_complete"
+    meta_last_id = "backfill_last_id"
+
     try:
+        if await get_meta(meta_complete) == "1":
+            log.info("UID INDEX backfill already complete; hot-sync remains active")
+            return
+
+        last_id = await get_meta(meta_last_id)
+        query: dict = {
+            "$or": [
+                {"file_unique_ids.0": {"$exists": True}},
+                {"telegram_file_unique_id": {"$exists": True, "$ne": ""}},
+            ]
+        }
+        if last_id:
+            try:
+                query["_id"] = {"$gt": ObjectId(last_id)}
+            except Exception:
+                log.warning("UID INDEX invalid resume checkpoint=%r; restarting scan", last_id)
+
         cursor = characters.find(
+            query,
             {
-                "$or": [
-                    {"file_unique_ids.0": {"$exists": True}},
-                    {"telegram_file_unique_id": {"$exists": True, "$ne": ""}},
-                ]
-            },
-            {
+                "_id": 1,
                 "name": 1,
                 "command": 1,
                 "source_key": 1,
@@ -65,20 +87,35 @@ async def _backfill_uid_index() -> None:
                 "updated_at": 1,
             },
             batch_size=batch_size,
-        )
+        ).sort("_id", 1)
+
+        batch: list[dict] = []
+        processed = 0
         async for doc in cursor:
             batch.append(doc)
             if len(batch) >= batch_size:
                 count = await upsert_documents(batch)
-                log.info("UID INDEX backfill batch=%s rows=%s", len(batch), count)
+                last_doc_id = batch[-1].get("_id")
+                if isinstance(last_doc_id, ObjectId):
+                    await set_meta(meta_last_id, str(last_doc_id))
+                processed += len(batch)
+                log.info("UID INDEX backfill batch docs=%s rows=%s processed=%s", len(batch), count, processed)
                 batch.clear()
+
         if batch:
             count = await upsert_documents(batch)
-            log.info("UID INDEX backfill final=%s rows=%s", len(batch), count)
+            last_doc_id = batch[-1].get("_id")
+            if isinstance(last_doc_id, ObjectId):
+                await set_meta(meta_last_id, str(last_doc_id))
+            processed += len(batch)
+            log.info("UID INDEX backfill final docs=%s rows=%s processed=%s", len(batch), count, processed)
+
+        await set_meta(meta_complete, "1")
+        log.info("UID INDEX backfill complete processed=%s", processed)
     except asyncio.CancelledError:
         raise
     except Exception:
-        log.exception("UID INDEX backfill failed; Mongo remains authoritative")
+        log.exception("UID INDEX backfill failed; Mongo remains authoritative and checkpoint will resume")
 
 
 async def _start_uid_index_backfill() -> None:
