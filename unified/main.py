@@ -20,12 +20,13 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from unified.config import settings
 from unified.store import characters, close, ensure_indexes
-from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized
+from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized, get_global_lookup_enabled, set_global_lookup_enabled
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
 from helper.runtime import HelperUserbot
 from helper.manager import HelperManager
 from services.result_formatter import result_buttons
+from services.force_join import require_join, router as force_join_router
 from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
 from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
@@ -50,6 +51,23 @@ async def has_admin_access(message: Message) -> bool:
     if not user:
         return False
     return owner(message) or await is_authorized(user.id)
+
+
+async def global_lookup_allowed(message: Message) -> bool:
+    if await get_global_lookup_enabled():
+        return True
+    if owner(message):
+        return True
+    if message.chat.type == "private":
+        return False
+    doc = await db.settings.find_one({"key": f"gapprove:{int(message.chat.id)}"})
+    return bool(doc and doc.get("enabled", True))
+
+
+GLOBAL_OFF_TEXT = (
+    "⚠️ Global lookup is currently disabled here.\\n\\n"
+    "Please use @BikaWaifuCheatBot Main Bot for lookup."
+)
 
 
 def is_media(message: Message) -> bool:
@@ -225,6 +243,55 @@ async def start(message: Message):
     )
 
 
+@router.message(Command("global"))
+async def global_lookup_command(message: Message):
+    if not owner(message):
+        return
+    parts = (message.text or "").strip().split()
+    value = parts[1].lower() if len(parts) > 1 else "status"
+    if value in {"on", "enable", "enabled", "1", "true"}:
+        await set_global_lookup_enabled(True, message.from_user.id)
+        await message.reply("✅ Global lookup is now <b>ON</b>.")
+    elif value in {"off", "disable", "disabled", "0", "false"}:
+        await set_global_lookup_enabled(False, message.from_user.id)
+        await message.reply("🔒 Global lookup is now <b>OFF</b>.\\nOnly the owner and owner-approved groups can use lookup.")
+    elif value in {"status", "state"}:
+        enabled = await get_global_lookup_enabled()
+        await message.reply(f"🌐 Global lookup: <b>{'ON' if enabled else 'OFF'}</b>")
+    else:
+        await message.reply("Usage: <code>/global on</code>, <code>/global off</code>, or <code>/global status</code>.")
+
+
+@router.message(Command("gapprove"))
+async def gapprove(message: Message):
+    if not owner(message):
+        return
+    if message.chat.type == "private":
+        await message.reply("Use /gapprove inside the target group.")
+        return
+    await db.settings.update_one(
+        {"key": f"gapprove:{int(message.chat.id)}"},
+        {"$set": {"enabled": True, "chat_id": int(message.chat.id)}, "$setOnInsert": {"created_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)}},
+        upsert=True,
+    )
+    await message.reply("✅ This group is approved for lookup.")
+
+
+@router.message(Command("gunapprove"))
+async def gunapprove(message: Message):
+    if not owner(message):
+        return
+    if message.chat.type == "private":
+        await message.reply("Use /gunapprove inside the target group.")
+        return
+    await db.settings.update_one(
+        {"key": f"gapprove:{int(message.chat.id)}"},
+        {"$set": {"enabled": False, "chat_id": int(message.chat.id)}, "$setOnInsert": {"created_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)}},
+        upsert=True,
+    )
+    await message.reply("✅ This group is no longer approved for lookup.")
+
+
 @router.message(Command("status"))
 async def status(message: Message):
     if not await has_admin_access(message):
@@ -351,6 +418,11 @@ async def adding_ingest(message: Message):
     F.func(is_media),
 )
 async def lookup_media(message: Message):
+    if not await global_lookup_allowed(message):
+        await message.reply(GLOBAL_OFF_TEXT)
+        return
+    if not await require_join(message):
+        return
     if not settings.auto_lookup_enabled:
         return
     if message.chat.type == "private" and not settings.lookup_in_private:
@@ -427,6 +499,11 @@ async def lookup_media(message: Message):
 
 
 async def _manual_lookup(message: Message):
+    if not await global_lookup_allowed(message):
+        await message.reply(GLOBAL_OFF_TEXT)
+        return
+    if not await require_join(message):
+        return
     target = getattr(message, "reply_to_message", None)
     if not target or not is_media(target):
         await message.reply("❌ Reply to a character media with .w / .wa / .waifu.")
@@ -590,6 +667,7 @@ async def run():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
+    dp.include_router(force_join_router)
     dp.include_router(router)
 
     if webhook:
