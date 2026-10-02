@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import OrderedDict
 
@@ -10,6 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from unified.config import settings
 
 router = Router(name="unified_force_join")
+log = logging.getLogger("unified.force_join")
 
 # Short membership cache. The key includes the channel ID so three required
 # channels are tracked independently.
@@ -18,8 +20,15 @@ _CACHE_MAX = 20_000
 _membership_cache: "OrderedDict[tuple[int, int], tuple[float, bool]]" = OrderedDict()
 _cache_lock = asyncio.Lock()
 
-_prompt_cache: "OrderedDict[int, float]" = OrderedDict()
+# Prompt throttling is scoped by chat + user so a group prompt never suppresses
+# the DM verification screen opened immediately afterwards.
+_prompt_cache: "OrderedDict[tuple[int, int], float]" = OrderedDict()
 _PROMPT_TTL = 30.0
+
+# Bot username is stable for the lifetime of the process and is used to build
+# a Telegram deep-link from groups into the bot's private chat.
+_bot_username: str = ""
+_bot_username_lock = asyncio.Lock()
 
 
 def _channels() -> tuple[tuple[int, str, str], ...]:
@@ -60,6 +69,22 @@ def _enabled() -> bool:
     return bool(settings.force_join_enabled and _channels())
 
 
+async def _get_bot_username(bot) -> str:
+    global _bot_username
+    if _bot_username:
+        return _bot_username
+
+    async with _bot_username_lock:
+        if _bot_username:
+            return _bot_username
+        try:
+            me = await bot.get_me()
+            _bot_username = str(getattr(me, "username", "") or "").lstrip("@")
+        except Exception:
+            log.exception("FORCE_JOIN failed to resolve bot username for DM deep-link")
+        return _bot_username
+
+
 def _remember(key: tuple[int, int], value: bool) -> None:
     _membership_cache.pop(key, None)
     _membership_cache[key] = (time.monotonic(), value)
@@ -80,9 +105,17 @@ async def _cached_member(bot, chat_id: int, user_id: int) -> bool | None:
 
     try:
         member = await bot.get_chat_member(int(chat_id), int(user_id))
-    except Exception:
+    except Exception as exc:
         # Fail closed while Force Join is enabled: an API failure must not
-        # silently bypass a required channel.
+        # silently bypass a required channel. Log the exact channel so a
+        # misconfigured ID/admin permission can be diagnosed from server logs.
+        log.warning(
+            "FORCE_JOIN membership check failed chat_id=%s user_id=%s error=%s: %s",
+            chat_id,
+            user_id,
+            type(exc).__name__,
+            exc,
+        )
         return None
 
     status = str(getattr(member, "status", "") or "").lower()
@@ -103,8 +136,6 @@ async def _check_all_channels(bot, user_id: int) -> tuple[bool, bool]:
     """
     verification_error = False
 
-    # Do the Telegram membership calls concurrently because three channels
-    # should not add three sequential network round trips to every lookup.
     results = await asyncio.gather(
         *(
             _cached_member(bot, chat_id, user_id)
@@ -113,16 +144,26 @@ async def _check_all_channels(bot, user_id: int) -> tuple[bool, bool]:
         return_exceptions=True,
     )
 
-    for result in results:
+    for (chat_id, _, _), result in zip(_channels(), results):
         if isinstance(result, Exception) or result is None:
             verification_error = True
+            log.warning(
+                "FORCE_JOIN verification unavailable chat_id=%s user_id=%s",
+                chat_id,
+                user_id,
+            )
         elif result is False:
+            log.info(
+                "FORCE_JOIN user not joined chat_id=%s user_id=%s",
+                chat_id,
+                user_id,
+            )
             return False, verification_error
 
     return not verification_error, verification_error
 
 
-def _keyboard() -> InlineKeyboardMarkup:
+def _keyboard(include_dm_button: bool = False) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     channels = _channels()
 
@@ -136,9 +177,20 @@ def _keyboard() -> InlineKeyboardMarkup:
                 button_text = title or f"Channel {index}"
             rows.append([InlineKeyboardButton(text=f"📢 {button_text}", url=url)])
 
-    rows.append(
-        [InlineKeyboardButton(text="✅ I Joined — Check Again", callback_data="fj:check")]
-    )
+    if include_dm_button:
+        # The URL is filled by _prompt because the bot username is only known
+        # through Telegram's getMe API.
+        pass
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ I Joined — Check Again",
+                    callback_data="fj:check",
+                )
+            ]
+        )
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -161,36 +213,91 @@ def _text() -> str:
     )
 
 
+def _dm_text() -> str:
+    return (
+        "🔐 <b>Verification Required</b>\n\n"
+        "Please join all required channels below, then tap "
+        "<b>✅ I Joined — Check Again</b>."
+    )
+
+
 async def _prompt(message: Message, unavailable: bool = False) -> None:
     user = getattr(message, "from_user", None)
     if not user:
         return
 
-    now = time.monotonic()
     user_id = int(user.id)
+    chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+    cache_key = (chat_id, user_id)
+    now = time.monotonic()
 
     async with _cache_lock:
-        last = _prompt_cache.get(user_id, 0.0)
+        last = _prompt_cache.get(cache_key, 0.0)
         if now - last < _PROMPT_TTL:
             return
-        _prompt_cache.pop(user_id, None)
-        _prompt_cache[user_id] = now
+        _prompt_cache.pop(cache_key, None)
+        _prompt_cache[cache_key] = now
         while len(_prompt_cache) > _CACHE_MAX:
             _prompt_cache.popitem(last=False)
+
+    # In groups, keep the verification flow private: the user gets one button
+    # that opens this bot in DM. The actual channel buttons + re-check button
+    # are shown only inside the private chat.
+    if getattr(getattr(message, "chat", None), "type", None) != "private":
+        username = await _get_bot_username(message.bot)
+        if not username:
+            log.error("FORCE_JOIN cannot create DM deep-link: bot username unavailable")
+            text = (
+                "🔒 <b>Join Required</b>\n\n"
+                "Please open this bot in private chat to verify your membership."
+            )
+            await message.reply(text, disable_web_page_preview=True)
+            return
+
+        text = (
+            "🔒 <b>Join Required</b>\n\n"
+            "Please open the bot in private chat to complete channel verification."
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔐 Verify in Bot DM",
+                        url=f"https://t.me/{username}?start=forcejoin",
+                    )
+                ]
+            ]
+        )
+        await message.reply(
+            text,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+        return
 
     if unavailable:
         text = (
             "⚠️ <b>Membership check unavailable.</b>\n\n"
-            "Telegram membership verification failed. Please try again in a moment."
+            "Telegram membership verification failed. Please tap "
+            "<b>✅ I Joined — Check Again</b> to retry."
         )
     else:
-        text = _text()
+        text = _dm_text()
 
     await message.reply(
         text,
         reply_markup=_keyboard(),
         disable_web_page_preview=True,
     )
+
+
+async def send_dm_verification(message: Message) -> None:
+    """Show the private Force Join verification screen."""
+    if not _enabled():
+        await message.reply("ℹ️ Force Join is currently disabled.")
+        return
+
+    await _prompt(message)
 
 
 async def require_join(message: Message) -> bool:
@@ -263,4 +370,4 @@ async def force_join_check(callback: CallbackQuery):
     )
 
 
-__all__ = ["router", "require_join"]
+__all__ = ["router", "require_join", "send_dm_verification"]
