@@ -39,6 +39,9 @@ class Settings:
     reply_not_found: bool = _bool("LOOKUP_REPLY_NOT_FOUND", True)
     # Enable exact Telegram file_unique_id recovery when forwarded media has no source scope.
     v3_global_exact_fallback: bool = _bool("V3_GLOBAL_EXACT_FALLBACK", True)
+    # Positive exact-UID cache: only successful lookups are cached.
+    lookup_uid_cache_max_items: int = _int("LOOKUP_UID_CACHE_MAX_ITEMS", 300000)
+    lookup_uid_cache_ttl_seconds: int = _int("LOOKUP_UID_CACHE_TTL_SECONDS", 3600)
 
     run_mode: str = os.getenv("RUN_MODE", "auto").strip().lower()
     public_url: str = os.getenv("PUBLIC_URL", "").rstrip("/")
