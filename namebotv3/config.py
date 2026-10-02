@@ -303,6 +303,9 @@ class Settings:
     enable_gapprove: bool = _bool("ENABLE_GAPPROVE", True)
     gapprove_cache_seconds: int = _int("GAPPROVE_CACHE_SECONDS", 300)
     auto_lookup_enabled: bool = _bool("AUTO_LOOKUP_ENABLED", True)
+    # Global mode: when enabled, non-approved public groups are silent for auto lookup.
+    # /gapprove groups are explicitly evaluated before this flag and are never affected by it.
+    global_mode_default: bool = _bool("GLOBAL_MODE_DEFAULT", True)
     auto_lookup_only_approved_groups: bool = _bool("AUTO_LOOKUP_ONLY_APPROVED_GROUPS", True)
     auto_lookup_in_support_group: bool = _bool("AUTO_LOOKUP_IN_SUPPORT_GROUP", True)
     auto_lookup_in_dm: bool = _bool("AUTO_LOOKUP_IN_DM", True)
