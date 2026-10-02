@@ -12,7 +12,7 @@ from services.hash_service import hamming_hex, hash_photo, hash_video
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import characters
-from unified.lookup_cache import PositiveUIDCache
+from unified.lookup_cache import positive_uid_cache
 from unified.uid_index import lookup_global as sqlite_lookup_global
 from unified.uid_index import lookup_source as sqlite_lookup_source
 from utils.media import extract_media
@@ -26,9 +26,7 @@ _HASH_CANDIDATE_LIMIT = 1200
 _PHASH_THRESHOLD = 8
 _PHASH_MIN_SCORE = 0.84
 _PHASH_MIN_MARGIN = 0.035
-_UID_CACHE = PositiveUIDCache(
-    settings.lookup_uid_cache_max_items, settings.lookup_uid_cache_ttl_seconds
-)
+_UID_CACHE = positive_uid_cache
 
 
 def _scope(message: Message) -> list[str]:
