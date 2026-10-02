@@ -229,10 +229,18 @@ class HelperManager:
                     )
                 except asyncio.TimeoutError:
                     consecutive_no_response += 1
+                    catch_state.update({
+                        "source": key,
+                        "mode": "catch_your_waifu_w",
+                        "pending_id": None,
+                        "last_checked_id": current_id,
+                        "next_id": current_id + 1,
+                        "consecutive_no_response": consecutive_no_response,
+                        "running": True,
+                    })
                     self._state.update({
                         "source": key,
                         "mode": "catch_your_waifu_w",
-                        "last_checked_id": current_id,
                         "next_id": current_id + 1,
                         "consecutive_no_response": consecutive_no_response,
                         "running": True,
@@ -291,10 +299,19 @@ class HelperManager:
                         response_text[:180],
                     )
 
+                catch_state.update({
+                    "source": key,
+                    "mode": "catch_your_waifu_w",
+                    "pending_id": None,
+                    "last_success_id": current_id,
+                    "last_checked_id": current_id,
+                    "next_id": current_id + 1,
+                    "consecutive_no_response": 0,
+                    "running": True,
+                })
                 self._state.update({
                     "source": key,
                     "mode": "catch_your_waifu_w",
-                    "last_checked_id": current_id,
                     "next_id": current_id + 1,
                     "consecutive_no_response": 0,
                     "running": True,
@@ -308,6 +325,8 @@ class HelperManager:
             self._state["last_error"] = str(exc)
             log.exception("CatchYourWaifu /w helper failed")
         finally:
+            catch_state["running"] = False
+            catch_state["pending_id"] = None
             self._state["running"] = False
             self._save()
             self.runners.pop(key, None)
