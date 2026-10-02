@@ -294,7 +294,7 @@ async def gunapprove(message: Message):
 
 @router.message(Command("status"))
 async def status(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     helper = await helper_manager.status_text()
     helper_state = "ONLINE" if helper_userbot.client else "OFFLINE"
@@ -309,7 +309,7 @@ async def status(message: Message):
 
 @router.message(Command("stats"))
 async def stats(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     helper_state = "ONLINE" if helper_userbot.client else "OFFLINE"
     await message.reply(
@@ -327,14 +327,14 @@ async def ping(message: Message):
 
 @router.message(Command("helperstatus"))
 async def helper_status(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     await message.reply(await helper_manager.status_text())
 
 
 @router.message(Command("addingstatus"))
 async def adding_status(message: Message):
-    if not await has_admin_access(message):
+    if not owner(message):
         return
     await message.reply(
         "📥 <b>Adding Helper</b>\n"
