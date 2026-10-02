@@ -73,6 +73,9 @@ def _forwarded_source_user(message: Any):
     return getattr(message, "forward_from", None)
 
 
+EXPLICIT_FORWARD_SOURCE_ALIASES = {"picker_database", "kairodatabase"}
+
+
 def is_allowed_source(message: Any) -> bool:
     """Authorize ingestion from explicit Telegram forward/source metadata.
 
@@ -84,6 +87,7 @@ def is_allowed_source(message: Any) -> bool:
     """
     configured = _configured_sources()
     allowed = {_norm(x) for x in configured}
+    allowed.update(EXPLICIT_FORWARD_SOURCE_ALIASES)
 
     origin_chat = forwarded_origin_chat(message)
     if origin_chat is not None:
