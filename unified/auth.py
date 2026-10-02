@@ -14,6 +14,25 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+GLOBAL_SETTINGS_KEY = "global_lookup"
+
+
+async def get_global_lookup_enabled() -> bool:
+    doc = await db.settings.find_one({"key": GLOBAL_SETTINGS_KEY})
+    return True if doc is None else bool(doc.get("enabled", True))
+
+
+async def set_global_lookup_enabled(enabled: bool, changed_by: int | None = None) -> None:
+    payload = {"key": GLOBAL_SETTINGS_KEY, "enabled": bool(enabled), "updated_at": _now()}
+    if changed_by is not None:
+        payload["updated_by"] = int(changed_by)
+    await db.settings.update_one(
+        {"key": GLOBAL_SETTINGS_KEY},
+        {"$set": payload, "$setOnInsert": {"created_at": _now()}},
+        upsert=True,
+    )
+
+
 async def ensure_auth_indexes():
     # MongoDB already provides a unique _id index automatically.
     # Do not recreate it with unique=True; MongoDB rejects additional
