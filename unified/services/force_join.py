@@ -11,18 +11,53 @@ from unified.config import settings
 
 router = Router(name="unified_force_join")
 
-# Short positive/negative membership cache. This avoids a Telegram API call on
-# every lookup while still reacting quickly when a user joins.
+# Short membership cache. The key includes the channel ID so three required
+# channels are tracked independently.
 _CACHE_TTL = 60.0
 _CACHE_MAX = 20_000
 _membership_cache: "OrderedDict[tuple[int, int], tuple[float, bool]]" = OrderedDict()
 _cache_lock = asyncio.Lock()
+
 _prompt_cache: "OrderedDict[int, float]" = OrderedDict()
 _PROMPT_TTL = 30.0
 
 
+def _channels() -> tuple[tuple[int, str, str], ...]:
+    """Return (chat_id, url, title) in configured order.
+
+    Multi-channel settings take precedence when FORCE_JOIN_CHAT_IDS is set.
+    Legacy single-channel settings remain fully supported for existing deploys.
+    """
+    multi_ids = tuple(settings.force_join_chat_ids)
+    multi_urls = tuple(settings.force_join_urls)
+    multi_titles = tuple(settings.force_join_titles)
+
+    if multi_ids:
+        channels: list[tuple[int, str, str]] = []
+        for index, chat_id in enumerate(multi_ids):
+            url = multi_urls[index] if index < len(multi_urls) else ""
+            title = (
+                multi_titles[index]
+                if index < len(multi_titles)
+                else f"Channel {index + 1}"
+            )
+            channels.append((int(chat_id), url, title))
+        return tuple(channels)
+
+    if settings.force_join_chat_id:
+        return (
+            (
+                int(settings.force_join_chat_id),
+                settings.force_join_url,
+                settings.force_join_title or "the required channel",
+            ),
+        )
+
+    return ()
+
+
 def _enabled() -> bool:
-    return bool(settings.force_join_enabled and settings.force_join_chat_id)
+    return bool(settings.force_join_enabled and _channels())
 
 
 def _remember(key: tuple[int, int], value: bool) -> None:
@@ -32,8 +67,8 @@ def _remember(key: tuple[int, int], value: bool) -> None:
         _membership_cache.popitem(last=False)
 
 
-async def _cached_member(bot, user_id: int) -> bool | None:
-    key = (int(settings.force_join_chat_id), int(user_id))
+async def _cached_member(bot, chat_id: int, user_id: int) -> bool | None:
+    key = (int(chat_id), int(user_id))
     async with _cache_lock:
         item = _membership_cache.get(key)
         if item:
@@ -44,36 +79,117 @@ async def _cached_member(bot, user_id: int) -> bool | None:
             _membership_cache.pop(key, None)
 
     try:
-        member = await bot.get_chat_member(settings.force_join_chat_id, int(user_id))
+        member = await bot.get_chat_member(int(chat_id), int(user_id))
     except Exception:
-        # Force Join is a strict access gate when enabled. A Telegram API
-        # verification failure must never be treated as membership, otherwise
-        # an outage could silently bypass the requirement.
+        # Fail closed while Force Join is enabled: an API failure must not
+        # silently bypass a required channel.
         return None
 
     status = str(getattr(member, "status", "") or "").lower()
     joined = status in {"creator", "administrator", "member"} or (
         status == "restricted" and bool(getattr(member, "is_member", False))
     )
+
     async with _cache_lock:
         _remember(key, joined)
     return joined
 
 
+async def _check_all_channels(bot, user_id: int) -> tuple[bool, bool]:
+    """Return (all_joined, verification_error).
+
+    Every configured channel is checked. A single missing membership blocks
+    access; an API error never counts as joined.
+    """
+    verification_error = False
+
+    # Do the Telegram membership calls concurrently because three channels
+    # should not add three sequential network round trips to every lookup.
+    results = await asyncio.gather(
+        *(
+            _cached_member(bot, chat_id, user_id)
+            for chat_id, _, _ in _channels()
+        ),
+        return_exceptions=True,
+    )
+
+    for result in results:
+        if isinstance(result, Exception) or result is None:
+            verification_error = True
+        elif result is False:
+            return False, verification_error
+
+    return not verification_error, verification_error
+
+
 def _keyboard() -> InlineKeyboardMarkup:
-    rows = []
-    if settings.force_join_url:
-        rows.append([InlineKeyboardButton(text=settings.force_join_button_text, url=settings.force_join_url)])
-    rows.append([InlineKeyboardButton(text="✅ I Joined — Check Again", callback_data="fj:check")])
+    rows: list[list[InlineKeyboardButton]] = []
+    channels = _channels()
+
+    for index, (_, url, title) in enumerate(channels, start=1):
+        if url:
+            # Preserve the old custom button label for legacy single-channel
+            # configuration; multi-channel buttons use their channel titles.
+            if not settings.force_join_chat_ids and len(channels) == 1:
+                button_text = settings.force_join_button_text
+            else:
+                button_text = title or f"Channel {index}"
+            rows.append([InlineKeyboardButton(text=f"📢 {button_text}", url=url)])
+
+    rows.append(
+        [InlineKeyboardButton(text="✅ I Joined — Check Again", callback_data="fj:check")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _text() -> str:
-    channel = settings.force_join_title or "the required channel"
+    channels = _channels()
+    if len(channels) == 1:
+        required = f"<b>{channels[0][2]}</b>"
+    else:
+        lines = [
+            f"• <b>{title or f'Channel {index}'}</b>"
+            for index, (_, _, title) in enumerate(channels, start=1)
+        ]
+        required = "\n".join(lines)
+
     return (
         "🔒 <b>Join Required</b>\n\n"
-        f"Please join <b>{channel}</b> before using character lookup.\n\n"
-        "After joining, tap <b>✅ I Joined — Check Again</b>."
+        "Please join <b>all required channels</b> before using character lookup.\n\n"
+        f"{required}\n\n"
+        "After joining all channels, tap <b>✅ I Joined — Check Again</b>."
+    )
+
+
+async def _prompt(message: Message, unavailable: bool = False) -> None:
+    user = getattr(message, "from_user", None)
+    if not user:
+        return
+
+    now = time.monotonic()
+    user_id = int(user.id)
+
+    async with _cache_lock:
+        last = _prompt_cache.get(user_id, 0.0)
+        if now - last < _PROMPT_TTL:
+            return
+        _prompt_cache.pop(user_id, None)
+        _prompt_cache[user_id] = now
+        while len(_prompt_cache) > _CACHE_MAX:
+            _prompt_cache.popitem(last=False)
+
+    if unavailable:
+        text = (
+            "⚠️ <b>Membership check unavailable.</b>\n\n"
+            "Telegram membership verification failed. Please try again in a moment."
+        )
+    else:
+        text = _text()
+
+    await message.reply(
+        text,
+        reply_markup=_keyboard(),
+        disable_web_page_preview=True,
     )
 
 
@@ -85,41 +201,19 @@ async def require_join(message: Message) -> bool:
     if not user:
         return False
 
-    # Owners are never blocked by an operational access gate.
+    # Owners are never blocked by the operational access gate.
     if int(user.id) in settings.owner_ids:
         return True
 
-    joined = await _cached_member(message.bot, int(user.id))
-    if joined is True:
+    joined, verification_error = await _check_all_channels(
+        message.bot,
+        int(user.id),
+    )
+
+    if joined:
         return True
 
-    # Strict mode: an API verification failure is treated as unverified.
-    # This prevents Force Join from being bypassed during Telegram/API errors.
-    if joined is None:
-        now = time.monotonic()
-        async with _cache_lock:
-            last = _prompt_cache.get(int(user.id), 0.0)
-            if now - last < _PROMPT_TTL:
-                return False
-            _prompt_cache.pop(int(user.id), None)
-            _prompt_cache[int(user.id)] = now
-        await message.reply(
-            "⚠️ <b>Membership check unavailable.</b>\\n\\nPlease try again in a moment.",
-            reply_markup=_keyboard(),
-        )
-        return False
-
-    now = time.monotonic()
-    async with _cache_lock:
-        last = _prompt_cache.get(int(user.id), 0.0)
-        if now - last < _PROMPT_TTL:
-            return False
-        _prompt_cache.pop(int(user.id), None)
-        _prompt_cache[int(user.id)] = now
-        while len(_prompt_cache) > _CACHE_MAX:
-            _prompt_cache.popitem(last=False)
-
-    await message.reply(_text(), reply_markup=_keyboard(), disable_web_page_preview=True)
+    await _prompt(message, unavailable=verification_error)
     return False
 
 
@@ -134,27 +228,39 @@ async def force_join_check(callback: CallbackQuery):
         await callback.answer("Force Join is disabled.", show_alert=False)
         return
 
-    # Do not trust the cached negative result after the user explicitly asks
-    # for a re-check. Remove it first and query Telegram again.
-    key = (int(settings.force_join_chat_id), int(user.id))
+    # Explicit re-check must bypass every cached membership result.
+    user_id = int(user.id)
     async with _cache_lock:
-        _membership_cache.pop(key, None)
+        for chat_id, _, _ in _channels():
+            _membership_cache.pop((int(chat_id), user_id), None)
 
-    joined = await _cached_member(callback.bot, int(user.id))
-    if joined is True:
-        await callback.answer("✅ Membership confirmed.", show_alert=False)
+    joined, verification_error = await _check_all_channels(
+        callback.bot,
+        user_id,
+    )
+
+    if joined:
+        await callback.answer("✅ All required channels confirmed.", show_alert=False)
         if callback.message:
             try:
-                await callback.message.edit_text("✅ <b>Verified.</b> You can use character lookup now.")
+                await callback.message.edit_text(
+                    "✅ <b>Verified.</b> You can use character lookup now."
+                )
             except Exception:
                 pass
         return
 
-    if joined is None:
-        await callback.answer("⚠️ Could not verify right now. Please try again.", show_alert=True)
+    if verification_error:
+        await callback.answer(
+            "⚠️ Could not verify all channels right now. Please try again.",
+            show_alert=True,
+        )
         return
 
-    await callback.answer("❌ You have not joined yet.", show_alert=True)
+    await callback.answer(
+        "❌ Please join all required channels first.",
+        show_alert=True,
+    )
 
 
 __all__ = ["router", "require_join"]
