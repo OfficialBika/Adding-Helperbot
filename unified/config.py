@@ -25,6 +25,16 @@ def _csv(name: str) -> list[str]:
     return [x.strip() for x in os.getenv(name, "").split(",") if x.strip()]
 
 
+def _csv_ints(name: str) -> tuple[int, ...]:
+    values: list[int] = []
+    for item in _csv(name):
+        try:
+            values.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return tuple(values)
+
+
 @dataclass(frozen=True)
 class Settings:
     bot_token: str = os.getenv("BOT_TOKEN", "").strip()
@@ -48,12 +58,17 @@ class Settings:
     uid_index_path: str = os.getenv("UID_INDEX_PATH", "data/uid_index.sqlite3").strip() or "data/uid_index.sqlite3"
     uid_index_backfill_batch: int = max(100, min(5000, _int("UID_INDEX_BACKFILL_BATCH", 1000)))
 
-    # Force Join is opt-in so an unset channel can never block lookup.
+    # Force Join is opt-in. Legacy single-channel variables remain supported.
     force_join_enabled: bool = _bool("FORCE_JOIN_ENABLED", False)
     force_join_chat_id: int = _int("FORCE_JOIN_CHAT_ID", 0)
     force_join_url: str = os.getenv("FORCE_JOIN_URL", "").strip()
     force_join_title: str = os.getenv("FORCE_JOIN_TITLE", "").strip()
     force_join_button_text: str = os.getenv("FORCE_JOIN_BUTTON_TEXT", "Join Channel").strip() or "Join Channel"
+
+    # Multi-channel Force Join. IDs, URLs and titles are matched by position.
+    force_join_chat_ids: tuple[int, ...] = _csv_ints("FORCE_JOIN_CHAT_IDS")
+    force_join_urls: tuple[str, ...] = tuple(_csv("FORCE_JOIN_URLS"))
+    force_join_titles: tuple[str, ...] = tuple(_csv("FORCE_JOIN_TITLES"))
 
     run_mode: str = os.getenv("RUN_MODE", "auto").strip().lower()
     public_url: str = os.getenv("PUBLIC_URL", "").rstrip("/")
