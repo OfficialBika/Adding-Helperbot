@@ -19,7 +19,7 @@ from aiogram.types import Message
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from unified.config import settings
-from unified.store import characters, close, ensure_indexes
+from unified.store import db, characters, close, ensure_indexes
 from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized, get_global_lookup_enabled, set_global_lookup_enabled
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
