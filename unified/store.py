@@ -14,10 +14,13 @@ log = logging.getLogger(__name__)
 
 client = AsyncIOMotorClient(
     settings.mongo_uri,
-    serverSelectionTimeoutMS=5000,
-    connectTimeoutMS=5000,
-    socketTimeoutMS=15000,
-    maxPoolSize=50,
+    serverSelectionTimeoutMS=settings.mongo_server_selection_timeout_ms,
+    connectTimeoutMS=settings.mongo_connect_timeout_ms,
+    socketTimeoutMS=settings.mongo_socket_timeout_ms,
+    minPoolSize=settings.mongo_min_pool_size,
+    maxPoolSize=settings.mongo_max_pool_size,
+    maxIdleTimeMS=settings.mongo_max_idle_time_ms,
+    retryWrites=True,
 )
 db = client[settings.db_name]
 characters = db.characters
