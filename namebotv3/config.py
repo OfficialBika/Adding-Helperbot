@@ -146,6 +146,7 @@ COLLECTION_TO_OUTPUT_COMMAND: Dict[str, str] = {
     "items_super_zeko": "/ziceko",
     "items_orinx_waifu": "/orin",
     "items_immortal_donghua": "/dao",
+    "items_kairo_character": "/kairo",
     "items_unknown": "/name",
 }
 
@@ -162,6 +163,7 @@ COMMAND_TO_COLLECTION: Dict[str, str] = {
     "/ziceko": "items_super_zeko",
     "/orin": "items_orinx_waifu",
     "/dao": "items_immortal_donghua",
+    "/kairo": "items_kairo_character",
 }
 
 BOT_SOURCE_COLLECTION: Dict[str, str] = {
@@ -195,6 +197,8 @@ BOT_SOURCE_COLLECTION: Dict[str, str] = {
     "@orinx_catcher_waifu_bot": "items_orinx_waifu",
     "@timunagalaya": "items_orinx_waifu",
     "@immortaldonghuabot": "items_immortal_donghua",
+    "@picker_database": "items_character_picker",
+    "@kairodatabase": "items_kairo_character",
 }
 
 BOT_SOURCE_CHAT_ID: Dict[int, str] = {
@@ -235,6 +239,8 @@ BOT_SOURCE_OUTPUT_COMMAND: Dict[str, str] = {
     "@orinx_catcher_waifu_bot": "/orin",
     "@timunagalaya": "/orin",
     "@immortaldonghuabot": "/dao",
+    "@picker_database": "/pick",
+    "@kairodatabase": "/kairo",
 }
 
 BOT_SOURCE_OUTPUT_USER_ID: Dict[int, str] = {
