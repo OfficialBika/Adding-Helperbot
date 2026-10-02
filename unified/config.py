@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=_ENV_FILE, override=True)
 
 
 def _bool(name: str, default: bool = False) -> bool:
