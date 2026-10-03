@@ -305,3 +305,17 @@ async def get_meta(key: str) -> str | None:
 
 async def set_meta(key: str, value: str) -> None:
     await asyncio.to_thread(_meta_set_sync, key, value)
+
+
+def _stats_sync() -> dict[str, int]:
+    conn = _connect()
+    row = conn.execute("SELECT COUNT(*) AS count FROM uid_index").fetchone()
+    with _HOT_LOCK:
+        return {
+            "sqlite_rows": int(row["count"]) if row else 0,
+            "ram_entries": len(_HOT_SOURCE),
+        }
+
+
+async def get_stats() -> dict[str, int]:
+    return await asyncio.to_thread(_stats_sync)
