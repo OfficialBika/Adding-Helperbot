@@ -201,7 +201,21 @@ async def _exact_global_candidates(uids: list[str], limit: int = 2) -> list[dict
             *_uid_query_legacy(uids)["$or"],
         ],
     }
-    return await characters.find(query, projection).limit(limit).to_list(length=limit)
+
+    # Global recovery has no resolver scope, so make Catch-first selection
+    # explicit instead of depending on MongoDB natural result order.
+    catch = await characters.find_one(
+        {"source_key": "items_character_catcher", **query},
+        projection,
+    )
+    if catch:
+        return [catch]
+
+    non_catch_limit = max(1, int(limit))
+    return await characters.find(
+        {"source_key": {"$ne": "items_character_catcher"}, **query},
+        projection,
+    ).limit(non_catch_limit).to_list(length=non_catch_limit)
 
 
 def _sha_query(sha: str) -> dict:

@@ -8,6 +8,7 @@ from aiogram.types import Message
 
 from unified.config import settings
 from unified.store import characters
+from unified.uid_index import get_stats as get_uid_index_stats
 
 PROCESS_STARTED_AT = time.time()
 
@@ -146,9 +147,15 @@ async def build_status_text(message: Message) -> str:
         except Exception:
             return 0
 
+    async def safe_sources() -> list[Any]:
+        try:
+            return await characters.distinct("source_key")
+        except Exception:
+            return []
+
     count, sources, photo_count, video_count, animation_count, document_count, db_ping = await asyncio.gather(
         safe_count({}),
-        characters.distinct("source_key"),
+        safe_sources(),
         safe_count({"media_type": "photo"}),
         safe_count({"media_type": "video"}),
         safe_count({"media_type": "animation"}),
@@ -161,6 +168,12 @@ async def build_status_text(message: Message) -> str:
         "animation": animation_count,
         "document": document_count,
     }
+    try:
+        uid_stats = await get_uid_index_stats()
+        uid_index_state = "READY"
+    except Exception:
+        uid_stats = {"sqlite_rows": 0, "ram_entries": 0}
+        uid_index_state = "DEGRADED"
     snap = metrics.snapshot()
     lookup_state = "READY" if db_ping is not None else "DEGRADED"
 
@@ -180,6 +193,9 @@ async def build_status_text(message: Message) -> str:
         f"‣ Exact UID : <code>ENABLED</code>\n"
         f"‣ Global UID Fallback : <code>{'ENABLED' if settings.v3_global_exact_fallback else 'DISABLED'}</code>\n"
         f"‣ Hash Fallback : <code>ENABLED</code>\n"
+        f"‣ UID Index : <code>{uid_index_state}</code>\n"
+        f"‣ UID SQLite Rows : <code>{_fmt_int(uid_stats['sqlite_rows'])}</code>\n"
+        f"‣ UID RAM Entries : <code>{_fmt_int(uid_stats['ram_entries'])}</code>\n"
         f"‣ Lookup EMA : <code>{_fmt_ms(float(snap['lookup_ema_ms'])) if snap['lookup_total'] else 'N/A'}</code>\n"
         f"‣ Lookup Hits : <code>{_fmt_int(snap['lookup_hits'])}</code>\n"
         f"‣ Lookup Misses : <code>{_fmt_int(snap['lookup_misses'])}</code>\n\n"
@@ -189,10 +205,16 @@ async def build_status_text(message: Message) -> str:
 
 
 async def build_stats_text(message: Message, *, helper_state: str) -> str:
+    async def safe_count() -> int:
+        try:
+            return await characters.count_documents({})
+        except Exception:
+            return 0
+
     db_ping, bot_ping, count = await asyncio.gather(
         _ping_db(),
         _ping_bot(message),
-        characters.count_documents({}),
+        safe_count(),
     )
     used, available, total = _ram_info()
     snap = metrics.snapshot()
