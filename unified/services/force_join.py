@@ -9,6 +9,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from unified.config import settings
+from unified.store import db
 
 router = Router(name="unified_force_join")
 log = logging.getLogger("unified.force_join")
@@ -67,8 +68,17 @@ def _channels() -> tuple[tuple[int, str, str], ...]:
     return ()
 
 
-def _enabled() -> bool:
-    return bool(settings.force_join_enabled and _channels())
+async def _enabled() -> bool:
+    """Resolve runtime Force Join state, falling back to environment config."""
+    if not _channels():
+        return False
+    try:
+        doc = await db.settings.find_one({"key": "force_join:enabled"})
+        if doc is not None:
+            return bool(doc.get("enabled", False))
+    except Exception:
+        log.exception("FORCE_JOIN runtime state read failed; using env default")
+    return bool(settings.force_join_enabled)
 
 
 async def _get_bot_username(bot) -> str:
@@ -294,9 +304,32 @@ async def _prompt(message: Message, unavailable: bool = False) -> None:
     )
 
 
+async def set_force_join_enabled(enabled: bool) -> bool:
+    """Persist runtime Force Join state and clear verification caches."""
+    await db.settings.update_one(
+        {"key": "force_join:enabled"},
+        {
+            "$set": {
+                "key": "force_join:enabled",
+                "enabled": bool(enabled),
+                "updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            }
+        },
+        upsert=True,
+    )
+    async with _cache_lock:
+        _membership_cache.clear()
+        _prompt_cache.clear()
+    return bool(enabled)
+
+
+async def force_join_status() -> bool:
+    return await _enabled()
+
+
 async def send_dm_verification(message: Message) -> None:
     """Show the private Force Join verification screen."""
-    if not _enabled():
+    if not await _enabled():
         await message.reply("ℹ️ Force Join is currently disabled.")
         return
 
@@ -373,4 +406,4 @@ async def force_join_check(callback: CallbackQuery):
     )
 
 
-__all__ = ["router", "require_join", "send_dm_verification"]
+__all__ = ["router", "require_join", "send_dm_verification", "set_force_join_enabled", "force_join_status"]
