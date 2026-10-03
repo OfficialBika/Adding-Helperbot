@@ -74,6 +74,14 @@ class Settings:
     force_join_urls: tuple[str, ...] = tuple(_csv("FORCE_JOIN_URLS"))
     force_join_titles: tuple[str, ...] = tuple(_csv("FORCE_JOIN_TITLES"))
 
+    def __post_init__(self) -> None:
+        if self.force_join_chat_ids:
+            expected = len(self.force_join_chat_ids)
+            if len(self.force_join_urls) != expected:
+                raise ValueError(f"FORCE_JOIN_URLS count must match FORCE_JOIN_CHAT_IDS count ({len(self.force_join_urls)} != {expected})")
+            if len(self.force_join_titles) != expected:
+                raise ValueError(f"FORCE_JOIN_TITLES count must match FORCE_JOIN_CHAT_IDS count ({len(self.force_join_titles)} != {expected})")
+
     run_mode: str = os.getenv("RUN_MODE", "auto").strip().lower()
     public_url: str = os.getenv("PUBLIC_URL", "").rstrip("/")
     webhook_path: str = os.getenv("WEBHOOK_PATH", "/webhook")
