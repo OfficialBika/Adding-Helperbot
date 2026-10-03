@@ -216,6 +216,30 @@ def _picker_id(text: str) -> str | None:
     return None
 
 
+def _waifux_global_id(text: str) -> str | None:
+    """Parse WaifuxGrabBot Global Character Info ID field.
+
+    Waifux uses a bullet-prefixed field such as:
+        • ID: 3
+
+    The generic ID parser excludes the bullet separator, so this
+    source-specific parser runs first to make the source ID authoritative.
+    """
+    raw = norm(text)
+    if not raw or not re.search(r"global\s+character\s+info", raw, re.I):
+        return None
+
+    for line in raw.splitlines():
+        line = line.strip()
+        m = re.match(
+            r"^[•●▪️🔹🔸\-\*–—]?\s*(?:🆔\ufe0f?\s*)?(?:character\s*)?id\s*[:：=-]\s*`?(\d+)`?\s*$",
+            line,
+            re.I,
+        )
+        if m:
+            return m.group(1)
+    return None
+
 def _kairo_name(text: str) -> str | None:
     """Parse KairoCollectBot's New Card Added caption."""
     raw = norm(text)
@@ -337,6 +361,10 @@ def extract_character_id(text: str | None) -> str | None:
     raw = norm(text)
     if not raw:
         return None
+
+    waifux_id = _waifux_global_id(raw)
+    if waifux_id:
+        return waifux_id
 
     # Picker Database exposes two OwO ID layouts:
     #   🆔️30: Ayaka
