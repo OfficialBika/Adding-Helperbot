@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -227,6 +228,27 @@ def format_ingest_notice(result: dict) -> str:
         )
 
     return ""
+
+async def _safe_reply(message: Message, text: str, **kwargs):
+    """Reply safely when Telegram has revoked text-send permissions."""
+    try:
+        return await message.reply(text, **kwargs)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        error_text = str(exc).lower()
+        if (
+            "not enough rights to send text messages" in error_text
+            or "bot was kicked" in error_text
+            or "forbidden" in error_text
+        ):
+            log.warning(
+                "TELEGRAM REPLY SKIPPED chat=%s message=%s error=%s",
+                getattr(getattr(message, "chat", None), "id", None),
+                getattr(message, "message_id", None),
+                str(exc),
+            )
+            return None
+        raise
+
 
 def format_result(doc: dict) -> str:
     name = h(str(doc.get("name") or ""))
@@ -562,7 +584,8 @@ async def lookup_media(message: Message):
         reason,
     )
     if doc:
-        await message.reply(
+        await _safe_reply(
+            message,
             format_result(doc),
             disable_web_page_preview=True,
             reply_markup=result_buttons(
@@ -577,7 +600,7 @@ async def lookup_media(message: Message):
             ),
         )
     elif settings.reply_not_found:
-        await message.reply("❌ Character not found.")
+        await _safe_reply(message, "❌ Character not found.")
 
 
 async def _manual_lookup(message: Message):
