@@ -73,6 +73,35 @@ def _uid_query_legacy(uids: list[str]) -> dict:
 async def _exact_find(scope: list[str] | None, uids: list[str]):
     if not uids:
         return None
+
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "media_type": 1,
+    }
+
+    # Catch sources require deterministic fallback order. Do not use a single
+    # Mongo $in query here because Mongo does not guarantee result ordering.
+    ordered_scope = _ordered_uid_sources(scope or [])
+    if ordered_scope and {
+        "items_character_catcher",
+        "items_character_catcher_fw",
+    }.intersection(ordered_scope):
+        for source in ordered_scope:
+            query = {
+                "source_key": source,
+                "$or": [
+                    _uid_query_new(uids),
+                    *_uid_query_legacy(uids)["$or"],
+                ],
+            }
+            doc = await characters.find_one(query, projection)
+            if doc:
+                return doc
+        return None
+
     prefix = {"source_key": {"$in": scope}} if scope else {}
     query = {
         **prefix,
@@ -80,13 +109,6 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
             _uid_query_new(uids),
             *_uid_query_legacy(uids)["$or"],
         ],
-    }
-    projection = {
-        "_id": 1,
-        "name": 1,
-        "command": 1,
-        "source_key": 1,
-        "media_type": 1,
     }
     return await characters.find_one(query, projection)
 
@@ -106,9 +128,8 @@ def _ordered_uid_sources(collections: list[str]) -> list[str]:
 
     Catch and forward-catch records intentionally live in separate Mongo
     collections. The same Telegram file_unique_id may legitimately exist in
-    both collections, so a multi-source $in query must not decide the winner
-    implicitly. For Catch lookups, check the primary Catch collection first,
-    then forward-catch, then any other resolved sources.
+    both collections, so source order must be explicit rather than delegated
+    to Mongo's $in query result order.
     """
     normalized: list[str] = []
     for value in collections:
@@ -123,13 +144,12 @@ def _ordered_uid_sources(collections: list[str]) -> list[str]:
     if not catch_sources.intersection(normalized):
         return normalized
 
-    ordered: list[str] = []
-    for source in (
+    # A Catch lookup must always be able to fall through primary Catch -> FW
+    # Catch even when the resolver initially returned only one of the two.
+    ordered = [
         "items_character_catcher",
         "items_character_catcher_fw",
-    ):
-        if source in normalized:
-            ordered.append(source)
+    ]
     ordered.extend(source for source in normalized if source not in ordered)
     return ordered
 
