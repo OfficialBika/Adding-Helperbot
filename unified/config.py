@@ -79,8 +79,8 @@ class Settings:
             expected = len(self.force_join_chat_ids)
             if len(self.force_join_urls) != expected:
                 raise ValueError(f"FORCE_JOIN_URLS count must match FORCE_JOIN_CHAT_IDS count ({len(self.force_join_urls)} != {expected})")
-            if len(self.force_join_titles) != expected:
-                raise ValueError(f"FORCE_JOIN_TITLES count must match FORCE_JOIN_CHAT_IDS count ({len(self.force_join_titles)} != {expected})")
+            if self.force_join_titles and len(self.force_join_titles) != expected:
+                raise ValueError(f"FORCE_JOIN_TITLES count must be either 0 or match FORCE_JOIN_CHAT_IDS count ({len(self.force_join_titles)} != {expected})")
 
     run_mode: str = os.getenv("RUN_MODE", "auto").strip().lower()
     public_url: str = os.getenv("PUBLIC_URL", "").rstrip("/")
