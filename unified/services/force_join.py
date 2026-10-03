@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from collections import OrderedDict
 
 from aiogram import F, Router
@@ -312,7 +313,7 @@ async def set_force_join_enabled(enabled: bool) -> bool:
             "$set": {
                 "key": "force_join:enabled",
                 "enabled": bool(enabled),
-                "updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
         upsert=True,
@@ -367,7 +368,7 @@ async def force_join_check(callback: CallbackQuery):
         await callback.answer()
         return
 
-    if not _enabled():
+    if not await _enabled():
         await callback.answer("Force Join is disabled.", show_alert=False)
         return
 
