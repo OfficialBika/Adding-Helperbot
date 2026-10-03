@@ -5,7 +5,7 @@ import logging
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
-from threading import local
+from threading import RLock, local
 from typing import Any
 
 from unified.config import settings
@@ -14,6 +14,9 @@ log = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 2
 _LOCAL = local()
+_HOT_LOCK = RLock()
+_HOT_SOURCE: dict[tuple[str, str], dict[str, Any]] = {}
+_HOT_GLOBAL: dict[str, dict[str, Any] | None] = {}
 
 
 def _path() -> str:
@@ -78,8 +81,64 @@ def _init_sync() -> None:
     conn.commit()
 
 
+def _load_hot_sync() -> int:
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT source_key, uid, name, command, media_type FROM uid_index"
+    ).fetchall()
+    source_hot: dict[tuple[str, str], dict[str, Any]] = {}
+    global_hot: dict[str, dict[str, Any] | None] = {}
+    for row in rows:
+        record = dict(row)
+        source = str(record.get("source_key") or "").strip().lower()
+        uid = str(record.get("uid") or "").strip()
+        if not source or not uid:
+            continue
+        source_hot[(source, uid)] = record
+        current = global_hot.get(uid, "__missing__")
+        if current == "__missing__":
+            global_hot[uid] = record
+        elif current is not None and current.get("source_key") != source:
+            global_hot[uid] = None
+    with _HOT_LOCK:
+        _HOT_SOURCE.clear()
+        _HOT_SOURCE.update(source_hot)
+        _HOT_GLOBAL.clear()
+        _HOT_GLOBAL.update(global_hot)
+    return len(source_hot)
+
+
 async def ensure_uid_index() -> None:
     await asyncio.to_thread(_init_sync)
+    count = await asyncio.to_thread(_load_hot_sync)
+    log.info("UID RAM hot index loaded entries=%s", count)
+
+
+def lookup_hot_source(source_keys: list[str], uids: list[str]) -> dict[str, Any] | None:
+    if not source_keys or not uids:
+        return None
+    with _HOT_LOCK:
+        for source in source_keys:
+            normalized = str(source).strip().lower()
+            for uid in uids:
+                record = _HOT_SOURCE.get((normalized, str(uid).strip()))
+                if record:
+                    return dict(record)
+    return None
+
+
+def lookup_hot_global(uids: list[str], limit: int = 2) -> list[dict[str, Any]]:
+    if not uids:
+        return []
+    results: list[dict[str, Any]] = []
+    with _HOT_LOCK:
+        for uid in uids:
+            record = _HOT_GLOBAL.get(str(uid).strip())
+            if record is not None:
+                results.append(dict(record))
+            if len(results) >= max(1, int(limit)):
+                break
+    return results
 
 
 def _lookup_source_sync(source_keys: list[str], uids: list[str]) -> dict[str, Any] | None:
@@ -177,6 +236,22 @@ def _upsert_many_sync(records: list[dict[str, Any]]) -> int:
         rows,
     )
     conn.commit()
+    with _HOT_LOCK:
+        for source, uid, name, command, media_type, _updated_text in rows:
+            record = {
+                "source_key": source,
+                "uid": uid,
+                "name": name,
+                "command": command,
+                "media_type": media_type,
+            }
+            _HOT_SOURCE[(source, uid)] = record
+            matches = [
+                value
+                for (src, value_uid), value in _HOT_SOURCE.items()
+                if value_uid == uid
+            ]
+            _HOT_GLOBAL[uid] = dict(matches[0]) if len(matches) == 1 else None
     return len(rows)
 
 
