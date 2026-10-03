@@ -16,6 +16,9 @@ _SCHEMA_VERSION = 2
 _LOCAL = local()
 _HOT_LOCK = RLock()
 _HOT_SOURCE: dict[tuple[str, str], dict[str, Any]] = {}
+# Per-UID source bookkeeping keeps global uniqueness updates O(number of sources
+# for that UID) instead of scanning the entire RAM hot index on every upsert.
+_HOT_UID_SOURCES: dict[str, dict[str, dict[str, Any]]] = {}
 _HOT_GLOBAL: dict[str, dict[str, Any] | None] = {}
 
 
@@ -87,6 +90,7 @@ def _load_hot_sync() -> int:
         "SELECT source_key, uid, name, command, media_type FROM uid_index"
     ).fetchall()
     source_hot: dict[tuple[str, str], dict[str, Any]] = {}
+    uid_sources: dict[str, dict[str, dict[str, Any]]] = {}
     global_hot: dict[str, dict[str, Any] | None] = {}
     for row in rows:
         record = dict(row)
@@ -95,14 +99,16 @@ def _load_hot_sync() -> int:
         if not source or not uid:
             continue
         source_hot[(source, uid)] = record
-        current = global_hot.get(uid, "__missing__")
-        if current == "__missing__":
-            global_hot[uid] = record
-        elif current is not None and current.get("source_key") != source:
-            global_hot[uid] = None
+        uid_sources.setdefault(uid, {})[source] = record
+
+    for uid, sources in uid_sources.items():
+        global_hot[uid] = next(iter(sources.values())) if len(sources) == 1 else None
+
     with _HOT_LOCK:
         _HOT_SOURCE.clear()
         _HOT_SOURCE.update(source_hot)
+        _HOT_UID_SOURCES.clear()
+        _HOT_UID_SOURCES.update(uid_sources)
         _HOT_GLOBAL.clear()
         _HOT_GLOBAL.update(global_hot)
     return len(source_hot)
@@ -246,12 +252,13 @@ def _upsert_many_sync(records: list[dict[str, Any]]) -> int:
                 "media_type": media_type,
             }
             _HOT_SOURCE[(source, uid)] = record
-            matches = [
-                value
-                for (src, value_uid), value in _HOT_SOURCE.items()
-                if value_uid == uid
-            ]
-            _HOT_GLOBAL[uid] = dict(matches[0]) if len(matches) == 1 else None
+            sources = _HOT_UID_SOURCES.setdefault(uid, {})
+            sources[source] = record
+            _HOT_GLOBAL[uid] = (
+                dict(next(iter(sources.values())))
+                if len(sources) == 1
+                else None
+            )
     return len(rows)
 
 
