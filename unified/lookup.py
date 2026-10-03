@@ -652,6 +652,10 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         allow_global_fallback=hash_global,
     )
     if doc:
+        # A hash match is a positive lookup result. Cache the original Telegram
+        # UID against that result so the same media never needs another download,
+        # hash computation, or Mongo similarity scan during the cache TTL.
+        _cache_doc(doc, uids)
         log.info(
             "HASH LOOKUP MATCH message=%s source=%s reason=%s name=%s",
             getattr(message, "message_id", None),
