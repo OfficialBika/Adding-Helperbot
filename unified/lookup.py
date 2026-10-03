@@ -14,6 +14,8 @@ from unified.config import settings
 from unified.store import characters
 from unified.lookup_cache import positive_uid_cache
 from unified.uid_index import lookup_global as sqlite_lookup_global
+from unified.uid_index import lookup_hot_global as ram_lookup_global
+from unified.uid_index import lookup_hot_source as ram_lookup_source
 from unified.uid_index import lookup_source as sqlite_lookup_source
 from utils.media import extract_media
 
@@ -433,10 +435,21 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         )
         return cached_doc, "uid_cache"
 
-    # Persistent local accelerator. It is never authoritative: a miss simply
-    # falls through to MongoDB, so stale/missing SQLite entries cannot reduce
-    # lookup correctness.
+    # Process-local exact UID index is the first persistent-data accelerator.
+    # It is populated from SQLite at startup and updated on every UID upsert.
+    # MongoDB remains authoritative, so RAM/SQLite misses always fall through.
     if collections:
+        ram_doc = ram_lookup_source(collections, uids)
+        if ram_doc:
+            log.info(
+                "UID RAM HOT HIT message=%s source=%s name=%s",
+                getattr(message, "message_id", None),
+                ram_doc.get("source_key"),
+                ram_doc.get("name"),
+            )
+            _cache_doc(ram_doc, uids)
+            return ram_doc, "uid_ram"
+
         sqlite_doc = await sqlite_lookup_source(collections, uids)
         if sqlite_doc:
             log.info(
@@ -483,7 +496,13 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     # an exact global UID fallback. This is safe because file_unique_id is
     # Telegram's native exact media identity. Source-scoped lookup always wins.
     if allow_global_fallback:
-        # Try the local exact-UID index before the Mongo global recovery query.
+        # Try the RAM exact-UID index before SQLite/Mongo global recovery.
+        global_docs = ram_lookup_global(uids, limit=2)
+        if len(global_docs) == 1:
+            _cache_doc(global_docs[0], uids)
+            return global_docs[0], "uid_ram_global"
+
+        # Try the persistent local exact-UID index before Mongo recovery.
         global_docs = await sqlite_lookup_global(uids, limit=2)
         if len(global_docs) == 1:
             _cache_doc(global_docs[0], uids)
