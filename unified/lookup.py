@@ -434,15 +434,32 @@ async def _hash_fallback(
         data,
     )
 
-    # SHA-256 is byte-exact. It is the first fallback after Telegram UID.
+    # Start the expensive pHash candidate scan while the exact SHA-256
+    # lookup is in flight. SHA-256 still has strict priority if it matches, but
+    # a SHA miss no longer adds a second full Mongo round trip before pHash.
+    phash_task = None
+    if media.media_type == "photo":
+        phash_task = asyncio.create_task(
+            _photo_hash_match(
+                media_hash,
+                collections,
+                global_mode=False,
+            )
+        )
+
+    # SHA-256 is byte-exact and remains the first accepted fallback after UID.
     if media_hash.sha256:
         doc = await _hash_exact_find(collections, media_hash.sha256)
         if doc:
+            if phash_task is not None:
+                phash_task.cancel()
             return doc, "sha256"
 
         if allow_global_fallback:
             global_docs = await _hash_global_candidates(media_hash.sha256, limit=2)
             if len(global_docs) == 1:
+                if phash_task is not None:
+                    phash_task.cancel()
                 return global_docs[0], "sha256_global"
             if len(global_docs) > 1:
                 log.warning(
@@ -453,16 +470,14 @@ async def _hash_fallback(
 
     # Perceptual hashing is only for photos. It is similarity, not identity,
     # so it is source-scoped by default and requires a strong score + margin.
-    if media.media_type == "photo":
-        doc, score = await _photo_hash_match(
-            media_hash,
-            collections,
-            global_mode=False,
-        )
+    if phash_task is not None:
+        doc, score = await phash_task
         if doc:
             return doc, f"phash:{score:.3f}"
 
-        if allow_global_fallback:
+        # With an explicitly allowed global/manual lookup and no source scope,
+        # perform the global similarity pass only after the source-scoped pass.
+        if allow_global_fallback and not collections:
             doc, score = await _photo_hash_match(
                 media_hash,
                 None,
