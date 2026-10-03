@@ -101,6 +101,39 @@ def _cache_doc(doc: dict | None, uids: list[str]) -> None:
         _UID_CACHE.remember(uids, doc, source)
 
 
+def _ordered_uid_sources(collections: list[str]) -> list[str]:
+    """Return UID lookup sources in deterministic Catch-first order.
+
+    Catch and forward-catch records intentionally live in separate Mongo
+    collections. The same Telegram file_unique_id may legitimately exist in
+    both collections, so a multi-source $in query must not decide the winner
+    implicitly. For Catch lookups, check the primary Catch collection first,
+    then forward-catch, then any other resolved sources.
+    """
+    normalized: list[str] = []
+    for value in collections:
+        source = str(value or "").strip().lower()
+        if source and source not in normalized:
+            normalized.append(source)
+
+    catch_sources = {
+        "items_character_catcher",
+        "items_character_catcher_fw",
+    }
+    if not catch_sources.intersection(normalized):
+        return normalized
+
+    ordered: list[str] = []
+    for source in (
+        "items_character_catcher",
+        "items_character_catcher_fw",
+    ):
+        if source in normalized:
+            ordered.append(source)
+    ordered.extend(source for source in normalized if source not in ordered)
+    return ordered
+
+
 def _cache_lookup(uids: list[str], scope: list[str] | None) -> dict | None:
     if not scope:
         return None
@@ -419,7 +452,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         return None, "no_media"
 
     source_message = media.source_message
-    collections = _scope(source_message)
+    collections = _ordered_uid_sources(_scope(source_message))
     if not collections and not allow_global_fallback:
         return None, "source_unknown"
 
@@ -427,6 +460,8 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     if not uids:
         return None, "no_file_unique_id"
 
+    # Catch lookups intentionally use the deterministic source order above:
+    # items_character_catcher -> items_character_catcher_fw -> other sources.
     cached_doc = _cache_lookup(uids, collections)
     if cached_doc:
         log.info(
