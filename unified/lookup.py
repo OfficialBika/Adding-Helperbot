@@ -459,14 +459,20 @@ async def _hash_fallback(
     if not file_id:
         return None, "no_file_id"
 
+    started = time.perf_counter()
+    download_started = started
     data = await _download(bot, file_id)
+    download_ms = (time.perf_counter() - download_started) * 1000
     if not data:
+        log.info("HASH TIMING message=%s download_ms=%.1f result=download_failed", getattr(source_message, "message_id", None), download_ms)
         return None, "hash_download_failed"
 
+    hash_started = time.perf_counter()
     media_hash = await asyncio.to_thread(
         hash_photo if media.media_type == "photo" else hash_video,
         data,
     )
+    hash_ms = (time.perf_counter() - hash_started) * 1000
 
     # Start the expensive pHash candidate scan while the exact SHA-256
     # lookup is in flight. SHA-256 still has strict priority if it matches, but
@@ -483,14 +489,18 @@ async def _hash_fallback(
 
     # SHA-256 is byte-exact and remains the first accepted fallback after UID.
     if media_hash.sha256:
+        sha_started = time.perf_counter()
         doc = await _hash_exact_find(collections, media_hash.sha256)
+        sha_ms = (time.perf_counter() - sha_started) * 1000
         if doc:
             if phash_task is not None:
                 phash_task.cancel()
             return doc, "sha256"
 
         if allow_global_fallback:
+            global_sha_started = time.perf_counter()
             global_docs = await _hash_global_candidates(media_hash.sha256, limit=2)
+            global_sha_ms = (time.perf_counter() - global_sha_started) * 1000
             if len(global_docs) == 1:
                 if phash_task is not None:
                     phash_task.cancel()
@@ -505,18 +515,30 @@ async def _hash_fallback(
     # Perceptual hashing is only for photos. It is similarity, not identity,
     # so it is source-scoped by default and requires a strong score + margin.
     if phash_task is not None:
+        phash_started = time.perf_counter()
         doc, score = await phash_task
+        phash_ms = (time.perf_counter() - phash_started) * 1000
+        log.info(
+            "HASH TIMING message=%s download_ms=%.1f hash_ms=%.1f sha_ms=%.1f phash_ms=%.1f",
+            getattr(source_message, "message_id", None),
+            download_ms,
+            hash_ms,
+            locals().get("sha_ms", 0.0),
+            phash_ms,
+        )
         if doc:
             return doc, f"phash:{score:.3f}"
 
         # With an explicitly allowed global/manual lookup and no source scope,
         # perform the global similarity pass only after the source-scoped pass.
         if allow_global_fallback and not collections:
+            global_phash_started = time.perf_counter()
             doc, score = await _photo_hash_match(
                 media_hash,
                 None,
                 global_mode=True,
             )
+            global_phash_ms = (time.perf_counter() - global_phash_started) * 1000
             if doc:
                 return doc, f"phash_global:{score:.3f}"
 
