@@ -17,6 +17,7 @@ from unified.uid_index import lookup_global as sqlite_lookup_global
 from unified.uid_index import lookup_hot_global as ram_lookup_global
 from unified.uid_index import lookup_hot_source as ram_lookup_source
 from unified.uid_index import lookup_source as sqlite_lookup_source
+from unified.uid_index import persist_uid_mappings, remember_hot_source
 from utils.media import extract_media
 
 log = logging.getLogger(__name__)
@@ -128,14 +129,33 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
     return await characters.find_one(query, projection)
 
 
-def _cache_doc(doc: dict | None, uids: list[str]) -> None:
+def _cache_doc(
+    doc: dict | None,
+    uids: list[str],
+    *,
+    persist_index: bool = False,
+) -> None:
     if not doc or not uids:
         return
     source = str(doc.get("source_key") or "").strip().lower() or None
     # Keep the positive cache source-scoped. Global UID recovery stays in Mongo
     # so an ambiguous UID can never be silently resolved to the wrong dataset.
-    if source:
-        _UID_CACHE.remember(uids, doc, source)
+    if not source:
+        return
+    _UID_CACHE.remember(uids, doc, source)
+    # A successful lookup is also published to the RAM UID index immediately.
+    # This is deliberately independent of the TTL cache: even if a process is
+    # reloaded or a cache object is recreated, the same positive result can be
+    # served from the local hot index after the first verified resolution.
+    remember_hot_source(source, uids, doc)
+    if persist_index:
+        # SQLite persistence is intentionally asynchronous; it must never add
+        # disk latency to the lookup response path.
+        try:
+            asyncio.create_task(persist_uid_mappings(source, uids, doc))
+        except RuntimeError:
+            # Unit/test callers without a running loop still get the RAM fast path.
+            pass
 
 
 def _ordered_uid_sources(collections: list[str]) -> list[str]:
@@ -578,7 +598,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 doc.get("source_key"),
                 doc.get("name"),
             )
-            _cache_doc(doc, uids)
+            _cache_doc(doc, uids, persist_index=True)
             return doc, "uid"
 
         # Source-scoped auto lookup must not perform an extra global probe.
@@ -684,7 +704,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         # A hash match is a positive lookup result. Cache the original Telegram
         # UID against that result so the same media never needs another download,
         # hash computation, or Mongo similarity scan during the cache TTL.
-        _cache_doc(doc, uids)
+        _cache_doc(doc, uids, persist_index=True)
         log.info(
             "HASH LOOKUP MATCH message=%s source=%s reason=%s name=%s",
             getattr(message, "message_id", None),
