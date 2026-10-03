@@ -329,7 +329,7 @@ def _waifux_global_name(text: str) -> str | None:
         # the character name. Remove the trailing bracketed metadata first,
         # then remove trailing emoji/symbols. Do this only in the Waifux
         # source-specific parser so other source formats keep their semantics.
-        value = re.sub(r"\\s+\\[[^\\]\\n]*\\]\\s*$", "", value).strip()
+        value = re.sub(r"\s+\[[^\]\n]*\]\s*$", "", value).strip()
         while value:
             last = value[-1]
             if last in "\ufe0f\u200d\u20e3" or unicodedata.category(last) in {"So", "Sk"}:
