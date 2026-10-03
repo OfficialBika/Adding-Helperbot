@@ -125,6 +125,39 @@ class UIDIndexTests(unittest.TestCase):
                 )
                 self.assertEqual(sqlite_doc["source_key"], "items_character_catcher")
 
+    def test_verified_uid_is_immediately_hot_and_persistable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_settings = SimpleNamespace(uid_index_path=str(Path(tmp) / "uid.sqlite3"))
+            with patch.object(uid_index, "settings", fake_settings):
+                with uid_index._HOT_LOCK:
+                    uid_index._HOT_SOURCE.clear()
+                    uid_index._HOT_UID_SOURCES.clear()
+                    uid_index._HOT_GLOBAL.clear()
+                asyncio.run(uid_index.ensure_uid_index())
+                value = {
+                    "name": "Rin Xi",
+                    "command": "/name",
+                    "media_type": "photo",
+                }
+                uid_index.remember_hot_source("items_character_catcher", ["UID-HOT"], value)
+                hot = uid_index.lookup_hot_source(
+                    ["items_character_catcher"], ["UID-HOT"]
+                )
+                self.assertEqual(hot["name"], "Rin Xi")
+                self.assertEqual(hot["source_key"], "items_character_catcher")
+                rows = asyncio.run(
+                    uid_index.persist_uid_mappings(
+                        "items_character_catcher", ["UID-HOT"], value
+                    )
+                )
+                self.assertEqual(rows, 1)
+                sqlite_doc = asyncio.run(
+                    uid_index.lookup_source(
+                        ["items_character_catcher"], ["UID-HOT"]
+                    )
+                )
+                self.assertEqual(sqlite_doc["name"], "Rin Xi")
+
 
 if __name__ == "__main__":
     unittest.main()
