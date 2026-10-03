@@ -150,6 +150,8 @@ CONTENT_SOURCE_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
     (re.compile(r"media\s*\+\s*🎴.*\|.*(?:\n|$).*🎬\s*anime\s*:", re.I | re.S), "items_senpai_catcher", "/pick"),
     (re.compile(r"⚖️\s*character\s+valuation.*(?:\n|$).*🎴\s*name\s*:", re.I | re.S), "items_senpai_catcher", "/pick"),
     (re.compile(r"🚫\s*character\s+with\s+id\s+\d+\s+not\s+found", re.I), "items_senpai_catcher", "/pick"),
+    # WaifuxGrabBot: Global Character Info inline result.
+    (re.compile(r"global\s+character\s+info.*(?:^|\n)\s*➤\s*.+?(?:\n|$).*?\b(?:series|id)\s*:", re.I | re.S | re.M), "items_waifux_grab", "/grab"),
     # Grab Your Waifu: both the OwO caption and the labeled card format.
     (re.compile(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+waifu", re.I | re.S), "items_grab_your_waifu", "/grab"),
     (re.compile(r"media\s*\+\s*.*?name\s*:.*(?:\n|$).*rarity\s*:.*(?:\n|$).*anime\s*:.*(?:\n|$).*id\s*:", re.I | re.S), "items_grab_your_waifu", "/grab"),

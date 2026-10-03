@@ -137,12 +137,15 @@ async def has_admin_access(message: Message) -> bool:
 
 
 async def global_lookup_allowed(message: Message) -> bool:
+    # Private-chat auto/manual lookup is independent of public-group Global mode.
+    # Global OFF only restricts public groups; Force Join is still checked by
+    # the lookup handlers themselves.
+    if message.chat.type == "private":
+        return True
     if await get_global_lookup_enabled():
         return True
     if owner(message):
         return True
-    if message.chat.type == "private":
-        return False
     doc = await db.settings.find_one({"key": f"gapprove:{int(message.chat.id)}"})
     return bool(doc and doc.get("enabled", True))
 

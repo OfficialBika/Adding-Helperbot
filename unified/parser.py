@@ -290,12 +290,12 @@ def _waifux_global_name(text: str) -> str | None:
     treated as card metadata and are never persisted as part of the name.
     """
     raw = norm(text)
-    if not raw or not re.search(r"global\\s+character\\s+info", raw, re.I):
+    if not raw or not re.search(r"global\s+character\s+info", raw, re.I):
         return None
 
     for line in raw.splitlines():
         line = line.strip()
-        m = re.match(r"^➤\\s*(.+?)\\s*$", line)
+        m = re.match(r"^➤\s*(.+?)\s*$", line)
         if not m:
             continue
 
@@ -305,7 +305,7 @@ def _waifux_global_name(text: str) -> str | None:
         # normal punctuation inside a character name untouched.
         while value:
             last = value[-1]
-            if last in "\\ufe0f\\u200d\\u20e3" or unicodedata.category(last) in {"So", "Sk"}:
+            if last in "\ufe0f\u200d\u20e3" or unicodedata.category(last) in {"So", "Sk"}:
                 value = value[:-1].rstrip()
                 continue
             break
