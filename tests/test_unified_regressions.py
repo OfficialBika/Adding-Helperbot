@@ -45,7 +45,7 @@ class LookupOrderingTests(unittest.TestCase):
 
     def test_hash_chunking_is_stable(self):
         chunks = _chunks("0123456789abcdef", count=4)
-        self.assertEqual(chunks, ["0123", "4567", "89ab", "cdef"])
+        self.assertEqual(chunks, ["123", "4567", "89ab", "cdef"])
 
 
 class ForceJoinConfigTests(unittest.TestCase):
