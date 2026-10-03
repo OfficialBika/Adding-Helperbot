@@ -28,7 +28,7 @@ from unified.lookup import lookup_message
 from helper.runtime import HelperUserbot
 from helper.manager import HelperManager
 from services.result_formatter import result_buttons
-from unified.services.force_join import require_join, send_dm_verification, router as force_join_router
+from unified.services.force_join import require_join, send_dm_verification, set_force_join_enabled, force_join_status, router as force_join_router
 from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
 from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
@@ -405,6 +405,53 @@ async def gunapprove(message: Message):
         upsert=True,
     )
     await message.reply("✅ This group is no longer approved for lookup.")
+
+
+@router.message(Command("fjoin"))
+async def fjoin(message: Message):
+    """Owner-only runtime Force Join control; DM only."""
+    if not owner(message):
+        return
+    if message.chat.type != "private":
+        await message.reply("❌ /fjoin can only be used in the bot DM.")
+        return
+
+    args = str(getattr(message, "text", "") or "").split(maxsplit=1)
+    action = args[1].strip().lower() if len(args) > 1 else "status"
+
+    if action not in {"on", "off", "status"}:
+        await message.reply(
+            "Usage: <code>/fjoin on</code>\n"
+            "<code>/fjoin off</code>\n"
+            "<code>/fjoin status</code>"
+        )
+        return
+
+    channels = bool(settings.force_join_chat_ids or settings.force_join_chat_id)
+    if not channels:
+        await message.reply(
+            "⚠️ Force Join channels are not configured. "
+            "Set FORCE_JOIN_CHAT_IDS/URLS (or legacy FORCE_JOIN_CHAT_ID/URL) first."
+        )
+        return
+
+    if action == "status":
+        enabled = await force_join_status()
+        await message.reply(
+            "🔐 <b>Force Join</b>\n\n"
+            f"Status: <b>{'ON' if enabled else 'OFF'}</b>\n"
+            f"Channels: <code>{len(settings.force_join_chat_ids) or (1 if settings.force_join_chat_id else 0)}</code>\n"
+            "Positive join cache: <b>ON</b>\n"
+            f"Positive TTL: <code>{settings.force_join_positive_cache_seconds}s</code>"
+        )
+        return
+
+    enabled = await set_force_join_enabled(action == "on")
+    await message.reply(
+        f"✅ <b>Force Join {'enabled' if enabled else 'disabled'}.</b>\n\n"
+        f"Positive join cache: <b>ON</b> ({settings.force_join_positive_cache_seconds}s)\n"
+        "Verification cache cleared."
+    )
 
 
 @router.message(Command("status"))
