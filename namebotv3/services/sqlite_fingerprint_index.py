@@ -333,6 +333,7 @@ class SQLiteFingerprintIndex:
                 if clear_existing:
                     async with self._write_lock:
                         await self.db.execute("DELETE FROM hash_chunks")
+                        await self.db.execute("DELETE FROM exact_keys")
                         await self.db.execute("DELETE FROM fingerprint_items")
                         await self.db.execute("DELETE FROM index_meta WHERE key='last_sync_at'")
                         await self.db.commit()
@@ -390,6 +391,17 @@ class SQLiteFingerprintIndex:
         assert self.db is not None
         async with self._write_lock:
             for item in items:
+                cursor = await self.db.execute(
+                    "SELECT item_json FROM fingerprint_items WHERE collection=? AND mongo_id=?",
+                    (item.collection, item.mongo_id),
+                )
+                old_row = await cursor.fetchone()
+                await cursor.close()
+                if old_row:
+                    old_item = self._item_from_json(str(old_row["item_json"]))
+                    if old_item:
+                        self._remove_exact_hot(old_item)
+
                 bucket = int(round(item.duration_ms / 1000)) if item.duration_ms > 0 else 0
                 await self.db.execute(
                     "INSERT INTO fingerprint_items(" 
@@ -409,17 +421,6 @@ class SQLiteFingerprintIndex:
                         self._item_to_json(item),
                     ),
                 )
-                cursor = await self.db.execute(
-                    "SELECT item_json FROM fingerprint_items WHERE collection=? AND mongo_id=?",
-                    (item.collection, item.mongo_id),
-                )
-                old_row = await cursor.fetchone()
-                await cursor.close()
-                if old_row:
-                    old_item = self._item_from_json(str(old_row["item_json"]))
-                    if old_item:
-                        self._remove_exact_hot(old_item)
-
                 await self.db.execute(
                     "DELETE FROM exact_keys WHERE collection=? AND mongo_id=?",
                     (item.collection, item.mongo_id),
