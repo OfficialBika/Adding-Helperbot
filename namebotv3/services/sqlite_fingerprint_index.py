@@ -38,6 +38,10 @@ class SQLiteFingerprintIndex:
         self.last_full_build_monotonic = 0.0
         self._build_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
+        # Exact identifiers are kept in a small RAM hot index. SQLite remains
+        # the persistent secondary index and MongoDB remains the source of truth.
+        self._exact_hot: dict[tuple[str, str, str], ItemSnapshot] = {}
+        self._exact_hot_global: dict[tuple[str, str], ItemSnapshot] = {}
 
     async def open(self) -> None:
         if self.db is not None:
@@ -74,6 +78,17 @@ class SQLiteFingerprintIndex:
             CREATE INDEX IF NOT EXISTS idx_fp_video_duration
                 ON fingerprint_items(collection, media_type, duration_bucket);
 
+            CREATE TABLE IF NOT EXISTS exact_keys (
+                kind TEXT NOT NULL,
+                key_value TEXT NOT NULL,
+                collection TEXT NOT NULL,
+                mongo_id TEXT NOT NULL,
+                PRIMARY KEY (kind, key_value, collection, mongo_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_exact_key
+                ON exact_keys(kind, key_value, collection);
+
             CREATE TABLE IF NOT EXISTS hash_chunks (
                 collection TEXT NOT NULL,
                 field TEXT NOT NULL,
@@ -93,6 +108,7 @@ class SQLiteFingerprintIndex:
         await self.db.commit()
         self.opened_at = time.time()
         self.last_sync_at = await self._load_watermark()
+        await self._load_exact_hot()
         count = await self.count()
         self.ready = count > 0
         log.info("SQLite fingerprint index opened path=%s items=%s ready=%s", path, count, self.ready)
@@ -102,6 +118,113 @@ class SQLiteFingerprintIndex:
             await self.db.close()
         self.db = None
         self.ready = False
+
+    async def _load_exact_hot(self) -> None:
+        if self.db is None:
+            return
+        self._exact_hot.clear()
+        self._exact_hot_global.clear()
+        cursor = await self.db.execute("SELECT item_json FROM fingerprint_items")
+        rows = await cursor.fetchall()
+        await cursor.close()
+        for row in rows:
+            item = self._item_from_json(str(row["item_json"]))
+            if item:
+                self._cache_exact_hot(item)
+
+    @staticmethod
+    def _exact_pairs(item: ItemSnapshot) -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        for value in item.all_uids:
+            if value:
+                pairs.append(("uid", str(value)))
+        for value in item.all_shas:
+            if value:
+                pairs.append(("sha", str(value)))
+        if item.pixel_sha256:
+            pairs.append(("pixel_sha", str(item.pixel_sha256)))
+        if item.video_signature:
+            pairs.append(("video_signature", str(item.video_signature)))
+        if item.origin_chat_id is not None and item.origin_message_id is not None:
+            pairs.append(("origin", f"{int(item.origin_chat_id)}:{int(item.origin_message_id)}"))
+        return pairs
+
+    def _cache_exact_hot(self, item: ItemSnapshot) -> None:
+        for kind, key in self._exact_pairs(item):
+            self._exact_hot[(kind, key, item.collection)] = item
+            self._exact_hot_global.setdefault((kind, key), item)
+
+    def _remove_exact_hot(self, item: ItemSnapshot) -> None:
+        for kind, key in self._exact_pairs(item):
+            self._exact_hot.pop((kind, key, item.collection), None)
+            global_key = (kind, key)
+            if self._exact_hot_global.get(global_key) is item:
+                self._exact_hot_global.pop(global_key, None)
+                for candidate in self._exact_hot.values():
+                    if candidate.collection == item.collection and (kind, key) in self._exact_pairs(candidate):
+                        self._exact_hot_global[global_key] = candidate
+                        break
+
+    async def _exact_lookup(
+        self,
+        kind: str,
+        key: str,
+        collections: list[str] | None = None,
+    ) -> ItemSnapshot | None:
+        key = str(key or "").strip()
+        if not key:
+            return None
+
+        if collections:
+            for collection in collections:
+                item = self._exact_hot.get((kind, key, collection))
+                if item:
+                    return item
+        else:
+            item = self._exact_hot_global.get((kind, key))
+            if item:
+                return item
+
+        if self.db is None:
+            return None
+        if collections:
+            marks = ",".join("?" for _ in collections)
+            cursor = await self.db.execute(
+                f"SELECT fi.item_json FROM exact_keys ek "
+                f"JOIN fingerprint_items fi ON fi.collection=ek.collection AND fi.mongo_id=ek.mongo_id "
+                f"WHERE ek.kind=? AND ek.key_value=? AND ek.collection IN ({marks}) LIMIT 1",
+                [kind, key, *collections],
+            )
+        else:
+            cursor = await self.db.execute(
+                "SELECT fi.item_json FROM exact_keys ek "
+                "JOIN fingerprint_items fi ON fi.collection=ek.collection AND fi.mongo_id=ek.mongo_id "
+                "WHERE ek.kind=? AND ek.key_value=? LIMIT 1",
+                (kind, key),
+            )
+        row = await cursor.fetchone()
+        await cursor.close()
+        if not row:
+            return None
+        item = self._item_from_json(str(row["item_json"]))
+        if item:
+            self._cache_exact_hot(item)
+        return item
+
+    async def exact_origin(self, key: tuple[int, int], collections: list[str] | None = None) -> ItemSnapshot | None:
+        return await self._exact_lookup("origin", f"{int(key[0])}:{int(key[1])}", collections)
+
+    async def exact_uid(self, uid: str, collections: list[str] | None = None) -> ItemSnapshot | None:
+        return await self._exact_lookup("uid", uid, collections)
+
+    async def exact_sha(self, sha: str, collections: list[str] | None = None) -> ItemSnapshot | None:
+        return await self._exact_lookup("sha", sha, collections)
+
+    async def exact_pixel_sha(self, sha: str, collections: list[str] | None = None) -> ItemSnapshot | None:
+        return await self._exact_lookup("pixel_sha", sha, collections)
+
+    async def exact_video_signature(self, signature: str, collections: list[str] | None = None) -> ItemSnapshot | None:
+        return await self._exact_lookup("video_signature", signature, collections)
 
     async def _load_watermark(self) -> datetime | None:
         if self.db is None:
@@ -210,6 +333,7 @@ class SQLiteFingerprintIndex:
                 if clear_existing:
                     async with self._write_lock:
                         await self.db.execute("DELETE FROM hash_chunks")
+                        await self.db.execute("DELETE FROM exact_keys")
                         await self.db.execute("DELETE FROM fingerprint_items")
                         await self.db.execute("DELETE FROM index_meta WHERE key='last_sync_at'")
                         await self.db.commit()
@@ -267,6 +391,17 @@ class SQLiteFingerprintIndex:
         assert self.db is not None
         async with self._write_lock:
             for item in items:
+                cursor = await self.db.execute(
+                    "SELECT item_json FROM fingerprint_items WHERE collection=? AND mongo_id=?",
+                    (item.collection, item.mongo_id),
+                )
+                old_row = await cursor.fetchone()
+                await cursor.close()
+                if old_row:
+                    old_item = self._item_from_json(str(old_row["item_json"]))
+                    if old_item:
+                        self._remove_exact_hot(old_item)
+
                 bucket = int(round(item.duration_ms / 1000)) if item.duration_ms > 0 else 0
                 await self.db.execute(
                     "INSERT INTO fingerprint_items(" 
@@ -285,6 +420,10 @@ class SQLiteFingerprintIndex:
                         datetime.now(timezone.utc).isoformat(),
                         self._item_to_json(item),
                     ),
+                )
+                await self.db.execute(
+                    "DELETE FROM exact_keys WHERE collection=? AND mongo_id=?",
+                    (item.collection, item.mongo_id),
                 )
                 await self.db.execute(
                     "DELETE FROM hash_chunks WHERE collection=? AND mongo_id=?",
@@ -309,6 +448,16 @@ class SQLiteFingerprintIndex:
                         ") VALUES(?,?,?,?,?,?)",
                         chunk_rows,
                     )
+                exact_rows = [
+                    (kind, key, item.collection, item.mongo_id)
+                    for kind, key in self._exact_pairs(item)
+                ]
+                if exact_rows:
+                    await self.db.executemany(
+                        "INSERT OR REPLACE INTO exact_keys(kind,key_value,collection,mongo_id) VALUES(?,?,?,?)",
+                        exact_rows,
+                    )
+                self._cache_exact_hot(item)
             await self.db.commit()
 
     async def incremental_sync(self) -> int:
