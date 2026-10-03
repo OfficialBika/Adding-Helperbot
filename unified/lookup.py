@@ -82,22 +82,37 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
         "media_type": 1,
     }
 
-    # Catch sources require deterministic fallback order. Do not use a single
-    # Mongo $in query here because Mongo does not guarantee result ordering.
+    # Catch source priority is a result-selection rule, not a reason to
+    # serialize the two independent Mongo probes. Probe each source in parallel,
+    # then deterministically prefer primary Catch over FW Catch. This removes
+    # avoidable network round-trip time while preserving the exact requested
+    # result when the same UID exists in both sources.
     ordered_scope = _ordered_uid_sources(scope or [])
     if ordered_scope and {
         "items_character_catcher",
         "items_character_catcher_fw",
     }.intersection(ordered_scope):
-        for source in ordered_scope:
-            query = {
-                "source_key": source,
-                "$or": [
-                    _uid_query_new(uids),
-                    *_uid_query_legacy(uids)["$or"],
-                ],
-            }
-            doc = await characters.find_one(query, projection)
+        async def find_source(source: str):
+            base = {"source_key": source}
+            # New records use the indexed file_unique_ids field. Try that first
+            # because it is the hot path and avoids the slower legacy $or.
+            doc = await characters.find_one(
+                {**base, **_uid_query_new(uids)},
+                projection,
+            )
+            if doc:
+                return doc
+            # Legacy records are still fully supported, but only pay for this
+            # compatibility query after the fast indexed query misses.
+            return await characters.find_one(
+                {**base, **_uid_query_legacy(uids)},
+                projection,
+            )
+
+        results = await asyncio.gather(
+            *(find_source(source) for source in ordered_scope)
+        )
+        for doc in results:
             if doc:
                 return doc
         return None
