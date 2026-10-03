@@ -337,7 +337,7 @@ async def send_dm_verification(message: Message) -> None:
 
 
 async def require_join(message: Message) -> bool:
-    if not _enabled():
+    if not await _enabled():
         return True
 
     user = getattr(message, "from_user", None)
