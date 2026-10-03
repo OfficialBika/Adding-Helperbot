@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import time
 from typing import Any
 
 from aiogram import Bot
@@ -17,6 +18,7 @@ from unified.uid_index import lookup_global as sqlite_lookup_global
 from unified.uid_index import lookup_hot_global as ram_lookup_global
 from unified.uid_index import lookup_hot_source as ram_lookup_source
 from unified.uid_index import lookup_source as sqlite_lookup_source
+from unified.uid_index import persist_uid_mappings, remember_hot_source
 from utils.media import extract_media
 
 log = logging.getLogger(__name__)
@@ -128,14 +130,33 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
     return await characters.find_one(query, projection)
 
 
-def _cache_doc(doc: dict | None, uids: list[str]) -> None:
+def _cache_doc(
+    doc: dict | None,
+    uids: list[str],
+    *,
+    persist_index: bool = False,
+) -> None:
     if not doc or not uids:
         return
     source = str(doc.get("source_key") or "").strip().lower() or None
     # Keep the positive cache source-scoped. Global UID recovery stays in Mongo
     # so an ambiguous UID can never be silently resolved to the wrong dataset.
-    if source:
-        _UID_CACHE.remember(uids, doc, source)
+    if not source:
+        return
+    _UID_CACHE.remember(uids, doc, source)
+    # A successful lookup is also published to the RAM UID index immediately.
+    # This is deliberately independent of the TTL cache: even if a process is
+    # reloaded or a cache object is recreated, the same positive result can be
+    # served from the local hot index after the first verified resolution.
+    remember_hot_source(source, uids, doc)
+    if persist_index:
+        # SQLite persistence is intentionally asynchronous; it must never add
+        # disk latency to the lookup response path.
+        try:
+            asyncio.create_task(persist_uid_mappings(source, uids, doc))
+        except RuntimeError:
+            # Unit/test callers without a running loop still get the RAM fast path.
+            pass
 
 
 def _ordered_uid_sources(collections: list[str]) -> list[str]:
@@ -439,14 +460,20 @@ async def _hash_fallback(
     if not file_id:
         return None, "no_file_id"
 
+    started = time.perf_counter()
+    download_started = started
     data = await _download(bot, file_id)
+    download_ms = (time.perf_counter() - download_started) * 1000
     if not data:
+        log.info("HASH TIMING message=%s download_ms=%.1f result=download_failed", getattr(source_message, "message_id", None), download_ms)
         return None, "hash_download_failed"
 
+    hash_started = time.perf_counter()
     media_hash = await asyncio.to_thread(
         hash_photo if media.media_type == "photo" else hash_video,
         data,
     )
+    hash_ms = (time.perf_counter() - hash_started) * 1000
 
     # Start the expensive pHash candidate scan while the exact SHA-256
     # lookup is in flight. SHA-256 still has strict priority if it matches, but
@@ -463,14 +490,18 @@ async def _hash_fallback(
 
     # SHA-256 is byte-exact and remains the first accepted fallback after UID.
     if media_hash.sha256:
+        sha_started = time.perf_counter()
         doc = await _hash_exact_find(collections, media_hash.sha256)
+        sha_ms = (time.perf_counter() - sha_started) * 1000
         if doc:
             if phash_task is not None:
                 phash_task.cancel()
             return doc, "sha256"
 
         if allow_global_fallback:
+            global_sha_started = time.perf_counter()
             global_docs = await _hash_global_candidates(media_hash.sha256, limit=2)
+            global_sha_ms = (time.perf_counter() - global_sha_started) * 1000
             if len(global_docs) == 1:
                 if phash_task is not None:
                     phash_task.cancel()
@@ -485,18 +516,30 @@ async def _hash_fallback(
     # Perceptual hashing is only for photos. It is similarity, not identity,
     # so it is source-scoped by default and requires a strong score + margin.
     if phash_task is not None:
+        phash_started = time.perf_counter()
         doc, score = await phash_task
+        phash_ms = (time.perf_counter() - phash_started) * 1000
+        log.info(
+            "HASH TIMING message=%s download_ms=%.1f hash_ms=%.1f sha_ms=%.1f phash_ms=%.1f",
+            getattr(source_message, "message_id", None),
+            download_ms,
+            hash_ms,
+            locals().get("sha_ms", 0.0),
+            phash_ms,
+        )
         if doc:
             return doc, f"phash:{score:.3f}"
 
         # With an explicitly allowed global/manual lookup and no source scope,
         # perform the global similarity pass only after the source-scoped pass.
         if allow_global_fallback and not collections:
+            global_phash_started = time.perf_counter()
             doc, score = await _photo_hash_match(
                 media_hash,
                 None,
                 global_mode=True,
             )
+            global_phash_ms = (time.perf_counter() - global_phash_started) * 1000
             if doc:
                 return doc, f"phash_global:{score:.3f}"
 
@@ -578,7 +621,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 doc.get("source_key"),
                 doc.get("name"),
             )
-            _cache_doc(doc, uids)
+            _cache_doc(doc, uids, persist_index=True)
             return doc, "uid"
 
         # Source-scoped auto lookup must not perform an extra global probe.
@@ -684,7 +727,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         # A hash match is a positive lookup result. Cache the original Telegram
         # UID against that result so the same media never needs another download,
         # hash computation, or Mongo similarity scan during the cache TTL.
-        _cache_doc(doc, uids)
+        _cache_doc(doc, uids, persist_index=True)
         log.info(
             "HASH LOOKUP MATCH message=%s source=%s reason=%s name=%s",
             getattr(message, "message_id", None),

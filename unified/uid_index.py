@@ -133,6 +133,51 @@ def lookup_hot_source(source_keys: list[str], uids: list[str]) -> dict[str, Any]
     return None
 
 
+def remember_hot_source(source_key: str, uids: list[str], value: dict[str, Any]) -> None:
+    """Publish a verified positive UID mapping to the process-local hot index.
+
+    This is intentionally synchronous and memory-only: it makes a just-resolved
+    hash result immediately reusable without waiting for SQLite persistence.
+    """
+    source = str(source_key or "").strip().lower()
+    name = str(value.get("name") or "").strip()
+    if not source or not name:
+        return
+    command = str(value.get("command") or "/name").strip() or "/name"
+    media_type = str(value.get("media_type") or "unknown").strip() or "unknown"
+    with _HOT_LOCK:
+        for raw_uid in uids:
+            uid = str(raw_uid or "").strip()
+            if not uid:
+                continue
+            record = {
+                "source_key": source,
+                "uid": uid,
+                "name": name,
+                "command": command,
+                "media_type": media_type,
+            }
+            _HOT_SOURCE[(source, uid)] = record
+            sources = _HOT_UID_SOURCES.setdefault(uid, {})
+            sources[source] = record
+            _HOT_GLOBAL[uid] = dict(record) if len(sources) == 1 else None
+
+
+async def persist_uid_mappings(source_key: str, uids: list[str], value: dict[str, Any]) -> int:
+    """Persist a verified positive UID mapping without touching MongoDB."""
+    source = str(source_key or "").strip().lower()
+    if not source:
+        return 0
+    doc = {
+        "source_key": source,
+        "name": value.get("name"),
+        "command": value.get("command"),
+        "media_type": value.get("media_type"),
+        "file_unique_ids": list(dict.fromkeys(str(x).strip() for x in uids if str(x).strip())),
+    }
+    return await asyncio.to_thread(_upsert_many_sync, [doc])
+
+
 def lookup_hot_global(uids: list[str], limit: int = 2) -> list[dict[str, Any]]:
     if not uids:
         return []
