@@ -82,22 +82,37 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
         "media_type": 1,
     }
 
-    # Catch sources require deterministic fallback order. Do not use a single
-    # Mongo $in query here because Mongo does not guarantee result ordering.
+    # Catch source priority is a result-selection rule, not a reason to
+    # serialize the two independent Mongo probes. Probe each source in parallel,
+    # then deterministically prefer primary Catch over FW Catch. This removes
+    # avoidable network round-trip time while preserving the exact requested
+    # result when the same UID exists in both sources.
     ordered_scope = _ordered_uid_sources(scope or [])
     if ordered_scope and {
         "items_character_catcher",
         "items_character_catcher_fw",
     }.intersection(ordered_scope):
-        for source in ordered_scope:
-            query = {
-                "source_key": source,
-                "$or": [
-                    _uid_query_new(uids),
-                    *_uid_query_legacy(uids)["$or"],
-                ],
-            }
-            doc = await characters.find_one(query, projection)
+        async def find_source(source: str):
+            base = {"source_key": source}
+            # New records use the indexed file_unique_ids field. Try that first
+            # because it is the hot path and avoids the slower legacy $or.
+            doc = await characters.find_one(
+                {**base, **_uid_query_new(uids)},
+                projection,
+            )
+            if doc:
+                return doc
+            # Legacy records are still fully supported, but only pay for this
+            # compatibility query after the fast indexed query misses.
+            return await characters.find_one(
+                {**base, **_uid_query_legacy(uids)},
+                projection,
+            )
+
+        results = await asyncio.gather(
+            *(find_source(source) for source in ordered_scope)
+        )
+        for doc in results:
             if doc:
                 return doc
         return None
@@ -419,15 +434,32 @@ async def _hash_fallback(
         data,
     )
 
-    # SHA-256 is byte-exact. It is the first fallback after Telegram UID.
+    # Start the expensive pHash candidate scan while the exact SHA-256
+    # lookup is in flight. SHA-256 still has strict priority if it matches, but
+    # a SHA miss no longer adds a second full Mongo round trip before pHash.
+    phash_task = None
+    if media.media_type == "photo":
+        phash_task = asyncio.create_task(
+            _photo_hash_match(
+                media_hash,
+                collections,
+                global_mode=False,
+            )
+        )
+
+    # SHA-256 is byte-exact and remains the first accepted fallback after UID.
     if media_hash.sha256:
         doc = await _hash_exact_find(collections, media_hash.sha256)
         if doc:
+            if phash_task is not None:
+                phash_task.cancel()
             return doc, "sha256"
 
         if allow_global_fallback:
             global_docs = await _hash_global_candidates(media_hash.sha256, limit=2)
             if len(global_docs) == 1:
+                if phash_task is not None:
+                    phash_task.cancel()
                 return global_docs[0], "sha256_global"
             if len(global_docs) > 1:
                 log.warning(
@@ -438,16 +470,14 @@ async def _hash_fallback(
 
     # Perceptual hashing is only for photos. It is similarity, not identity,
     # so it is source-scoped by default and requires a strong score + margin.
-    if media.media_type == "photo":
-        doc, score = await _photo_hash_match(
-            media_hash,
-            collections,
-            global_mode=False,
-        )
+    if phash_task is not None:
+        doc, score = await phash_task
         if doc:
             return doc, f"phash:{score:.3f}"
 
-        if allow_global_fallback:
+        # With an explicitly allowed global/manual lookup and no source scope,
+        # perform the global similarity pass only after the source-scoped pass.
+        if allow_global_fallback and not collections:
             doc, score = await _photo_hash_match(
                 media_hash,
                 None,
@@ -637,6 +667,10 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         allow_global_fallback=hash_global,
     )
     if doc:
+        # A hash match is a positive lookup result. Cache the original Telegram
+        # UID against that result so the same media never needs another download,
+        # hash computation, or Mongo similarity scan during the cache TTL.
+        _cache_doc(doc, uids)
         log.info(
             "HASH LOOKUP MATCH message=%s source=%s reason=%s name=%s",
             getattr(message, "message_id", None),
