@@ -13,10 +13,10 @@ sys.path.insert(0, str(ROOT / "namebotv3"))
 sys.path.insert(0, str(ROOT))
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from unified.config import Settings
-from unified.lookup import _chunks, _ordered_uid_sources
+from unified.lookup import _chunks, _learn_verified_uids, _ordered_uid_sources
 import unified.uid_index as uid_index
 
 
@@ -124,6 +124,39 @@ class UIDIndexTests(unittest.TestCase):
                     )
                 )
                 self.assertEqual(sqlite_doc["source_key"], "items_character_catcher")
+
+    def test_hash_verified_uid_is_learned_into_mongo_uid_array(self):
+        matched = {
+            "_id": "mongo-doc-1",
+            "source_key": "items_character_catcher",
+            "name": "Rin Xi",
+        }
+        update_result = SimpleNamespace(modified_count=1)
+        with patch("unified.lookup.characters.update_one", new=AsyncMock(return_value=update_result)) as update:
+            asyncio.run(
+                _learn_verified_uids(
+                    matched,
+                    ["UID-A", "UID-B", "UID-A"],
+                )
+            )
+
+        update.assert_awaited_once_with(
+            {"_id": "mongo-doc-1", "source_key": "items_character_catcher"},
+            {"$addToSet": {"file_unique_ids": {"$each": ["UID-A", "UID-B"]}}},
+        )
+
+    def test_hash_uid_learning_failure_does_not_raise(self):
+        matched = {
+            "_id": "mongo-doc-2",
+            "source_key": "items_character_catcher_fw",
+            "name": "Rin Xi",
+        }
+        with patch(
+            "unified.lookup.characters.update_one",
+            new=AsyncMock(side_effect=RuntimeError("temporary mongo failure")),
+        ):
+            asyncio.run(_learn_verified_uids(matched, ["UID-C"]))
+
 
     def test_verified_uid_is_immediately_hot_and_persistable(self):
         with tempfile.TemporaryDirectory() as tmp:
