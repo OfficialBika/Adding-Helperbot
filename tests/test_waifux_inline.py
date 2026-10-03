@@ -23,6 +23,15 @@ class WaifuxInlineParserTests(unittest.TestCase):
         self.assertEqual(extract_character_id(text), "42")
         self.assertEqual(extract_name(text), "Oshi no Ko: Ai Hoshino")
 
+    def test_global_info_drops_rarity_and_status_suffix(self):
+        text = """Media + ❖ Global Character Info ❖
+➤ Noelle Silva 🔵 [👠]
+• Series: Black Clover
+• ID: 621
+"""
+        self.assertEqual(extract_character_id(text), "621")
+        self.assertEqual(extract_name(text), "Noelle Silva")
+
 
 if __name__ == "__main__":
     unittest.main()
