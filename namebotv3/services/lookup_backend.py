@@ -4,7 +4,6 @@ import logging
 from typing import Any
 
 from config import settings
-from services.mongo_exact_lookup import mongo_exact_lookup
 from services.snapshot_cache import ItemSnapshot, snapshot
 from services.sqlite_fingerprint_index import sqlite_index
 
@@ -26,31 +25,31 @@ class LookupBackend:
         self, key: tuple[int, int], collections: list[str] | None = None
     ) -> ItemSnapshot | None:
         if self.mode == "sqlite":
-            return await mongo_exact_lookup.exact_origin(key, collections)
+            return await sqlite_index.exact_origin(key, collections)
         return snapshot.exact_origin(key, collections)
 
     async def exact_uid(self, uid: str, collections: list[str] | None = None) -> ItemSnapshot | None:
         if self.mode == "sqlite":
-            return await mongo_exact_lookup.exact_uid(uid, collections)
+            return await sqlite_index.exact_uid(uid, collections)
         return snapshot.exact_uid(uid, collections)
 
     async def exact_sha(self, sha: str, collections: list[str] | None = None) -> ItemSnapshot | None:
         if self.mode == "sqlite":
-            return await mongo_exact_lookup.exact_sha(sha, collections)
+            return await sqlite_index.exact_sha(sha, collections)
         return snapshot.exact_sha(sha, collections)
 
     async def exact_pixel_sha(
         self, sha: str, collections: list[str] | None = None
     ) -> ItemSnapshot | None:
         if self.mode == "sqlite":
-            return await mongo_exact_lookup.exact_pixel_sha(sha, collections)
+            return await sqlite_index.exact_pixel_sha(sha, collections)
         return snapshot.exact_pixel_sha(sha, collections)
 
     async def exact_video_signature(
         self, signature: str, collections: list[str] | None = None
     ) -> ItemSnapshot | None:
         if self.mode == "sqlite":
-            return await mongo_exact_lookup.exact_video_signature(signature, collections)
+            return await sqlite_index.exact_video_signature(signature, collections)
         return snapshot.exact_video_signature(signature, collections)
 
     async def photo_candidates(
