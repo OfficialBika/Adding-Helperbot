@@ -64,6 +64,10 @@ class Settings:
     force_join_url: str = os.getenv("FORCE_JOIN_URL", "").strip()
     force_join_title: str = os.getenv("FORCE_JOIN_TITLE", "").strip()
     force_join_button_text: str = os.getenv("FORCE_JOIN_BUTTON_TEXT", "Join Channel").strip() or "Join Channel"
+    # Positive membership is cached longer; negative membership stays short.
+    # The explicit verification callback always bypasses both TTLs.
+    force_join_positive_cache_seconds: int = max(60, _int("FORCE_JOIN_POSITIVE_CACHE_SECONDS", 21600))
+    force_join_negative_cache_seconds: int = max(1, _int("FORCE_JOIN_NEGATIVE_CACHE_SECONDS", 15))
 
     # Multi-channel Force Join. IDs, URLs and titles are matched by position.
     force_join_chat_ids: tuple[int, ...] = _csv_ints("FORCE_JOIN_CHAT_IDS")
