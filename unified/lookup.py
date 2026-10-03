@@ -159,6 +159,52 @@ def _cache_doc(
             pass
 
 
+async def _learn_verified_uids(doc: dict | None, uids: list[str]) -> None:
+    """Persist UIDs proven by a successful exact/hash match into Mongo.
+
+    Mongo remains the source of truth. Only native Telegram file_unique_ids from
+    the current media are added, and only to the already-selected character
+    document. $addToSet is idempotent, so retries cannot duplicate or replace
+    existing identities.
+    """
+    if not doc or not uids:
+        return
+
+    document_id = doc.get("_id")
+    source = str(doc.get("source_key") or "").strip().lower()
+    if document_id is None or not source:
+        log.warning(
+            "UID LEARN skipped: matched document has no stable identity source=%s",
+            source,
+        )
+        return
+
+    values = list(dict.fromkeys(str(uid).strip() for uid in uids if str(uid).strip()))
+    if not values:
+        return
+
+    try:
+        result = await characters.update_one(
+            {"_id": document_id, "source_key": source},
+            {"$addToSet": {"file_unique_ids": {"$each": values}}},
+        )
+        if getattr(result, "modified_count", 0):
+            log.info(
+                "UID LEARNED source=%s name=%s added=%s",
+                source,
+                doc.get("name"),
+                len(values),
+            )
+    except Exception:
+        # Learning is an accelerator/data-enrichment step. Never turn a verified
+        # lookup success into a user-visible lookup failure if Mongo update fails.
+        log.exception(
+            "UID LEARN failed source=%s name=%s",
+            source,
+            doc.get("name"),
+        )
+
+
 def _ordered_uid_sources(collections: list[str]) -> list[str]:
     """Return UID lookup sources in deterministic Catch-first order.
 
@@ -728,6 +774,13 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         # UID against that result so the same media never needs another download,
         # hash computation, or Mongo similarity scan during the cache TTL.
         _cache_doc(doc, uids, persist_index=True)
+        # Hash has now positively identified the character. Learn the current
+        # Telegram UIDs in Mongo as an idempotent background enrichment so
+        # future lookups can resolve by native UID without downloading media.
+        try:
+            asyncio.create_task(_learn_verified_uids(doc, uids))
+        except RuntimeError:
+            pass
         log.info(
             "HASH LOOKUP MATCH message=%s source=%s reason=%s name=%s",
             getattr(message, "message_id", None),
