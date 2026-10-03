@@ -46,6 +46,7 @@ class ForceJoinConfigTests(unittest.TestCase):
             force_join_titles=("A", "B", "C"),
         )
         self.assertEqual(len(settings.force_join_chat_ids), 3)
+        self.assertEqual(settings.force_join_titles, ("A", "B", "C"))
 
     def test_mismatched_urls_are_rejected(self):
         with self.assertRaises(ValueError):
