@@ -73,6 +73,35 @@ def _uid_query_legacy(uids: list[str]) -> dict:
 async def _exact_find(scope: list[str] | None, uids: list[str]):
     if not uids:
         return None
+
+    projection = {
+        "_id": 1,
+        "name": 1,
+        "command": 1,
+        "source_key": 1,
+        "media_type": 1,
+    }
+
+    # Catch sources require deterministic fallback order. Do not use a single
+    # Mongo $in query here because Mongo does not guarantee result ordering.
+    ordered_scope = _ordered_uid_sources(scope or [])
+    if ordered_scope and {
+        "items_character_catcher",
+        "items_character_catcher_fw",
+    }.intersection(ordered_scope):
+        for source in ordered_scope:
+            query = {
+                "source_key": source,
+                "$or": [
+                    _uid_query_new(uids),
+                    *_uid_query_legacy(uids)["$or"],
+                ],
+            }
+            doc = await characters.find_one(query, projection)
+            if doc:
+                return doc
+        return None
+
     prefix = {"source_key": {"$in": scope}} if scope else {}
     query = {
         **prefix,
@@ -80,13 +109,6 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
             _uid_query_new(uids),
             *_uid_query_legacy(uids)["$or"],
         ],
-    }
-    projection = {
-        "_id": 1,
-        "name": 1,
-        "command": 1,
-        "source_key": 1,
-        "media_type": 1,
     }
     return await characters.find_one(query, projection)
 
@@ -99,6 +121,37 @@ def _cache_doc(doc: dict | None, uids: list[str]) -> None:
     # so an ambiguous UID can never be silently resolved to the wrong dataset.
     if source:
         _UID_CACHE.remember(uids, doc, source)
+
+
+def _ordered_uid_sources(collections: list[str]) -> list[str]:
+    """Return UID lookup sources in deterministic Catch-first order.
+
+    Catch and forward-catch records intentionally live in separate Mongo
+    collections. The same Telegram file_unique_id may legitimately exist in
+    both collections, so source order must be explicit rather than delegated
+    to Mongo's $in query result order.
+    """
+    normalized: list[str] = []
+    for value in collections:
+        source = str(value or "").strip().lower()
+        if source and source not in normalized:
+            normalized.append(source)
+
+    catch_sources = {
+        "items_character_catcher",
+        "items_character_catcher_fw",
+    }
+    if not catch_sources.intersection(normalized):
+        return normalized
+
+    # A Catch lookup must always be able to fall through primary Catch -> FW
+    # Catch even when the resolver initially returned only one of the two.
+    ordered = [
+        "items_character_catcher",
+        "items_character_catcher_fw",
+    ]
+    ordered.extend(source for source in normalized if source not in ordered)
+    return ordered
 
 
 def _cache_lookup(uids: list[str], scope: list[str] | None) -> dict | None:
@@ -419,7 +472,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         return None, "no_media"
 
     source_message = media.source_message
-    collections = _scope(source_message)
+    collections = _ordered_uid_sources(_scope(source_message))
     if not collections and not allow_global_fallback:
         return None, "source_unknown"
 
@@ -427,6 +480,8 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     if not uids:
         return None, "no_file_unique_id"
 
+    # Catch lookups intentionally use the deterministic source order above:
+    # items_character_catcher -> items_character_catcher_fw -> other sources.
     cached_doc = _cache_lookup(uids, collections)
     if cached_doc:
         log.info(

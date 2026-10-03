@@ -151,20 +151,29 @@ def _lookup_source_sync(source_keys: list[str], uids: list[str]) -> dict[str, An
     if not source_keys or not uids:
         return None
     conn = _connect()
-    placeholders_s = ",".join("?" for _ in source_keys)
     placeholders_u = ",".join("?" for _ in uids)
-    row = conn.execute(
-        f"""
-        SELECT source_key, uid, name, command, media_type
-        FROM uid_index
-        WHERE source_key IN ({placeholders_s})
-          AND uid IN ({placeholders_u})
-        ORDER BY rowid DESC
-        LIMIT 1
-        """,
-        [*source_keys, *uids],
-    ).fetchone()
-    return dict(row) if row else None
+
+    # Respect caller source priority. In particular, Catch lookups pass
+    # items_character_catcher before items_character_catcher_fw, and the same
+    # UID is allowed to exist in both source namespaces.
+    for source in source_keys:
+        normalized = str(source or "").strip().lower()
+        if not normalized:
+            continue
+        row = conn.execute(
+            f"""
+            SELECT source_key, uid, name, command, media_type
+            FROM uid_index
+            WHERE source_key = ?
+              AND uid IN ({placeholders_u})
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            [normalized, *uids],
+        ).fetchone()
+        if row:
+            return dict(row)
+    return None
 
 
 async def lookup_source(source_keys: list[str], uids: list[str]) -> dict[str, Any] | None:
