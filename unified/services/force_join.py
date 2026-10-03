@@ -13,9 +13,11 @@ from unified.config import settings
 router = Router(name="unified_force_join")
 log = logging.getLogger("unified.force_join")
 
-# Short membership cache. The key includes the channel ID so three required
-# channels are tracked independently.
-_CACHE_TTL = 60.0
+# Membership cache. Positive membership is stable enough to cache for hours;
+# negative membership is deliberately short so newly joined users pass quickly.
+# The explicit verification callback clears the user entries before checking.
+_POSITIVE_CACHE_TTL = float(settings.force_join_positive_cache_seconds)
+_NEGATIVE_CACHE_TTL = float(settings.force_join_negative_cache_seconds)
 _CACHE_MAX = 20_000
 _membership_cache: "OrderedDict[tuple[int, int], tuple[float, bool]]" = OrderedDict()
 _cache_lock = asyncio.Lock()
@@ -98,7 +100,8 @@ async def _cached_member(bot, chat_id: int, user_id: int) -> bool | None:
         item = _membership_cache.get(key)
         if item:
             age = time.monotonic() - item[0]
-            if age <= _CACHE_TTL:
+            ttl = _POSITIVE_CACHE_TTL if item[1] else _NEGATIVE_CACHE_TTL
+            if age <= ttl:
                 _membership_cache.move_to_end(key)
                 return item[1]
             _membership_cache.pop(key, None)
