@@ -49,6 +49,21 @@ class ParserRegressionTests(unittest.TestCase):
         self.assertEqual(extract_name(WAIFU_TEXT), "Pearl [🚓]")
         self.assertEqual(extract_character_id(WAIFU_TEXT), "20079")
 
+    def test_catcher_log_names_keep_closing_bracket(self):
+        text = """Character image updated for Character Rock Lee [👘]
+"""
+        self.assertEqual(extract_name(text), "Rock Lee [👘]")
+
+    def test_common_labeled_names_keep_bracket_suffix(self):
+        samples = [
+            ("Name: Pearl [🚓]\nID: 20079", "Pearl [🚓]"),
+            ("📛 Name: Yoru [👶]\n⭐ Rarity: Rare", "Yoru [👶]"),
+            ("Character: Noelle Silva [👠]\nID: 621", "Noelle Silva [👠]"),
+        ]
+        for text, expected in samples:
+            with self.subTest(expected=expected):
+                self.assertEqual(extract_name(text), expected)
+
 
 class GrabberSourceRegressionTests(unittest.TestCase):
     def _message(self, text):
