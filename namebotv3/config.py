@@ -147,6 +147,8 @@ COLLECTION_TO_OUTPUT_COMMAND: Dict[str, str] = {
     "items_orinx_waifu": "/orin",
     "items_immortal_donghua": "/dao",
     "items_kairo_character": "/kairo",
+    "items_grabber_fw": "/grab",
+    "items_grabber_fw": "/grab",
     "items_unknown": "/name",
 }
 
@@ -197,6 +199,10 @@ BOT_SOURCE_COLLECTION: Dict[str, str] = {
     "@orinx_catcher_waifu_bot": "items_orinx_waifu",
     "@timunagalaya": "items_orinx_waifu",
     "@immortaldonghuabot": "items_immortal_donghua",
+    # Both Grabber bots feed the same FW database channel/collection.
+    "@husbando_grabber_bot": "items_grabber_fw",
+    "@waifu_grabber_bot": "items_grabber_fw",
+    "@immortaldonghuabot": "items_immortal_donghua",
     "@picker_database": "items_character_picker",
     "@kairodatabase": "items_kairo_character",
 }
@@ -229,6 +235,8 @@ BOT_SOURCE_USER_ID: Dict[int, str] = {
     8534437620: "items_super_zeko",
     8685992652: "items_orinx_waifu",
     8928030201: "items_immortal_donghua",
+    6546492683: "items_grabber_fw",
+    6195436879: "items_grabber_fw",
 }
 
 BOT_SOURCE_OUTPUT_COMMAND: Dict[str, str] = {
@@ -241,6 +249,8 @@ BOT_SOURCE_OUTPUT_COMMAND: Dict[str, str] = {
     "@immortaldonghuabot": "/dao",
     "@picker_database": "/pick",
     "@kairodatabase": "/kairo",
+    "@husbando_grabber_bot": "/grab",
+    "@waifu_grabber_bot": "/grab",
 }
 
 BOT_SOURCE_OUTPUT_USER_ID: Dict[int, str] = {
