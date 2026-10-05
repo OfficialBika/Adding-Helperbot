@@ -75,16 +75,26 @@ class GrabberSourceRegressionTests(unittest.TestCase):
         self.assertEqual(grabber_source_variant(husbando), "husbando_grabber")
         self.assertEqual(grabber_source_variant(waifu), "waifu_grabber")
 
-    def test_admin_signature_can_be_used_as_variant(self):
-        msg = self._message("some grabber card")
-        msg.forward_origin = SimpleNamespace(
-            author_signature="Husbando Grabber Admin",
+    def test_stylized_admin_signatures_identify_each_grabber(self):
+        waifu = self._message("some grabber card")
+        waifu.forward_origin = SimpleNamespace(
+            author_signature="˹ᴡᴀɪғᴜ ɢꝛᴀʙʙᴇʀ ʙᴏᴛ˼ 🫧",
             chat=SimpleNamespace(id=-1001, username="Grabber_Database", title="Grabber Database"),
             sender_user=None,
             sender_user_name=None,
             message_id=123,
         )
-        self.assertEqual(grabber_source_variant(msg), "husbando_grabber")
+        husbando = self._message("some grabber card")
+        husbando.forward_origin = SimpleNamespace(
+            author_signature="˹ʜᴜsʙᴀɴᴅᴏ ɢꝛᴀʙʙᴇʀ ʙᴏᴛ˼ 🥤",
+            chat=SimpleNamespace(id=-1001, username="Grabber_Database", title="Grabber Database"),
+            sender_user=None,
+            sender_user_name=None,
+            message_id=124,
+        )
+        self.assertEqual(grabber_source_variant(waifu), "waifu_grabber")
+        self.assertEqual(grabber_source_variant(husbando), "husbando_grabber")
+
 
     def test_generic_admin_signature_does_not_create_id_identity(self):
         msg = self._message("some grabber card")
