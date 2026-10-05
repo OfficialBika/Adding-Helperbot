@@ -112,7 +112,7 @@ def _catch_log_name(text: str) -> str | None:
             return value
 
     # Image/event update captions: "... for Character Nicole Demara [emoji]".
-    for label in (r"changed\s+event\s+for", r"updated\s+image\s+for"):
+    for label in (r"changed\s+event\s+for", r"updated\s+image\s+for", r"character\s+image\s+updated\s+for"):
         m = re.search(
             rf"\b{label}\s+Character\s+(.+?)(?:\n|$)",
             raw,
@@ -211,6 +211,13 @@ def _picker_id(text: str) -> str | None:
             line,
             re.I,
         )
+        if m:
+            return m.group(1)
+
+    # Some forwarded OwO captions retain the canonical numeric ID line even
+    # when the exact OwO header is altered or omitted.
+    for line in raw.splitlines():
+        m = re.match(r"^\s*(\d+)\s*[:：-]\s*.+?\s*$", line)
         if m:
             return m.group(1)
 
