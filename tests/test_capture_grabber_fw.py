@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from unified.parser import extract_character_id, extract_name
 from services.source_resolver import grabber_source_variant, resolve_source_collection
+from unified.store import _index_source_variant
 
 
 CAPTURE_TEXT = """Media + ✨ New Character Added!
@@ -125,6 +126,31 @@ class GrabberSourceRegressionTests(unittest.TestCase):
     def test_unknown_grabber_identity_stays_unknown(self):
         msg = self._message("Media + OwO! Check out this character!\n42: Same")
         self.assertEqual(grabber_source_variant(msg), None)
+
+    def test_index_variant_keeps_known_grabber_identity_separate(self):
+        self.assertEqual(
+            _index_source_variant("items_grabber_fw", "waifu_grabber", file_unique_id="UID1"),
+            "waifu_grabber",
+        )
+        self.assertEqual(
+            _index_source_variant("items_grabber_fw", "husbando_grabber", file_unique_id="UID2"),
+            "husbando_grabber",
+        )
+
+    def test_unknown_grabber_index_variant_is_media_scoped(self):
+        self.assertEqual(
+            _index_source_variant("items_grabber_fw", None, file_unique_id="UID-42"),
+            "unknown_uid:UID-42",
+        )
+        self.assertNotEqual(
+            _index_source_variant("items_grabber_fw", None, file_unique_id="UID-42"),
+            _index_source_variant("items_grabber_fw", None, file_unique_id="UID-43"),
+        )
+
+    def test_normal_source_keeps_variant_unchanged(self):
+        self.assertIsNone(
+            _index_source_variant("items_character_catcher", None, file_unique_id="UID1")
+        )
 
 
 if __name__ == "__main__":
