@@ -62,7 +62,22 @@ async def ensure_indexes():
     # narrow a lookup to Catch/Bika/Hallow/etc. before similarity work.
     indexes = [
         ([("source_key", 1), ("name_key", 1)], "idx_source_name_key"),
-        ([("source_key", 1), ("character_id", 1)], "uq_source_character_id", {"unique": True, "partialFilterExpression": {"character_id": {"$exists": True}}}),
+        # Legacy source+ID uniqueness remains for every source except Grabber FW.
+        ([("source_key", 1), ("character_id", 1)], "uq_source_character_id", {
+            "unique": True,
+            "partialFilterExpression": {
+                "character_id": {"$exists": True},
+                "source_key": {"$ne": "items_grabber_fw"},
+            },
+        }),
+        ([("source_key", 1), ("source_variant", 1), ("character_id", 1)], "uq_grabber_source_variant_character_id", {
+            "unique": True,
+            "partialFilterExpression": {
+                "source_key": "items_grabber_fw",
+                "source_variant": {"$exists": True, "$ne": ""},
+                "character_id": {"$exists": True},
+            },
+        }),
         ([("name_key", 1)], "idx_global_name_key"),
         ([("source_key", 1), ("file_ids", 1)], "idx_source_file_id"),
         ([("source_key", 1), ("file_unique_ids", 1)], "idx_source_file_uid"),
@@ -93,6 +108,11 @@ async def ensure_indexes():
         ([("video_signature", 1)], "idx_global_video_signature"),
         ([("updated_at", -1)], "idx_updated_at"),
     ]
+    try:
+        await characters.drop_index("uq_source_character_id")
+    except Exception:
+        pass
+
     for entry in indexes:
         keys, name = entry[:2]
         options = entry[2] if len(entry) > 2 else {}
@@ -112,6 +132,8 @@ async def save_character(
     media_meta: dict[str, Any] | None = None,
     media_hash=None,
     source_origin: tuple[int, int] | None = None,
+    source_variant: str | None = None,
+    source_signature: str | None = None,
     archive: tuple[int, int] | None = None,
 ):
     """Insert a new media record, update a matching record, or no-op.
@@ -134,6 +156,8 @@ async def save_character(
 
     source_key = (source_key or "unknown").strip().lower()
     character_id = str(character_id).strip() if character_id is not None and str(character_id).strip() else None
+    source_variant = str(source_variant or "").strip().lower() or None
+    source_signature = str(source_signature or "").strip() or None
     # Hallow IDs are not stable identities; new Hallow records use Telegram UID only.
     if source_key == "items_characters_hallow":
         character_id = None
@@ -176,6 +200,26 @@ async def save_character(
             key = {"source_key": source_key, "sha256": sha}
         elif character_id:
             key = {"source_key": source_key, "character_id": character_id}
+        elif source_origin:
+            key = {
+                "source_origin.chat_id": source_origin[0],
+                "source_origin.message_id": source_origin[1],
+            }
+        else:
+            key = None
+    elif source_key == "items_grabber_fw":
+        # Known bot identity: source + bot variant + ID.
+        # Unknown identity: never use numeric ID as the update key.
+        if source_variant and character_id:
+            key = {
+                "source_key": source_key,
+                "source_variant": source_variant,
+                "character_id": character_id,
+            }
+        elif uid:
+            key = {"source_key": source_key, "file_unique_ids": uid}
+        elif sha:
+            key = {"source_key": source_key, "sha256": sha}
         elif source_origin:
             key = {
                 "source_origin.chat_id": source_origin[0],
@@ -245,6 +289,11 @@ async def save_character(
     }
     if character_id is None:
         media_fields.pop("character_id", None)
+    if source_key == "items_grabber_fw":
+        if source_variant:
+            media_fields["source_variant"] = source_variant
+        if source_signature:
+            media_fields["source_signature"] = source_signature
     if media_hash is None:
         for field in media_hash_fields:
             media_fields.pop(field, None)
