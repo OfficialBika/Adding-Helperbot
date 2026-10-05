@@ -51,6 +51,8 @@ jobs:
       - name: Run regression tests
         env:
           PYTHONPATH: namebotv3:.
+          MONGO_URI: mongodb://127.0.0.1:27017
+          DB_NAME: ci_test
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Verify runtime and native imports
