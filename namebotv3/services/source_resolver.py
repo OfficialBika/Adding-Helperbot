@@ -100,6 +100,7 @@ TITLE_SOURCE_COLLECTION: dict[str, str] = {
     "waifuxgrab database": "items_waifux_grab",
     "grab garden": "items_waifux_grab",
     "waifu grabber": "items_grabber_fw",
+    "grabber database": "items_grabber_fw",
     "takers character": "items_takers_character",
     "catch your husbando": "items_catch_your_husbando",
     "catch your waifu": "items_catch_your_waifu",
