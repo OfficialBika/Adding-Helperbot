@@ -78,6 +78,29 @@ def crop_hash_distance(a: str | None, b: str | None) -> float | None:
         return None
 
 
+def hash_photo_fast(data: bytes) -> MediaHash:
+    """Compute only the hashes needed for the first similarity pass.
+
+    Lookup fallback should not spend CPU on exact-byte/pixel/crop/color hashes
+    before we know whether the image is even a plausible match. This fast path
+    intentionally computes only pHash + dHash after Telegram has supplied a
+    small/medium PhotoSize preview. Full hash_photo() remains the verification
+    path for ambiguous/missed matches.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            image = ImageOps.exif_transpose(opened).convert("RGB")
+            width, height = image.size
+            return MediaHash(
+                phash=str(imagehash.phash(image)),
+                dhash=str(imagehash.dhash(image)),
+                width=width,
+                height=height,
+            )
+    except Exception:
+        return MediaHash()
+
+
 def hash_photo(data: bytes) -> MediaHash:
     digest = sha256_bytes(data)
     try:
