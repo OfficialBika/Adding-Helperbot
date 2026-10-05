@@ -148,7 +148,6 @@ COLLECTION_TO_OUTPUT_COMMAND: Dict[str, str] = {
     "items_immortal_donghua": "/dao",
     "items_kairo_character": "/kairo",
     "items_grabber_fw": "/grab",
-    "items_grabber_fw": "/grab",
     "items_unknown": "/name",
 }
 
@@ -178,7 +177,7 @@ BOT_SOURCE_COLLECTION: Dict[str, str] = {
     "@character_seizer_bot": "items_character_seizer",
     "@seizer_database": "items_character_seizer",
     "@characterlootbot": "items_capture_character",
-    "@husbando_grabber_bot": "items_husbando_grabber",
+    "@husbando_grabber_bot": "items_grabber_fw",
     "@grab_your_waifu_bot": "items_grab_your_waifu",
     "@grab_your_husbando_bot": "items_grab_your_husbando",
     "@takers_character_bot": "items_takers_character",
@@ -188,7 +187,7 @@ BOT_SOURCE_COLLECTION: Dict[str, str] = {
     "@waifuxgrab_database": "items_waifux_grab",
     "@waifuxgrabdb": "items_waifux_grab",
     "@catch_your_waifu_bot": "items_catch_your_waifu",
-    "@waifu_grabber_bot": "items_waifu_grabber",
+    "@waifu_grabber_bot": "items_grabber_fw",
     "@roronoa_zoro_robot": "items_roronoa_zoro",
     "@character_picker_bot": "items_character_picker",
     "@bikacharacterbot": "items_bika_character",
@@ -200,9 +199,6 @@ BOT_SOURCE_COLLECTION: Dict[str, str] = {
     "@timunagalaya": "items_orinx_waifu",
     "@immortaldonghuabot": "items_immortal_donghua",
     # Both Grabber bots feed the same FW database channel/collection.
-    "@husbando_grabber_bot": "items_grabber_fw",
-    "@waifu_grabber_bot": "items_grabber_fw",
-    "@immortaldonghuabot": "items_immortal_donghua",
     "@picker_database": "items_character_picker",
     "@kairodatabase": "items_kairo_character",
 }
@@ -218,7 +214,7 @@ BOT_SOURCE_USER_ID: Dict[int, str] = {
     8688011915: "items_characters_hallow",
     7686672468: "items_capture_character",
     7595626187: "items_character_seizer",
-    6546492683: "items_husbando_grabber",
+    6546492683: "items_grabber_fw",
     5934263177: "items_grab_your_waifu",
     6212414747: "items_grab_your_husbando",
     7691496587: "items_takers_character",
@@ -226,7 +222,7 @@ BOT_SOURCE_USER_ID: Dict[int, str] = {
     8336201607: "items_smash_character",
     8649913814: "items_waifux_grab",
     6883098627: "items_catch_your_waifu",
-    6195436879: "items_waifu_grabber",
+    6195436879: "items_grabber_fw",
     8359842815: "items_capture_character",
     5284997893: "items_roronoa_zoro",
     8307651649: "items_character_picker",
@@ -235,8 +231,6 @@ BOT_SOURCE_USER_ID: Dict[int, str] = {
     8534437620: "items_super_zeko",
     8685992652: "items_orinx_waifu",
     8928030201: "items_immortal_donghua",
-    6546492683: "items_grabber_fw",
-    6195436879: "items_grabber_fw",
 }
 
 BOT_SOURCE_OUTPUT_COMMAND: Dict[str, str] = {
