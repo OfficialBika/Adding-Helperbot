@@ -119,7 +119,9 @@ def _catch_log_name(text: str) -> str | None:
             re.I,
         )
         if m:
-            # Bracketed suffixes are part of the character name, not noise.\n            # Example: "Rock Lee [👘]" must remain exactly "Rock Lee [👘]".\n            value = clean_name(m.group(1))
+            # Bracketed suffixes are part of the character name, not noise.
+            # Example: "Rock Lee [👘]" must remain exactly "Rock Lee [👘]".
+            value = clean_name(m.group(1))
             if value:
                 return value
 
