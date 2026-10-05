@@ -65,6 +65,7 @@ COMMAND_TO_COLLECTIONS: dict[str, list[str]] = {
 STYLIZED_LATIN_TRANSLATION = str.maketrans({
     "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ꜰ": "f",
     "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j", "ᴋ": "k", "ʟ": "l",
+    "ꝛ": "r", "ꞃ": "r",
     "ᴍ": "m", "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ʀ": "r", "ꜱ": "s",
     "ᴛ": "t", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w", "ʏ": "y", "ᴢ": "z",
 })
@@ -247,11 +248,13 @@ def grabber_source_variant(message: Message) -> str | None:
     # in that case ingest falls back to media UID/hash and will not update by ID.
     signature = source_author_signature(message)
     if signature:
-        normalized = re.sub(r"\s+", " ", signature).strip().lower()
-        if "husbando" in normalized:
-            return "husbando_grabber"
-        if "waifu" in normalized:
+        # Telegram admin signatures can use small-cap/stylized Unicode.
+        # Normalize decorative brackets/emojis away before exact identity matching.
+        normalized = _clean_title(signature)
+        if re.fullmatch(r"waifu grabber bot", normalized):
             return "waifu_grabber"
+        if re.fullmatch(r"husbando grabber bot", normalized):
+            return "husbando_grabber"
     return None
 
 
