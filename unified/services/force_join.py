@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from collections import OrderedDict
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from unified.config import settings
@@ -235,6 +236,67 @@ def _dm_text() -> str:
     )
 
 
+async def _send_prompt_message(
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> bool:
+    """Send a Force Join prompt without letting Telegram reply errors escape."""
+    try:
+        await message.reply(
+            text,
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+        return True
+    except TelegramRetryAfter as exc:
+        log.warning(
+            "FORCE_JOIN prompt rate-limited chat_id=%s user_id=%s retry_after=%ss",
+            getattr(getattr(message, "chat", None), "id", None),
+            getattr(getattr(message, "from_user", None), "id", None),
+            exc.retry_after,
+        )
+        return False
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        error_text = str(exc).lower()
+        if "not enough rights to send text messages" not in error_text:
+            log.warning(
+                "FORCE_JOIN prompt send failed chat_id=%s user_id=%s error=%s: %s",
+                getattr(getattr(message, "chat", None), "id", None),
+                getattr(getattr(message, "from_user", None), "id", None),
+                type(exc).__name__,
+                exc,
+            )
+            return False
+
+        chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+        if not chat_id:
+            return False
+
+        try:
+            await message.bot.send_message(
+                chat_id,
+                text,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            log.warning(
+                "FORCE_JOIN prompt reply rejected; plain send succeeded chat_id=%s user_id=%s",
+                chat_id,
+                getattr(getattr(message, "from_user", None), "id", None),
+            )
+            return True
+        except Exception as fallback_exc:
+            log.warning(
+                "FORCE_JOIN prompt fallback send failed chat_id=%s user_id=%s error=%s: %s",
+                chat_id,
+                getattr(getattr(message, "from_user", None), "id", None),
+                type(fallback_exc).__name__,
+                fallback_exc,
+            )
+            return False
+
+
 async def _prompt(message: Message, unavailable: bool = False) -> None:
     user = getattr(message, "from_user", None)
     if not user:
@@ -265,7 +327,10 @@ async def _prompt(message: Message, unavailable: bool = False) -> None:
                 "🔒 <b>Join Required</b>\n\n"
                 "Please open this bot in private chat to verify your membership."
             )
-            await message.reply(text, disable_web_page_preview=True)
+            sent = await _send_prompt_message(message, text)
+            if not sent:
+                async with _cache_lock:
+                    _prompt_cache.pop(cache_key, None)
             return
 
         text = (
@@ -282,11 +347,10 @@ async def _prompt(message: Message, unavailable: bool = False) -> None:
                 ]
             ]
         )
-        await message.reply(
-            text,
-            reply_markup=keyboard,
-            disable_web_page_preview=True,
-        )
+        sent = await _send_prompt_message(message, text, keyboard)
+        if not sent:
+            async with _cache_lock:
+                _prompt_cache.pop(cache_key, None)
         return
 
     if unavailable:
@@ -298,11 +362,10 @@ async def _prompt(message: Message, unavailable: bool = False) -> None:
     else:
         text = _dm_text()
 
-    await message.reply(
-        text,
-        reply_markup=_keyboard(),
-        disable_web_page_preview=True,
-    )
+    sent = await _send_prompt_message(message, text, _keyboard())
+    if not sent:
+        async with _cache_lock:
+            _prompt_cache.pop(cache_key, None)
 
 
 async def set_force_join_enabled(enabled: bool) -> bool:
