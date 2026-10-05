@@ -16,6 +16,7 @@ from services.source_resolver import (
     resolve_trusted_inline_collection,
     output_command_from_message,
     grabber_source_variant,
+    source_author_signature,
 )
 from unified.source_whitelist import is_allowed_source, forwarded_origin_chat
 
@@ -173,9 +174,11 @@ async def ingest_message(
     # metadata-only Senpai valuation replies can also be ingested.
     source_key = trusted_source_collection or resolve_source_collection(target)
     source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
+    source_signature = source_author_signature(target) if source_key == "items_grabber_fw" else None
     if not source_key and trusted:
         source_key = resolve_trusted_inline_collection(target)
         source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
+        source_signature = source_author_signature(target) if source_key == "items_grabber_fw" else None
     if not source_key:
         log.warning(
             "SKIP unknown source chat=%s message=%s",
@@ -311,7 +314,7 @@ async def ingest_message(
             media_hash=hashed,
             source_origin=origin,
             source_variant=source_variant,
-            source_signature=source_variant.removeprefix("signature:") if source_variant and source_variant.startswith("signature:") else None,
+            source_signature=source_signature,
             archive=(message.chat.id, message.message_id),
         )
         if isinstance(saved, dict) and saved.get("document"):
