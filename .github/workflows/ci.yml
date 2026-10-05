@@ -49,6 +49,8 @@ jobs:
         run: python -m pip check
 
       - name: Run regression tests
+        env:
+          PYTHONPATH: namebotv3:.
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Verify runtime and native imports
