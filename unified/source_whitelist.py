@@ -73,7 +73,12 @@ def _forwarded_source_user(message: Any):
     return getattr(message, "forward_from", None)
 
 
-EXPLICIT_FORWARD_SOURCE_ALIASES = {"picker_database", "kairodatabase"}
+EXPLICIT_FORWARD_SOURCE_ALIASES = {
+    "picker_database",
+    "kairodatabase",
+    # Unified FW source for @Husbando_Grabber_Bot and @Waifu_Grabber_Bot.
+    "grabber_database",
+}
 
 
 def is_allowed_source(message: Any) -> bool:

@@ -160,7 +160,7 @@ def _picker_name(text: str) -> str | None:
         # Character format:
         # 🆔️30: Ayaka
         m = re.match(
-            r"^\s*[「『【\[\(]?\s*(?:🆔\ufe0f?\s*)?(\d+)\s*[:：-]\s*(.+?)\s*[」』】\]\)]?\s*$",
+            r"^\s*[「『【\[\(]?\s*(?:🆔\ufe0f?\s*)?(\d+)\s*[:：-]\s*(.+)\s*$",
             line,
             re.I,
         )
@@ -172,7 +172,7 @@ def _picker_name(text: str) -> str | None:
         # Update format:
         # 「 ID : 2601 Shanks ⛓️ 」
         m = re.match(
-            r"^\s*[「『【\[\(]?\s*ID\s*[:：-]\s*(\d+)\s+(.+?)\s*[」』】\]\)]?\s*$",
+            r"^\s*[「『【\[\(]?\s*ID\s*[:：-]\s*(\d+)\s+(.+)\s*$",
             line,
             re.I,
         )
@@ -239,6 +239,32 @@ def _waifux_global_id(text: str) -> str | None:
         if m:
             return m.group(1)
     return None
+
+def _capture_name(text: str) -> str | None:
+    """Parse CaptureCharacterBot's New Character Added card."""
+    raw = norm(text)
+    if not raw or not re.search(r"new\s+character\s+added", raw, re.I):
+        return None
+    for line in raw.splitlines():
+        m = re.match(r"^\s*🎭\s*Name\s*[:：]?\s*(.+?)\s*$", line, re.I)
+        if m:
+            value = clean_name(m.group(1))
+            if value:
+                return value
+    return None
+
+
+def _capture_id(text: str) -> str | None:
+    """Parse CaptureCharacterBot's numeric ID field only."""
+    raw = norm(text)
+    if not raw or not re.search(r"new\s+character\s+added", raw, re.I):
+        return None
+    for line in raw.splitlines():
+        m = re.match(r"^\s*🆔(?:\ufe0f)?\s*ID\s*[:：-]?\s*(\d+)\s*$", line, re.I)
+        if m:
+            return m.group(1)
+    return None
+
 
 def _kairo_name(text: str) -> str | None:
     """Parse KairoCollectBot's New Card Added caption."""
@@ -369,6 +395,10 @@ def extract_character_id(text: str | None) -> str | None:
     # Picker Database exposes two OwO ID layouts:
     #   🆔️30: Ayaka
     #   「 ID : 2601 Shanks ⛓️ 」
+    capture_id = _capture_id(raw)
+    if capture_id:
+        return capture_id
+
     picker_id = _picker_id(raw)
     if picker_id:
         return picker_id
@@ -448,7 +478,7 @@ def extract_name(text: str | None) -> str | None:
     if not raw:
         return None
 
-    for parser in (_picker_name, _kairo_name, _catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
+    for parser in (_capture_name, _picker_name, _kairo_name, _catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name
