@@ -52,6 +52,7 @@ COMMAND_TO_COLLECTIONS: dict[str, list[str]] = {
     "/pick": ["items_character_picker", "items_senpai_catcher"],
     "/kairo": ["items_kairo_character"],
     "/grab": [
+        "items_grabber_fw",
         "items_husbando_grabber",
         "items_grab_your_waifu",
         "items_grab_your_husbando",
@@ -92,13 +93,13 @@ TITLE_SOURCE_COLLECTION: dict[str, str] = {
     "character loot bot": "items_capture_character",
     "character seizer": "items_character_seizer",
     "seizer database": "items_character_seizer",
-    "husbando grabber": "items_husbando_grabber",
+    "husbando grabber": "items_grabber_fw",
     "grab your waifu": "items_grab_your_waifu",
     "grab your husbando": "items_grab_your_husbando",
     "waifuxgrab": "items_waifux_grab",
     "waifuxgrab database": "items_waifux_grab",
     "grab garden": "items_waifux_grab",
-    "waifu grabber": "items_waifu_grabber",
+    "waifu grabber": "items_grabber_fw",
     "takers character": "items_takers_character",
     "catch your husbando": "items_catch_your_husbando",
     "catch your waifu": "items_catch_your_waifu",
@@ -150,6 +151,9 @@ CONTENT_SOURCE_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
     (re.compile(r"media\s*\+\s*🎴.*\|.*(?:\n|$).*🎬\s*anime\s*:", re.I | re.S), "items_senpai_catcher", "/pick"),
     (re.compile(r"⚖️\s*character\s+valuation.*(?:\n|$).*🎴\s*name\s*:", re.I | re.S), "items_senpai_catcher", "/pick"),
     (re.compile(r"🚫\s*character\s+with\s+id\s+\d+\s+not\s+found", re.I), "items_senpai_catcher", "/pick"),
+    # Grabber Database FW: both Husbando/Waifu formats share one collection.
+    (re.compile(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+(?:husbando|waifu)", re.I | re.S), "items_grabber_fw", "/grab"),
+    (re.compile(r"owo!\s*check\s+out\s+this\s+(?:husbando|waifu)", re.I | re.S), "items_grabber_fw", "/grab"),
     # WaifuxGrabBot: Global Character Info inline result.
     (re.compile(r"global\s+character\s+info.*(?:^|\n)\s*➤\s*.+?(?:\n|$).*?\b(?:series|id)\s*:", re.I | re.S | re.M), "items_waifux_grab", "/grab"),
     # Grab Your Waifu: both the OwO caption and the labeled card format.
@@ -205,6 +209,42 @@ def collections_from_command(cmd: str | None) -> list[str]:
 def collection_from_command(cmd: str | None) -> str | None:
     cols = collections_from_command(cmd)
     return cols[0] if cols else None
+
+
+def source_author_signature(message: Message) -> str | None:
+    """Return Telegram's channel-post admin signature when available."""
+    for obj in (getattr(message, "forward_origin", None), message):
+        value = getattr(obj, "author_signature", None)
+        if value:
+            return str(value).strip()
+    return None
+
+
+def grabber_source_variant(message: Message) -> str | None:
+    """Identify a Grabber FW bot without conflating unknown identities."""
+    username = source_username(message)
+    if username == "@husbando_grabber_bot":
+        return "husbando_grabber"
+    if username == "@waifu_grabber_bot":
+        return "waifu_grabber"
+
+    user_id = source_user_id(message)
+    if user_id == 6546492683:
+        return "husbando_grabber"
+    if user_id == 6195436879:
+        return "waifu_grabber"
+
+    signature = source_author_signature(message)
+    if signature:
+        normalized = re.sub(r"\s+", " ", signature).strip().lower()
+        return f"signature:{normalized}"
+
+    text = _message_text(message)
+    if re.search(r"owo!\s*check\s+out\s+this\s+husbando", text, re.I):
+        return "husbando_grabber"
+    if re.search(r"owo!\s*check\s+out\s+this\s+waifu", text, re.I):
+        return "waifu_grabber"
+    return None
 
 
 def _normalize_username(username: str | None) -> str | None:
