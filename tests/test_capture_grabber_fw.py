@@ -78,13 +78,24 @@ class GrabberSourceRegressionTests(unittest.TestCase):
     def test_admin_signature_can_be_used_as_variant(self):
         msg = self._message("some grabber card")
         msg.forward_origin = SimpleNamespace(
-            author_signature="Grabber Admin A",
+            author_signature="Husbando Grabber Admin",
             chat=SimpleNamespace(id=-1001, username="Grabber_Database", title="Grabber Database"),
             sender_user=None,
             sender_user_name=None,
             message_id=123,
         )
-        self.assertEqual(grabber_source_variant(msg), "signature:grabber admin a")
+        self.assertEqual(grabber_source_variant(msg), "husbando_grabber")
+
+    def test_generic_admin_signature_does_not_create_id_identity(self):
+        msg = self._message("some grabber card")
+        msg.forward_origin = SimpleNamespace(
+            author_signature="Shared Admin",
+            chat=SimpleNamespace(id=-1001, username="Grabber_Database", title="Grabber Database"),
+            sender_user=None,
+            sender_user_name=None,
+            message_id=123,
+        )
+        self.assertEqual(grabber_source_variant(msg), None)
 
     def test_unknown_grabber_identity_stays_unknown(self):
         msg = self._message("Media + OwO! Check out this character!\n42: Same")
