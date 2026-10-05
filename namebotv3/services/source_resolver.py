@@ -235,16 +235,23 @@ def grabber_source_variant(message: Message) -> str | None:
     if user_id == 6195436879:
         return "waifu_grabber"
 
-    signature = source_author_signature(message)
-    if signature:
-        normalized = re.sub(r"\s+", " ", signature).strip().lower()
-        return f"signature:{normalized}"
-
     text = _message_text(message)
+    # The card header itself is a reliable semantic bot marker.
     if re.search(r"owo!\s*check\s+out\s+this\s+husbando", text, re.I):
         return "husbando_grabber"
     if re.search(r"owo!\s*check\s+out\s+this\s+waifu", text, re.I):
         return "waifu_grabber"
+
+    # Use an admin signature as a bot identity only when the signature itself
+    # explicitly identifies the bot. A generic/shared signature is not enough;
+    # in that case ingest falls back to media UID/hash and will not update by ID.
+    signature = source_author_signature(message)
+    if signature:
+        normalized = re.sub(r"\s+", " ", signature).strip().lower()
+        if "husbando" in normalized:
+            return "husbando_grabber"
+        if "waifu" in normalized:
+            return "waifu_grabber"
     return None
 
 
