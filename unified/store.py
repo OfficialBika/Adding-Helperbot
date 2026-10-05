@@ -37,6 +37,33 @@ def _name_key(value: str | None) -> str:
 def _now():
     return datetime.now(timezone.utc)
 
+
+def _index_source_variant(
+    source_key: str,
+    source_variant: str | None,
+    *,
+    file_unique_id: str | None = None,
+    sha256: str | None = None,
+    source_origin: tuple[int, int] | None = None,
+) -> str | None:
+    """Return the discriminator used by the source/ID unique index.
+
+    Known Grabber FW variants remain stable. Unknown Grabber FW records are
+    scoped to their exact media identity so a numeric character ID never
+    becomes their upsert identity.
+    """
+    if source_key != "items_grabber_fw":
+        return source_variant
+    if source_variant:
+        return source_variant
+    if file_unique_id:
+        return f"unknown_uid:{file_unique_id}"
+    if sha256:
+        return f"unknown_sha256:{sha256}"
+    if source_origin:
+        return f"unknown_origin:{source_origin[0]}:{source_origin[1]}"
+    return "unknown_record"
+
 def _chunks(value: str | None, count: int = 9) -> list[str]:
     if not value:
         return []
@@ -62,19 +89,13 @@ async def ensure_indexes():
     # narrow a lookup to Catch/Bika/Hallow/etc. before similarity work.
     indexes = [
         ([("source_key", 1), ("name_key", 1)], "idx_source_name_key"),
-        # Legacy source+ID uniqueness remains for every source except Grabber FW.
-        ([("source_key", 1), ("character_id", 1)], "uq_source_character_id", {
+        # One supported unique index covers normal sources and Grabber FW.
+        # Normal sources leave source_variant unset, so their identity remains
+        # source_key + character_id. Known Grabber FW sources use a stable bot
+        # variant, while unknown Grabber FW records use a media-scoped variant.
+        ([("source_key", 1), ("source_variant", 1), ("character_id", 1)], "uq_source_variant_character_id", {
             "unique": True,
             "partialFilterExpression": {
-                "character_id": {"$exists": True},
-                "source_key": {"$ne": "items_grabber_fw"},
-            },
-        }),
-        ([("source_key", 1), ("source_variant", 1), ("character_id", 1)], "uq_grabber_source_variant_character_id", {
-            "unique": True,
-            "partialFilterExpression": {
-                "source_key": "items_grabber_fw",
-                "source_variant": {"$exists": True, "$ne": ""},
                 "character_id": {"$exists": True},
             },
         }),
@@ -108,10 +129,15 @@ async def ensure_indexes():
         ([("video_signature", 1)], "idx_global_video_signature"),
         ([("updated_at", -1)], "idx_updated_at"),
     ]
-    try:
-        await characters.drop_index("uq_source_character_id")
-    except Exception:
-        pass
+    # Remove only obsolete index metadata. No documents are deleted.
+    for legacy_name in (
+        "uq_source_character_id",
+        "uq_grabber_source_variant_character_id",
+    ):
+        try:
+            await characters.drop_index(legacy_name)
+        except Exception:
+            pass
 
     for entry in indexes:
         keys, name = entry[:2]
@@ -290,8 +316,17 @@ async def save_character(
     if character_id is None:
         media_fields.pop("character_id", None)
     if source_key == "items_grabber_fw":
-        if source_variant:
-            media_fields["source_variant"] = source_variant
+        # Keep known bot variants stable. Unknown bot identity stays UID/SHA/
+        # origin-based for upserts; this variant is only an index discriminator.
+        indexed_variant = _index_source_variant(
+            source_key,
+            source_variant,
+            file_unique_id=uid,
+            sha256=sha,
+            source_origin=source_origin,
+        )
+        if indexed_variant:
+            media_fields["source_variant"] = indexed_variant
         if source_signature:
             media_fields["source_signature"] = source_signature
     if media_hash is None:
