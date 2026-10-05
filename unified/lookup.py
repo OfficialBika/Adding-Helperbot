@@ -25,7 +25,10 @@ log = logging.getLogger(__name__)
 
 # Hash fallback is deliberately behind exact Telegram UID lookup.
 # It downloads only when UID lookup has failed, and never replaces UID identity.
-_HASH_DOWNLOAD_SEM = asyncio.Semaphore(6)
+# Allow the 24-GB / 12-vCPU VPS to process more cold lookups concurrently.
+# The semaphore protects Telegram download pressure without serializing the
+# rest of the lookup pipeline. Keep this separate from hash/DB concurrency.
+_HASH_DOWNLOAD_SEM = asyncio.Semaphore(12)
 # Keep the first similarity pass bounded. Chunk indexes already narrow the
 # candidate set; a smaller cap prevents Python-side ranking from becoming the
 # dominant cost on large source datasets.
@@ -517,7 +520,14 @@ def _fast_photo_variant(source_message: Message):
 async def _download(bot: Bot, file_id: str, *, timeout: float | None = None) -> bytes | None:
     if not file_id:
         return None
+
+    # Measure semaphore wait separately from the actual Telegram transfer.
+    # Production logs previously reported both as one "download_ms" value,
+    # which made a busy concurrency queue look like a slow Telegram CDN.
+    wait_started = time.perf_counter()
     async with _HASH_DOWNLOAD_SEM:
+        wait_ms = (time.perf_counter() - wait_started) * 1000
+        transfer_started = time.perf_counter()
         try:
             result = await bot.download(
                 file_id,
@@ -525,14 +535,33 @@ async def _download(bot: Bot, file_id: str, *, timeout: float | None = None) -> 
                 chunk_size=_HASH_DOWNLOAD_CHUNK_SIZE,
             )
         except Exception as exc:
-            log.info("hash fallback download failed: %s", exc)
+            transfer_ms = (time.perf_counter() - transfer_started) * 1000
+            log.info(
+                "HASH DOWNLOAD TIMING wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f result=failed error=%s",
+                wait_ms,
+                transfer_ms,
+                wait_ms + transfer_ms,
+                exc,
+            )
             return None
+        transfer_ms = (time.perf_counter() - transfer_started) * 1000
+
         if isinstance(result, io.BytesIO):
-            return result.getvalue()
-        if hasattr(result, "read"):
+            data = result.getvalue()
+        elif hasattr(result, "read"):
             value = result.read()
-            return value if isinstance(value, bytes) else None
-        return None
+            data = value if isinstance(value, bytes) else None
+        else:
+            data = None
+
+        log.info(
+            "HASH DOWNLOAD TIMING wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f bytes=%s",
+            wait_ms,
+            transfer_ms,
+            wait_ms + transfer_ms,
+            len(data) if data is not None else 0,
+        )
+        return data
 
 
 async def _hash_fallback(
