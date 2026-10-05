@@ -9,7 +9,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import Message
 
-from services.hash_service import hamming_hex, hash_photo, hash_video
+from services.hash_service import hamming_hex, hash_photo, hash_photo_fast, hash_video
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import characters
@@ -25,8 +25,13 @@ log = logging.getLogger(__name__)
 
 # Hash fallback is deliberately behind exact Telegram UID lookup.
 # It downloads only when UID lookup has failed, and never replaces UID identity.
-_HASH_DOWNLOAD_SEM = asyncio.Semaphore(3)
-_HASH_CANDIDATE_LIMIT = 1200
+_HASH_DOWNLOAD_SEM = asyncio.Semaphore(6)
+# Keep the first similarity pass bounded. Chunk indexes already narrow the
+# candidate set; a smaller cap prevents Python-side ranking from becoming the
+# dominant cost on large source datasets.
+_HASH_CANDIDATE_LIMIT = 400
+_HASH_FAST_PHOTO_MAX_DIM = 768
+_HASH_DOWNLOAD_CHUNK_SIZE = 512 * 1024
 _PHASH_THRESHOLD = 8
 _PHASH_MIN_SCORE = 0.84
 _PHASH_MIN_MARGIN = 0.035
@@ -477,12 +482,48 @@ async def _photo_hash_match(
     return await accept(legacy_ranked)
 
 
-async def _download(bot: Bot, file_id: str) -> bytes | None:
+def _fast_photo_variant(source_message: Message):
+    """Pick a small/medium Telegram PhotoSize for the first similarity pass.
+
+    Telegram exposes multiple PhotoSize variants for normal photos. Downloading
+    the largest variant just to calculate a perceptual hash wastes bandwidth and
+    CPU. Prefer the largest variant whose longest side is <= 768px; otherwise
+    use the smallest available variant. The original/largest variant remains
+    available for the exact SHA-256 verification fallback.
+    """
+    photos = [
+        photo
+        for photo in (getattr(source_message, "photo", None) or [])
+        if getattr(photo, "file_id", None)
+    ]
+    if not photos:
+        return None
+
+    def dimensions(photo):
+        width = int(getattr(photo, "width", 0) or 0)
+        height = int(getattr(photo, "height", 0) or 0)
+        return width, height, width * height
+
+    suitable = [
+        photo
+        for photo in photos
+        if max(dimensions(photo)[:2]) <= _HASH_FAST_PHOTO_MAX_DIM
+    ]
+    if suitable:
+        return max(suitable, key=lambda photo: dimensions(photo)[2])
+    return min(photos, key=lambda photo: dimensions(photo)[2])
+
+
+async def _download(bot: Bot, file_id: str, *, timeout: float | None = None) -> bytes | None:
     if not file_id:
         return None
     async with _HASH_DOWNLOAD_SEM:
         try:
-            result = await asyncio.wait_for(bot.download(file_id), timeout=45)
+            result = await bot.download(
+                file_id,
+                timeout=int(timeout or getattr(settings, "download_timeout_seconds", 20)),
+                chunk_size=_HASH_DOWNLOAD_CHUNK_SIZE,
+            )
         except Exception as exc:
             log.info("hash fallback download failed: %s", exc)
             return None
@@ -506,6 +547,48 @@ async def _hash_fallback(
     if not file_id:
         return None, "no_file_id"
 
+    # PHOTO FAST PATH:
+    # A Telegram photo normally has several PhotoSize variants. Use a
+    # small/medium variant first, so a cold lookup does not download the
+    # largest image merely to calculate pHash/dHash. If similarity is strong,
+    # return immediately and learn every native UID from the original message.
+    # Only ambiguous/missed matches pay the full-resolution download cost.
+    if media.media_type == "photo":
+        fast_media = _fast_photo_variant(source_message)
+        fast_file_id = str(getattr(fast_media, "file_id", "") or "").strip()
+        if fast_file_id:
+            fast_download_started = time.perf_counter()
+            fast_data = await _download(bot, fast_file_id)
+            fast_download_ms = (time.perf_counter() - fast_download_started) * 1000
+            if fast_data:
+                fast_hash_started = time.perf_counter()
+                fast_hash = await asyncio.to_thread(hash_photo_fast, fast_data)
+                fast_hash_ms = (time.perf_counter() - fast_hash_started) * 1000
+                fast_match_started = time.perf_counter()
+                fast_doc, fast_score = await _photo_hash_match(
+                    fast_hash,
+                    collections,
+                    global_mode=False,
+                )
+                fast_match_ms = (time.perf_counter() - fast_match_started) * 1000
+                log.info(
+                    "HASH FAST TIMING message=%s variant=%sx%s download_ms=%.1f hash_ms=%.1f match_ms=%.1f score=%.3f",
+                    getattr(source_message, "message_id", None),
+                    getattr(fast_media, "width", 0),
+                    getattr(fast_media, "height", 0),
+                    fast_download_ms,
+                    fast_hash_ms,
+                    fast_match_ms,
+                    fast_score,
+                )
+                if fast_doc:
+                    return fast_doc, f"phash_fast:{fast_score:.3f}"
+
+    # FULL FALLBACK:
+    # Needed for exact SHA-256 recovery, legacy records that are not found by
+    # the fast perceptual pass, or ambiguous similarity cases. This preserves
+    # the existing exact-match semantics instead of replacing them with a
+    # perceptual-only lookup.
     started = time.perf_counter()
     download_started = started
     data = await _download(bot, file_id)
