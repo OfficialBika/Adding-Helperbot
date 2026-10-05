@@ -307,7 +307,7 @@ def _senpai_name(text: str) -> str | None:
     for line in norm(text).splitlines():
         v = _line_label_value(line, r"(?:👤\s*)?NAME")
         if v:
-            return v.upper() if re.search(r"[A-Za-z]", v) else v
+            return v
     return None
 
 
@@ -467,7 +467,7 @@ def extract_character_id(text: str | None) -> str | None:
     # (rarity)
     # The previous implementation incorrectly required the internal
     # "media + owo!" phrase, which is not present in the actual caption.
-    if re.search(r"owo!\s*check\s+out\s+this\s+(?:character|waifu)", raw, re.I):
+    if re.search(r"owo!\s*check\s+out\s+this\s+(?:character|waifu|husbando)", raw, re.I):
         for line in raw.splitlines():
             m = re.match(r"^\s*(\d+)\s*[:：-]\s*.+?\s*$", line)
             if m:
