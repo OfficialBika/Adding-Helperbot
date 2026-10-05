@@ -867,7 +867,7 @@ async def run():
             await cleanup(bot)
             await runner.cleanup()
     else:
-        await bot.delete_webhook(drop_pending_updates=False)
+        await bot.delete_webhook(drop_pending_updates=True)
         app = web.Application()
         app.router.add_get(
             "/healthz",
