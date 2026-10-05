@@ -11,7 +11,12 @@ from unified.parser import extract_name, extract_character_id, extract_anime, ex
 from unified.store import save_character
 from unified.lookup_cache import positive_uid_cache
 from services.hash_service import hash_photo, hash_video
-from services.source_resolver import resolve_source_collection, resolve_trusted_inline_collection, output_command_from_message
+from services.source_resolver import (
+    resolve_source_collection,
+    resolve_trusted_inline_collection,
+    output_command_from_message,
+    grabber_source_variant,
+)
 from unified.source_whitelist import is_allowed_source, forwarded_origin_chat
 
 log = logging.getLogger(__name__)
@@ -167,8 +172,10 @@ async def ingest_message(
     # Resolve the canonical source collection before media extraction so
     # metadata-only Senpai valuation replies can also be ingested.
     source_key = trusted_source_collection or resolve_source_collection(target)
+    source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
     if not source_key and trusted:
         source_key = resolve_trusted_inline_collection(target)
+        source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
     if not source_key:
         log.warning(
             "SKIP unknown source chat=%s message=%s",
@@ -303,6 +310,8 @@ async def ingest_message(
             media_meta=media_meta,
             media_hash=hashed,
             source_origin=origin,
+            source_variant=source_variant,
+            source_signature=source_variant.removeprefix("signature:") if source_variant and source_variant.startswith("signature:") else None,
             archive=(message.chat.id, message.message_id),
         )
         if isinstance(saved, dict) and saved.get("document"):
