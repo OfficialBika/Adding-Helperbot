@@ -97,6 +97,11 @@ class Settings:
     max_photo_candidates: int = _int("MAX_PHOTO_CANDIDATES", 1200)
     max_video_candidates: int = _int("MAX_VIDEO_CANDIDATES", 1500)
 
+    # Optional self-hosted Telegram Bot API. Disabled by default so existing
+    # deployments continue using api.telegram.org unchanged.
+    bot_api_base_url: str = os.getenv("BOT_API_BASE_URL", "").strip().rstrip("/")
+    bot_api_is_local: bool = _bool("BOT_API_IS_LOCAL", False)
+    bot_api_session_limit: int = max(32, min(500, _int("BOT_API_SESSION_LIMIT", 100)))
     # VPS/Mongo latency tuning; all values remain environment-configurable.
     mongo_server_selection_timeout_ms: int = _int("MONGO_SERVER_SELECTION_TIMEOUT_MS", 2500)
     mongo_connect_timeout_ms: int = _int("MONGO_CONNECT_TIMEOUT_MS", 2500)
