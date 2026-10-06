@@ -38,7 +38,6 @@ _HASH_FULL_CHUNK_SIZE = 1024 * 1024
 # dominant cost on large source datasets.
 _HASH_CANDIDATE_LIMIT = 400
 _HASH_FAST_PHOTO_MAX_DIM = 768
-_HASH_DOWNLOAD_CHUNK_SIZE = 512 * 1024
 _PHASH_THRESHOLD = 8
 _PHASH_MIN_SCORE = 0.84
 _PHASH_MIN_MARGIN = 0.035
@@ -759,12 +758,14 @@ async def _hash_fallback(
 
 
 async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: bool = False):
-    """Lookup order: Telegram UID -> SHA-256 -> pHash.
+    """Lookup order: Telegram UID -> RAM/SQLite -> exact Mongo UID -> hash fallback.
 
-    Auto lookup remains strictly source-scoped. Manual lookup performs the same
-    source-scoped sequence first and may use the existing global fallback only
-    after that sequence fails. pHash is never accepted on score alone: a
-    structural hamming threshold and an ambiguity margin are both required.
+    Photo hash fallback uses a small Telegram preview first. If that does not
+    produce a safe match, the full media is downloaded, exact SHA-256 is checked
+    first, and only then are expensive perceptual hashes used. Auto lookup
+    remains source-scoped; manual lookup may use the existing global fallback.
+    pHash is never accepted on score alone: structural hamming and ambiguity
+    checks are still required.
     """
     media = extract_media(message)
     if not media:
