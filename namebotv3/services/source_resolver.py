@@ -65,6 +65,7 @@ COMMAND_TO_COLLECTIONS: dict[str, list[str]] = {
 STYLIZED_LATIN_TRANSLATION = str.maketrans({
     "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ꜰ": "f",
     "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j", "ᴋ": "k", "ʟ": "l",
+    "ғ": "f",
     "ꝛ": "r", "ꞃ": "r",
     "ᴍ": "m", "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ʀ": "r", "ꜱ": "s",
     "ᴛ": "t", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w", "ʏ": "y", "ᴢ": "z",
@@ -72,7 +73,10 @@ STYLIZED_LATIN_TRANSLATION = str.maketrans({
 
 
 def _norm_text(value: str | None) -> str:
-    return unicodedata.normalize("NFKC", value or "").translate(STYLIZED_LATIN_TRANSLATION)
+    # Translate stylized Latin before and after NFKC because not every Telegram
+    # small-cap/modifier character is compatibility-normalized into ASCII.
+    raw = value or ""
+    return unicodedata.normalize("NFKC", raw.translate(STYLIZED_LATIN_TRANSLATION)).translate(STYLIZED_LATIN_TRANSLATION)
 
 
 def _clean_title(value: str | None) -> str:
@@ -251,9 +255,9 @@ def grabber_source_variant(message: Message) -> str | None:
         # Telegram admin signatures can use small-cap/stylized Unicode.
         # Normalize decorative brackets/emojis away before exact identity matching.
         normalized = _clean_title(signature)
-        if re.fullmatch(r"waifu grabber bot", normalized):
+        if "waifu grabber bot" in normalized:
             return "waifu_grabber"
-        if re.fullmatch(r"husbando grabber bot", normalized):
+        if "husbando grabber bot" in normalized:
             return "husbando_grabber"
     return None
 

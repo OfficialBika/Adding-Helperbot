@@ -9,7 +9,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import Message
 
-from services.hash_service import hamming_hex, hash_photo, hash_video
+from services.hash_service import hamming_hex, hash_photo_lookup, hash_photo_fast, hash_video, sha256_bytes
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import characters
@@ -19,18 +19,52 @@ from unified.uid_index import lookup_hot_global as ram_lookup_global
 from unified.uid_index import lookup_hot_source as ram_lookup_source
 from unified.uid_index import lookup_source as sqlite_lookup_source
 from unified.uid_index import persist_uid_mappings, remember_hot_source
+from unified.hash_index import lookup_photo_candidates, is_ready as hash_index_ready
 from utils.media import extract_media
 
 log = logging.getLogger(__name__)
 
 # Hash fallback is deliberately behind exact Telegram UID lookup.
 # It downloads only when UID lookup has failed, and never replaces UID identity.
-_HASH_DOWNLOAD_SEM = asyncio.Semaphore(3)
-_HASH_CANDIDATE_LIMIT = 1200
+# Allow the 24-GB / 12-vCPU VPS to process more cold lookups concurrently.
+# The semaphore protects Telegram download pressure without serializing the
+# rest of the lookup pipeline. Keep this separate from hash/DB concurrency.
+_HASH_FAST_DOWNLOAD_SEM = asyncio.Semaphore(24)
+_FULL_DOWNLOAD_SEM = asyncio.Semaphore(6)
+_HASH_FAST_CHUNK_SIZE = 256 * 1024
+_HASH_FULL_CHUNK_SIZE = 1024 * 1024
+# Keep the first similarity pass bounded. Chunk indexes already narrow the
+# candidate set; a smaller cap prevents Python-side ranking from becoming the
+# dominant cost on large source datasets.
+_HASH_CANDIDATE_LIMIT = 400
+_HASH_FAST_PHOTO_TARGET_DIM = 320
+_HASH_FAST_PHOTO_MAX_DIM = 384
 _PHASH_THRESHOLD = 8
 _PHASH_MIN_SCORE = 0.84
 _PHASH_MIN_MARGIN = 0.035
 _UID_CACHE = positive_uid_cache
+
+
+def _coerce_match_score(value: Any) -> tuple[float, str]:
+    """Normalize matcher output for safe logging and result reasons.
+
+    The matcher normally returns a numeric score, but older/live variants may
+    return a reason string such as phash_ram:0.981. Logging must never raise
+    a TypeError and prevent the lookup handler from sending its result.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        score = float(value)
+        return score, f"phash_fast:{score:.3f}"
+
+    text = str(value or "").strip()
+    if text:
+        tail = text.rsplit(":", 1)[-1]
+        try:
+            score = float(tail)
+            return score, text
+        except (TypeError, ValueError):
+            pass
+    return 0.0, text or "phash:0.000"
 
 
 def _scope(message: Message) -> list[str]:
@@ -188,9 +222,18 @@ async def _learn_verified_uids(doc: dict | None, uids: list[str]) -> None:
             {"_id": document_id, "source_key": source},
             {"$addToSet": {"file_unique_ids": {"$each": values}}},
         )
-        if getattr(result, "modified_count", 0):
+        modified = int(getattr(result, "modified_count", 0) or 0)
+        matched = int(getattr(result, "matched_count", 0) or 0)
+        if modified:
             log.info(
                 "UID LEARNED source=%s name=%s added=%s",
+                source,
+                doc.get("name"),
+                len(values),
+            )
+        elif matched:
+            log.info(
+                "UID LEARNED source=%s name=%s already_known=%s",
                 source,
                 doc.get("name"),
                 len(values),
@@ -402,6 +445,8 @@ async def _photo_hash_match(
     scope: list[str] | None,
     *,
     global_mode: bool = False,
+    use_ram: bool = True,
+    use_mongo: bool = True,
 ):
     if not media_hash.phash and not media_hash.dhash:
         return None, 0.0
@@ -419,9 +464,9 @@ async def _photo_hash_match(
         "colorhash": 1,
     }
 
-    async def rank(cursor):
+    def rank_candidates(candidates):
         ranked: list[tuple[float, int | None, int | None, dict]] = []
-        async for candidate in cursor:
+        for candidate in candidates:
             if str(candidate.get("media_type") or "photo").lower() not in {"photo", "image"}:
                 continue
             score, p_distance, d_distance = _photo_score(media_hash, candidate)
@@ -456,11 +501,49 @@ async def _photo_hash_match(
             return None, best[0]
         return best[3], best[0]
 
-    ranked = await rank(
-        characters.find(
-            _photo_candidate_query(scope, media_hash.phash or "", media_hash.dhash or ""),
-            projection,
-        ).limit(_HASH_CANDIDATE_LIMIT)
+    # RAM candidate index is the primary cold-hash accelerator once warmed.
+    # Mongo remains the correctness/compatibility fallback.
+    if use_ram and hash_index_ready():
+        ram_started = time.perf_counter()
+        ram_candidates = lookup_photo_candidates(
+            scope,
+            media_hash.phash,
+            media_hash.dhash,
+            limit=min(_HASH_CANDIDATE_LIMIT, 200),
+        )
+        ram_candidate_ms = (time.perf_counter() - ram_started) * 1000
+        if ram_candidates:
+            ram_rank_started = time.perf_counter()
+            ram_ranked = rank_candidates(ram_candidates)
+            ram_rank_ms = (time.perf_counter() - ram_rank_started) * 1000
+            ram_doc, ram_score = await accept(ram_ranked)
+            log.info(
+                "HASH RAM TIMING candidates=%s candidate_ms=%.1f rank_ms=%.1f score=%.3f",
+                len(ram_candidates),
+                ram_candidate_ms,
+                ram_rank_ms,
+                ram_score,
+            )
+            if ram_doc:
+                return ram_doc, f"phash_ram:{ram_score:.3f}"
+
+    if not use_mongo:
+        return None, locals().get("ram_score", 0.0)
+    mongo_query_started = time.perf_counter()
+    mongo_candidates = await characters.find(
+        _photo_candidate_query(scope, media_hash.phash or "", media_hash.dhash or ""),
+        projection,
+    ).limit(_HASH_CANDIDATE_LIMIT).to_list(length=_HASH_CANDIDATE_LIMIT)
+    mongo_query_ms = (time.perf_counter() - mongo_query_started) * 1000
+
+    mongo_rank_started = time.perf_counter()
+    ranked = rank_candidates(mongo_candidates)
+    mongo_rank_ms = (time.perf_counter() - mongo_rank_started) * 1000
+    log.info(
+        "HASH MONGO MATCH TIMING candidates=%s query_ms=%.1f rank_ms=%.1f",
+        len(mongo_candidates),
+        mongo_query_ms,
+        mongo_rank_ms,
     )
     doc, score = await accept(ranked)
     if doc:
@@ -468,31 +551,103 @@ async def _photo_hash_match(
 
     # Compatibility pass for old records that have pHash fields but no chunk
     # index. This is only reached after the indexed candidate pass is not safe.
-    legacy_ranked = await rank(
-        characters.find(
-            _legacy_photo_candidate_query(scope),
-            projection,
-        ).limit(_HASH_CANDIDATE_LIMIT)
-    )
+    legacy_candidates = await characters.find(
+        _legacy_photo_candidate_query(scope),
+        projection,
+    ).limit(_HASH_CANDIDATE_LIMIT).to_list(length=_HASH_CANDIDATE_LIMIT)
+    legacy_ranked = rank_candidates(legacy_candidates)
     return await accept(legacy_ranked)
 
 
-async def _download(bot: Bot, file_id: str) -> bytes | None:
-    if not file_id:
-        return None
-    async with _HASH_DOWNLOAD_SEM:
-        try:
-            result = await asyncio.wait_for(bot.download(file_id), timeout=45)
-        except Exception as exc:
-            log.info("hash fallback download failed: %s", exc)
-            return None
-        if isinstance(result, io.BytesIO):
-            return result.getvalue()
-        if hasattr(result, "read"):
-            value = result.read()
-            return value if isinstance(value, bytes) else None
+def _fast_photo_variant(source_message: Message):
+    """Pick a small/medium Telegram PhotoSize for the first similarity pass.
+
+    Telegram exposes multiple PhotoSize variants for normal photos. Downloading
+    a large variant just to calculate a perceptual hash can add substantial
+    transfer latency. Prefer the PhotoSize closest to a ~320px target (without
+    exceeding 384px); otherwise use the smallest available variant. The
+    original/largest variant remains available for exact SHA-256 fallback.
+    """
+    photos = [
+        photo
+        for photo in (getattr(source_message, "photo", None) or [])
+        if getattr(photo, "file_id", None)
+    ]
+    if not photos:
         return None
 
+    def dimensions(photo):
+        width = int(getattr(photo, "width", 0) or 0)
+        height = int(getattr(photo, "height", 0) or 0)
+        return width, height, width * height
+
+    suitable = [
+        photo
+        for photo in photos
+        if max(dimensions(photo)[:2]) <= _HASH_FAST_PHOTO_MAX_DIM
+    ]
+    if suitable:
+        # Prefer a preview close to 320px instead of the largest <=768px.
+        # pHash/dHash do not need the larger preview for the first pass.
+        return min(
+            suitable,
+            key=lambda photo: (
+                abs(max(dimensions(photo)[:2]) - _HASH_FAST_PHOTO_TARGET_DIM),
+                dimensions(photo)[2],
+            ),
+        )
+    return min(photos, key=lambda photo: dimensions(photo)[2])
+
+
+async def _download(
+    bot: Bot,
+    file_id: str,
+    *,
+    timeout: float | None = None,
+    priority: str = "fast",
+) -> bytes | None:
+    if not file_id:
+        return None
+
+    if priority == "full":
+        semaphore = _FULL_DOWNLOAD_SEM
+        chunk_size = _HASH_FULL_CHUNK_SIZE
+    else:
+        semaphore = _HASH_FAST_DOWNLOAD_SEM
+        chunk_size = _HASH_FAST_CHUNK_SIZE
+
+    wait_started = time.perf_counter()
+    async with semaphore:
+        wait_ms = (time.perf_counter() - wait_started) * 1000
+        transfer_started = time.perf_counter()
+        try:
+            result = await bot.download(
+                file_id,
+                timeout=int(timeout or getattr(settings, "download_timeout_seconds", 20)),
+                chunk_size=chunk_size,
+            )
+        except Exception as exc:
+            transfer_ms = (time.perf_counter() - transfer_started) * 1000
+            log.info(
+                "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f result=failed error=%s",
+                priority, wait_ms, transfer_ms, wait_ms + transfer_ms, exc,
+            )
+            return None
+
+        transfer_ms = (time.perf_counter() - transfer_started) * 1000
+        if isinstance(result, io.BytesIO):
+            data = result.getvalue()
+        elif hasattr(result, "read"):
+            value = result.read()
+            data = value if isinstance(value, bytes) else None
+        else:
+            data = None
+
+        log.info(
+            "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f bytes=%s",
+            priority, wait_ms, transfer_ms, wait_ms + transfer_ms, len(data) if data is not None else 0,
+        )
+        return data
 
 async def _hash_fallback(
     bot: Bot,
@@ -506,24 +661,146 @@ async def _hash_fallback(
     if not file_id:
         return None, "no_file_id"
 
+    # PHOTO FAST PATH:
+    # A Telegram photo normally has several PhotoSize variants. Use a
+    # small/medium variant first, so a cold lookup does not download the
+    # largest image merely to calculate pHash/dHash. If similarity is strong,
+    # return immediately and learn every native UID from the original message.
+    # Only ambiguous/missed matches pay the full-resolution download cost.
+    if media.media_type == "photo":
+        fast_media = _fast_photo_variant(source_message)
+        fast_file_id = str(getattr(fast_media, "file_id", "") or "").strip()
+        if fast_file_id:
+            fast_download_started = time.perf_counter()
+            fast_data = await _download(bot, fast_file_id, priority="fast")
+            fast_download_ms = (time.perf_counter() - fast_download_started) * 1000
+            if fast_data:
+                fast_hash_started = time.perf_counter()
+                fast_hash = await asyncio.to_thread(hash_photo_fast, fast_data)
+                fast_hash_ms = (time.perf_counter() - fast_hash_started) * 1000
+                fast_match_started = time.perf_counter()
+                fast_doc, fast_score = await _photo_hash_match(
+                    fast_hash,
+                    collections,
+                    global_mode=False,
+                    use_ram=True,
+                    use_mongo=False,
+                )
+                fast_match_ms = (time.perf_counter() - fast_match_started) * 1000
+                fast_score_value, fast_reason = _coerce_match_score(fast_score)
+                log.info(
+                    "HASH FAST TIMING message=%s variant=%sx%s download_ms=%.1f hash_ms=%.1f match_ms=%.1f reason=%s score=%.3f",
+                    getattr(source_message, "message_id", None),
+                    getattr(fast_media, "width", 0),
+                    getattr(fast_media, "height", 0),
+                    fast_download_ms,
+                    fast_hash_ms,
+                    fast_match_ms,
+                    fast_reason,
+                    fast_score_value,
+                )
+                if fast_doc:
+                    return fast_doc, fast_reason
+
+                # The RAM shortlist did not produce a safe match. Start the
+                # full-resolution download and the Mongo perceptual lookup at
+                # the same time so the two ~1-2s stages do not become serial.
+                full_download_task = asyncio.create_task(
+                    _download(bot, file_id, priority="full")
+                )
+                mongo_match_task = asyncio.create_task(
+                    _photo_hash_match(
+                        fast_hash,
+                        collections,
+                        global_mode=False,
+                        use_ram=False,
+                        use_mongo=True,
+                    )
+                )
+                try:
+                    mongo_doc, mongo_score = await mongo_match_task
+                except Exception:
+                    log.exception(
+                        "HASH MONGO MATCH task failed message=%s",
+                        getattr(source_message, "message_id", None),
+                    )
+                    mongo_doc, mongo_score = None, 0.0
+                if mongo_doc:
+                    full_download_task.cancel()
+                    try:
+                        await full_download_task
+                    except asyncio.CancelledError:
+                        pass
+                    return mongo_doc, f"phash_fast_mongo:{mongo_score:.3f}"
+                data = await full_download_task
+                download_ms = 0.0
+                if data is not None:
+                    # The actual transfer timing is already emitted by _download.
+                    # Keep the full-stage processing below without downloading twice.
+                    pass
+                else:
+                    log.info(
+                        "HASH FULL TIMING message=%s result=download_failed_after_overlap",
+                        getattr(source_message, "message_id", None),
+                    )
+                    return None, "hash_download_failed"
+                download_ms = 0.0
+
+    # FULL FALLBACK:
+    # Needed for exact SHA-256 recovery, legacy records that are not found by
+    # the fast perceptual pass, or ambiguous similarity cases. This preserves
+    # the existing exact-match semantics instead of replacing them with a
+    # perceptual-only lookup.
     started = time.perf_counter()
-    download_started = started
-    data = await _download(bot, file_id)
-    download_ms = (time.perf_counter() - download_started) * 1000
+    if 'data' not in locals():
+        download_started = started
+        data = await _download(bot, file_id, priority="full")
+        download_ms = (time.perf_counter() - download_started) * 1000
+    else:
+        download_ms = 0.0
     if not data:
         log.info("HASH TIMING message=%s download_ms=%.1f result=download_failed", getattr(source_message, "message_id", None), download_ms)
         return None, "hash_download_failed"
 
+    # Exact bytes are the strongest and cheapest full-fallback test.
+    # Do not calculate expensive perceptual hashes until exact SHA-256 misses.
+    sha_hash_started = time.perf_counter()
+    sha256 = await asyncio.to_thread(sha256_bytes, data)
+    sha_hash_ms = (time.perf_counter() - sha_hash_started) * 1000
+
+    sha_started = time.perf_counter()
+    doc = await _hash_exact_find(collections, sha256)
+    sha_ms = (time.perf_counter() - sha_started) * 1000
+    if doc:
+        log.info(
+            "HASH EXACT TIMING message=%s sha_hash_ms=%.1f sha_db_ms=%.1f",
+            getattr(source_message, "message_id", None), sha_hash_ms, sha_ms,
+        )
+        return doc, "sha256"
+
+    if allow_global_fallback:
+        global_sha_started = time.perf_counter()
+        global_docs = await _hash_global_candidates(sha256, limit=2)
+        global_sha_ms = (time.perf_counter() - global_sha_started) * 1000
+        if len(global_docs) == 1:
+            log.info(
+                "HASH EXACT GLOBAL TIMING message=%s sha_hash_ms=%.1f sha_db_ms=%.1f",
+                getattr(source_message, "message_id", None), sha_hash_ms, global_sha_ms,
+            )
+            return global_docs[0], "sha256_global"
+        if len(global_docs) > 1:
+            log.warning(
+                "SHA global recovery ambiguous message=%s candidates=%s",
+                getattr(source_message, "message_id", None), len(global_docs),
+            )
+
     hash_started = time.perf_counter()
     media_hash = await asyncio.to_thread(
-        hash_photo if media.media_type == "photo" else hash_video,
+        hash_photo_lookup if media.media_type == "photo" else hash_video,
         data,
     )
     hash_ms = (time.perf_counter() - hash_started) * 1000
 
-    # Start the expensive pHash candidate scan while the exact SHA-256
-    # lookup is in flight. SHA-256 still has strict priority if it matches, but
-    # a SHA miss no longer adds a second full Mongo round trip before pHash.
     phash_task = None
     if media.media_type == "photo":
         phash_task = asyncio.create_task(
@@ -534,31 +811,14 @@ async def _hash_fallback(
             )
         )
 
-    # SHA-256 is byte-exact and remains the first accepted fallback after UID.
-    if media_hash.sha256:
-        sha_started = time.perf_counter()
-        doc = await _hash_exact_find(collections, media_hash.sha256)
-        sha_ms = (time.perf_counter() - sha_started) * 1000
-        if doc:
-            if phash_task is not None:
-                phash_task.cancel()
-            return doc, "sha256"
-
-        if allow_global_fallback:
-            global_sha_started = time.perf_counter()
-            global_docs = await _hash_global_candidates(media_hash.sha256, limit=2)
-            global_sha_ms = (time.perf_counter() - global_sha_started) * 1000
-            if len(global_docs) == 1:
-                if phash_task is not None:
-                    phash_task.cancel()
-                return global_docs[0], "sha256_global"
-            if len(global_docs) > 1:
-                log.warning(
-                    "SHA global recovery ambiguous message=%s candidates=%s",
-                    getattr(source_message, "message_id", None),
-                    len(global_docs),
-                )
-
+    log.info(
+        "HASH FULL TIMING message=%s download_ms=%.1f sha_hash_ms=%.1f sha_db_ms=%.1f perceptual_hash_ms=%.1f",
+        getattr(source_message, "message_id", None),
+        download_ms,
+        sha_hash_ms,
+        sha_ms,
+        hash_ms,
+    )
     # Perceptual hashing is only for photos. It is similarity, not identity,
     # so it is source-scoped by default and requires a strong score + margin.
     if phash_task is not None:
@@ -593,12 +853,14 @@ async def _hash_fallback(
 
 
 async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: bool = False):
-    """Lookup order: Telegram UID -> SHA-256 -> pHash.
+    """Lookup order: Telegram UID -> RAM/SQLite -> exact Mongo UID -> hash fallback.
 
-    Auto lookup remains strictly source-scoped. Manual lookup performs the same
-    source-scoped sequence first and may use the existing global fallback only
-    after that sequence fails. pHash is never accepted on score alone: a
-    structural hamming threshold and an ambiguity margin are both required.
+    Photo hash fallback uses a small Telegram preview first. If that does not
+    produce a safe match, the full media is downloaded, exact SHA-256 is checked
+    first, and only then are expensive perceptual hashes used. Auto lookup
+    remains source-scoped; manual lookup may use the existing global fallback.
+    pHash is never accepted on score alone: structural hamming and ambiguity
+    checks are still required.
     """
     media = extract_media(message)
     if not media:
@@ -687,13 +949,13 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         # Try the RAM exact-UID index before SQLite/Mongo global recovery.
         global_docs = ram_lookup_global(uids, limit=2)
         if len(global_docs) == 1:
-            _cache_doc(global_docs[0], uids)
+            _cache_doc(global_docs[0], uids, persist_index=True)
             return global_docs[0], "uid_ram_global"
 
         # Try the persistent local exact-UID index before Mongo recovery.
         global_docs = await sqlite_lookup_global(uids, limit=2)
         if len(global_docs) == 1:
-            _cache_doc(global_docs[0], uids)
+            _cache_doc(global_docs[0], uids, persist_index=True)
             return global_docs[0], "uid_sqlite_global"
         if len(global_docs) > 1:
             # Keep the same ambiguity rules as Mongo; SQLite only accelerates.
@@ -706,7 +968,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 None,
             )
             if preferred:
-                _cache_doc(preferred, uids)
+                _cache_doc(preferred, uids, persist_index=True)
                 return preferred, "uid_sqlite_global"
             log.warning(
                 "UID SQLite global recovery ambiguous message=%s candidates=%s",
@@ -722,7 +984,8 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 global_docs[0].get("source_key"),
                 global_docs[0].get("name"),
             )
-            _cache_doc(global_docs[0], uids)
+            _cache_doc(global_docs[0], uids, persist_index=True)
+            _schedule_uid_learning(global_docs[0], uids)
             return global_docs[0], "uid_global_recovery"
 
         if len(global_docs) > 1:
@@ -746,7 +1009,8 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                     len(global_docs),
                     preferred.get("name"),
                 )
-                _cache_doc(preferred, uids)
+                _cache_doc(preferred, uids, persist_index=True)
+                _schedule_uid_learning(preferred, uids)
                 return preferred, "uid_global_recovery"
 
             log.warning(
@@ -777,10 +1041,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         # Hash has now positively identified the character. Learn the current
         # Telegram UIDs in Mongo as an idempotent background enrichment so
         # future lookups can resolve by native UID without downloading media.
-        try:
-            asyncio.create_task(_learn_verified_uids(doc, uids))
-        except RuntimeError:
-            pass
+        _schedule_uid_learning(doc, uids)
         log.info(
             "HASH LOOKUP MATCH message=%s source=%s reason=%s name=%s",
             getattr(message, "message_id", None),
