@@ -528,10 +528,10 @@ def _fast_photo_variant(source_message: Message):
     """Pick a small/medium Telegram PhotoSize for the first similarity pass.
 
     Telegram exposes multiple PhotoSize variants for normal photos. Downloading
-    the largest variant just to calculate a perceptual hash wastes bandwidth and
-    CPU. Prefer the largest variant whose longest side is <= 768px; otherwise
-    use the smallest available variant. The original/largest variant remains
-    available for the exact SHA-256 verification fallback.
+    a large variant just to calculate a perceptual hash can add substantial
+    transfer latency. Prefer the PhotoSize closest to a ~320px target (without
+    exceeding 384px); otherwise use the smallest available variant. The
+    original/largest variant remains available for exact SHA-256 fallback.
     """
     photos = [
         photo
