@@ -494,11 +494,10 @@ async def _photo_hash_match(
                 ram_score,
             )
             if ram_doc:
-                return ram_doc, f"phash_ram:{ram_s    if not use_mongo:
-        return None, ram_score if 'ram_score' in locals() else 0.0
+                return ram_doc, f"phash_ram:{ram_score:.3f}"
 
-core:.3f}"
-
+    if not use_mongo:
+        return None, locals().get("ram_score", 0.0)
     mongo_query_started = time.perf_counter()
     mongo_candidates = await characters.find(
         _photo_candidate_query(scope, media_hash.phash or "", media_hash.dhash or ""),
