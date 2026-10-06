@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from unified.config import Settings
-from unified.lookup import _chunks, _learn_verified_uids, _ordered_uid_sources
+from unified.lookup import _chunks, _coerce_match_score, _learn_verified_uids, _ordered_uid_sources
 import unified.uid_index as uid_index
 
 
@@ -46,6 +46,21 @@ class LookupOrderingTests(unittest.TestCase):
     def test_hash_chunking_is_stable(self):
         chunks = _chunks("0123456789abcdef", count=4)
         self.assertEqual(chunks, ["123", "4567", "89ab", "cdef"])
+
+    def test_hash_match_score_normalization_accepts_numbers(self):
+        score, reason = _coerce_match_score(0.981)
+        self.assertAlmostEqual(score, 0.981)
+        self.assertEqual(reason, "phash_fast:0.981")
+
+    def test_hash_match_score_normalization_accepts_reason_strings(self):
+        score, reason = _coerce_match_score("phash_ram:1.000")
+        self.assertAlmostEqual(score, 1.0)
+        self.assertEqual(reason, "phash_ram:1.000")
+
+    def test_hash_match_score_normalization_rejects_bad_values_without_raising(self):
+        score, reason = _coerce_match_score("not-a-score")
+        self.assertEqual(score, 0.0)
+        self.assertEqual(reason, "not-a-score")
 
 
 class ForceJoinConfigTests(unittest.TestCase):
