@@ -101,7 +101,7 @@ def hash_photo_fast(data: bytes) -> MediaHash:
         return MediaHash()
 
 
-def hash_photo(data: bytes) -> MediaHash:
+def hash_photo_lookup(data: bytes) -> MediaHash:\n    """Compute only perceptual hashes needed by lookup after SHA-256 misses.\n\n    Ingest still uses full hash_photo() and stores the complete fingerprint.\n    Lookup candidate ranking does not need pixel/crop hashes, so avoid those\n    expensive calculations on the lookup path.\n    """\n    try:\n        with Image.open(io.BytesIO(data)) as opened:\n            image = ImageOps.exif_transpose(opened).convert("RGB")\n            width, height = image.size\n            return MediaHash(\n                phash=str(imagehash.phash(image)),\n                phash_large=str(imagehash.phash(image, hash_size=16)),\n                dhash=str(imagehash.dhash(image)),\n                whash=str(imagehash.whash(image)),\n                colorhash=str(imagehash.colorhash(image)),\n                width=width,\n                height=height,\n            )\n    except Exception:\n        return MediaHash()\n\ndef hash_photo(data: bytes) -> MediaHash:
     digest = sha256_bytes(data)
     try:
         with Image.open(io.BytesIO(data)) as opened:
