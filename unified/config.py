@@ -79,6 +79,8 @@ class Settings:
             expected = len(self.force_join_chat_ids)
             if len(self.force_join_urls) != expected:
                 raise ValueError(f"FORCE_JOIN_URLS count must match FORCE_JOIN_CHAT_IDS count ({len(self.force_join_urls)} != {expected})")
+            if any(not str(url).strip() for url in self.force_join_urls):
+                raise ValueError("FORCE_JOIN_URLS entries must be non-empty when FORCE_JOIN_CHAT_IDS is configured")
             if self.force_join_titles and len(self.force_join_titles) != expected:
                 raise ValueError(f"FORCE_JOIN_TITLES count must be either 0 or match FORCE_JOIN_CHAT_IDS count ({len(self.force_join_titles)} != {expected})")
 
