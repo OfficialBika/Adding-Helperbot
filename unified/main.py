@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT))
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -839,11 +841,28 @@ async def run():
     await helper_userbot.start()
     helper_manager.bind()
 
+    bot_session = None
+    if settings.bot_api_base_url:
+        bot_api = TelegramAPIServer.from_base(
+            settings.bot_api_base_url,
+            is_local=settings.bot_api_is_local,
+        )
+        bot_session = AiohttpSession(
+            api=bot_api,
+            limit=settings.bot_api_session_limit,
+        )
+        log.info(
+            "Telegram Bot API server configured base=%s local=%s session_limit=%s",
+            settings.bot_api_base_url,
+            settings.bot_api_is_local,
+            settings.bot_api_session_limit,
+        )
+
     bot = Bot(
         settings.bot_token,
+        session=bot_session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-    dp = Dispatcher()
+    )    dp = Dispatcher()
     dp.include_router(force_join_router)
     dp.include_router(router)
 
