@@ -248,6 +248,26 @@ async def _learn_verified_uids(doc: dict | None, uids: list[str]) -> None:
         )
 
 
+def _schedule_uid_learning(doc: dict | None, uids: list[str]) -> None:
+    """Queue Mongo UID learning without ever blocking the lookup reply."""
+    try:
+        task = asyncio.create_task(_learn_verified_uids(doc, uids))
+    except RuntimeError:
+        return
+
+    def _done(completed: asyncio.Task) -> None:
+        try:
+            completed.result()
+        except Exception:
+            log.exception(
+                "UID LEARN task failed source=%s name=%s",
+                (doc or {}).get("source_key"),
+                (doc or {}).get("name"),
+            )
+
+    task.add_done_callback(_done)
+
+
 def _ordered_uid_sources(collections: list[str]) -> list[str]:
     """Return UID lookup sources in deterministic Catch-first order.
 
