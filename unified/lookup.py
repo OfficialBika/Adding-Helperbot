@@ -45,6 +45,28 @@ _PHASH_MIN_MARGIN = 0.035
 _UID_CACHE = positive_uid_cache
 
 
+def _coerce_match_score(value: Any) -> tuple[float, str]:
+    """Normalize matcher output for safe logging and result reasons.
+
+    The matcher normally returns a numeric score, but older/live variants may
+    return a reason string such as phash_ram:0.981. Logging must never raise
+    a TypeError and prevent the lookup handler from sending its result.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        score = float(value)
+        return score, f"phash:{score:.3f}"
+
+    text = str(value or "").strip()
+    if text:
+        tail = text.rsplit(":", 1)[-1]
+        try:
+            score = float(tail)
+            return score, text
+        except (TypeError, ValueError):
+            pass
+    return 0.0, text or "phash:0.000"
+
+
 def _scope(message: Message) -> list[str]:
     try:
         scope = resolve_lookup_scope(message)
@@ -200,9 +222,18 @@ async def _learn_verified_uids(doc: dict | None, uids: list[str]) -> None:
             {"_id": document_id, "source_key": source},
             {"$addToSet": {"file_unique_ids": {"$each": values}}},
         )
-        if getattr(result, "modified_count", 0):
+        modified = int(getattr(result, "modified_count", 0) or 0)
+        matched = int(getattr(result, "matched_count", 0) or 0)
+        if modified:
             log.info(
                 "UID LEARNED source=%s name=%s added=%s",
+                source,
+                doc.get("name"),
+                len(values),
+            )
+        elif matched:
+            log.info(
+                "UID LEARNED source=%s name=%s already_known=%s",
                 source,
                 doc.get("name"),
                 len(values),
@@ -656,18 +687,20 @@ async def _hash_fallback(
                     use_mongo=False,
                 )
                 fast_match_ms = (time.perf_counter() - fast_match_started) * 1000
+                fast_score_value, fast_reason = _coerce_match_score(fast_score)
                 log.info(
-                    "HASH FAST TIMING message=%s variant=%sx%s download_ms=%.1f hash_ms=%.1f match_ms=%.1f score=%.3f",
+                    "HASH FAST TIMING message=%s variant=%sx%s download_ms=%.1f hash_ms=%.1f match_ms=%.1f reason=%s score=%.3f",
                     getattr(source_message, "message_id", None),
                     getattr(fast_media, "width", 0),
                     getattr(fast_media, "height", 0),
                     fast_download_ms,
                     fast_hash_ms,
                     fast_match_ms,
-                    fast_score,
+                    fast_reason,
+                    fast_score_value,
                 )
                 if fast_doc:
-                    return fast_doc, f"phash_fast:{fast_score:.3f}"
+                    return fast_doc, fast_reason
 
                 # The RAM shortlist did not produce a safe match. Start the
                 # full-resolution download and the Mongo perceptual lookup at
@@ -916,13 +949,13 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         # Try the RAM exact-UID index before SQLite/Mongo global recovery.
         global_docs = ram_lookup_global(uids, limit=2)
         if len(global_docs) == 1:
-            _cache_doc(global_docs[0], uids)
+            _cache_doc(global_docs[0], uids, persist_index=True)
             return global_docs[0], "uid_ram_global"
 
         # Try the persistent local exact-UID index before Mongo recovery.
         global_docs = await sqlite_lookup_global(uids, limit=2)
         if len(global_docs) == 1:
-            _cache_doc(global_docs[0], uids)
+            _cache_doc(global_docs[0], uids, persist_index=True)
             return global_docs[0], "uid_sqlite_global"
         if len(global_docs) > 1:
             # Keep the same ambiguity rules as Mongo; SQLite only accelerates.
@@ -935,7 +968,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 None,
             )
             if preferred:
-                _cache_doc(preferred, uids)
+                _cache_doc(preferred, uids, persist_index=True)
                 return preferred, "uid_sqlite_global"
             log.warning(
                 "UID SQLite global recovery ambiguous message=%s candidates=%s",
@@ -951,7 +984,8 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                 global_docs[0].get("source_key"),
                 global_docs[0].get("name"),
             )
-            _cache_doc(global_docs[0], uids)
+            _cache_doc(global_docs[0], uids, persist_index=True)
+            _schedule_uid_learning(global_docs[0], uids)
             return global_docs[0], "uid_global_recovery"
 
         if len(global_docs) > 1:
@@ -975,7 +1009,8 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
                     len(global_docs),
                     preferred.get("name"),
                 )
-                _cache_doc(preferred, uids)
+                _cache_doc(preferred, uids, persist_index=True)
+                _schedule_uid_learning(preferred, uids)
                 return preferred, "uid_global_recovery"
 
             log.warning(
@@ -1006,10 +1041,7 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         # Hash has now positively identified the character. Learn the current
         # Telegram UIDs in Mongo as an idempotent background enrichment so
         # future lookups can resolve by native UID without downloading media.
-        try:
-            asyncio.create_task(_learn_verified_uids(doc, uids))
-        except RuntimeError:
-            pass
+        _schedule_uid_learning(doc, uids)
         log.info(
             "HASH LOOKUP MATCH message=%s source=%s reason=%s name=%s",
             getattr(message, "message_id", None),
