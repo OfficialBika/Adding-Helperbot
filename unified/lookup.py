@@ -19,6 +19,7 @@ from unified.uid_index import lookup_hot_global as ram_lookup_global
 from unified.uid_index import lookup_hot_source as ram_lookup_source
 from unified.uid_index import lookup_source as sqlite_lookup_source
 from unified.uid_index import persist_uid_mappings, remember_hot_source
+from unified.hash_index import lookup_photo_candidates, is_ready as hash_index_ready
 from utils.media import extract_media
 
 log = logging.getLogger(__name__)
@@ -427,9 +428,9 @@ async def _photo_hash_match(
         "colorhash": 1,
     }
 
-    async def rank(cursor):
+    def rank_candidates(candidates):
         ranked: list[tuple[float, int | None, int | None, dict]] = []
-        async for candidate in cursor:
+        for candidate in candidates:
             if str(candidate.get("media_type") or "photo").lower() not in {"photo", "image"}:
                 continue
             score, p_distance, d_distance = _photo_score(media_hash, candidate)
@@ -464,11 +465,47 @@ async def _photo_hash_match(
             return None, best[0]
         return best[3], best[0]
 
-    ranked = await rank(
-        characters.find(
-            _photo_candidate_query(scope, media_hash.phash or "", media_hash.dhash or ""),
-            projection,
-        ).limit(_HASH_CANDIDATE_LIMIT)
+    # RAM candidate index is the primary cold-hash accelerator once warmed.
+    # Mongo remains the correctness/compatibility fallback.
+    if hash_index_ready():
+        ram_started = time.perf_counter()
+        ram_candidates = lookup_photo_candidates(
+            scope,
+            media_hash.phash,
+            media_hash.dhash,
+            limit=min(_HASH_CANDIDATE_LIMIT, 200),
+        )
+        ram_candidate_ms = (time.perf_counter() - ram_started) * 1000
+        if ram_candidates:
+            ram_rank_started = time.perf_counter()
+            ram_ranked = rank_candidates(ram_candidates)
+            ram_rank_ms = (time.perf_counter() - ram_rank_started) * 1000
+            ram_doc, ram_score = await accept(ram_ranked)
+            log.info(
+                "HASH RAM TIMING candidates=%s candidate_ms=%.1f rank_ms=%.1f score=%.3f",
+                len(ram_candidates),
+                ram_candidate_ms,
+                ram_rank_ms,
+                ram_score,
+            )
+            if ram_doc:
+                return ram_doc, f"phash_ram:{ram_score:.3f}"
+
+    mongo_query_started = time.perf_counter()
+    mongo_candidates = await characters.find(
+        _photo_candidate_query(scope, media_hash.phash or "", media_hash.dhash or ""),
+        projection,
+    ).limit(_HASH_CANDIDATE_LIMIT).to_list(length=_HASH_CANDIDATE_LIMIT)
+    mongo_query_ms = (time.perf_counter() - mongo_query_started) * 1000
+
+    mongo_rank_started = time.perf_counter()
+    ranked = rank_candidates(mongo_candidates)
+    mongo_rank_ms = (time.perf_counter() - mongo_rank_started) * 1000
+    log.info(
+        "HASH MONGO MATCH TIMING candidates=%s query_ms=%.1f rank_ms=%.1f",
+        len(mongo_candidates),
+        mongo_query_ms,
+        mongo_rank_ms,
     )
     doc, score = await accept(ranked)
     if doc:
@@ -476,12 +513,11 @@ async def _photo_hash_match(
 
     # Compatibility pass for old records that have pHash fields but no chunk
     # index. This is only reached after the indexed candidate pass is not safe.
-    legacy_ranked = await rank(
-        characters.find(
-            _legacy_photo_candidate_query(scope),
-            projection,
-        ).limit(_HASH_CANDIDATE_LIMIT)
-    )
+    legacy_candidates = await characters.find(
+        _legacy_photo_candidate_query(scope),
+        projection,
+    ).limit(_HASH_CANDIDATE_LIMIT).to_list(length=_HASH_CANDIDATE_LIMIT)
+    legacy_ranked = rank_candidates(legacy_candidates)
     return await accept(legacy_ranked)
 
 
