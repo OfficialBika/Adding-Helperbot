@@ -37,7 +37,8 @@ _HASH_FULL_CHUNK_SIZE = 1024 * 1024
 # candidate set; a smaller cap prevents Python-side ranking from becoming the
 # dominant cost on large source datasets.
 _HASH_CANDIDATE_LIMIT = 400
-_HASH_FAST_PHOTO_MAX_DIM = 768
+_HASH_FAST_PHOTO_TARGET_DIM = 320
+_HASH_FAST_PHOTO_MAX_DIM = 384
 _PHASH_THRESHOLD = 8
 _PHASH_MIN_SCORE = 0.84
 _PHASH_MIN_MARGIN = 0.035
@@ -551,7 +552,15 @@ def _fast_photo_variant(source_message: Message):
         if max(dimensions(photo)[:2]) <= _HASH_FAST_PHOTO_MAX_DIM
     ]
     if suitable:
-        return max(suitable, key=lambda photo: dimensions(photo)[2])
+        # Prefer a preview close to 320px instead of the largest <=768px.
+        # pHash/dHash do not need the larger preview for the first pass.
+        return min(
+            suitable,
+            key=lambda photo: (
+                abs(max(dimensions(photo)[:2]) - _HASH_FAST_PHOTO_TARGET_DIM),
+                dimensions(photo)[2],
+            ),
+        )
     return min(photos, key=lambda photo: dimensions(photo)[2])
 
 
