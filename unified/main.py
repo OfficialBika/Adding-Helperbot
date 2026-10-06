@@ -862,7 +862,8 @@ async def run():
         settings.bot_token,
         session=bot_session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )    dp = Dispatcher()
+    )
+    dp = Dispatcher()
     dp.include_router(force_join_router)
     dp.include_router(router)
 
