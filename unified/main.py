@@ -22,6 +22,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from unified.config import settings
 from unified.store import db, characters, close, ensure_indexes
 from unified.uid_index import ensure_uid_index, get_meta, set_meta, upsert_documents
+from unified.hash_index import warm_photo_hash_index, remember_document
 from unified.auth import ensure_auth_indexes, is_authorized, grant, revoke, list_authorized, get_global_lookup_enabled, set_global_lookup_enabled
 from unified.ingest import ingest_message
 from unified.lookup import lookup_message
@@ -123,6 +124,12 @@ async def _start_uid_index_backfill() -> None:
     # Backfill is deliberately fire-and-forget: the bot becomes ready immediately
     # and every SQLite miss still falls through to Mongo for correctness.
     asyncio.create_task(_backfill_uid_index())
+
+
+async def _start_hash_index_warm() -> None:
+    # Mongo remains authoritative. The RAM hash index is only a candidate
+    # accelerator and warms in the background without blocking bot startup.
+    asyncio.create_task(warm_photo_hash_index(characters))
 
 
 def owner(message: Message) -> bool:
@@ -540,6 +547,14 @@ async def adding_ingest(message: Message):
         message,
         trusted_user_ids=trusted_helpers,
     )
+    if isinstance(result, dict) and result.get("document"):
+        try:
+            remember_document(result["document"])
+        except Exception:
+            log.exception(
+                "HASH RAM hot-sync failed message=%s",
+                message.message_id,
+            )
     if result:
         status = result.get("status") if isinstance(result, dict) else "unknown"
         metrics.record_ingest(status)
@@ -819,6 +834,7 @@ async def run():
     await ensure_indexes()
     await ensure_uid_index()
     await _start_uid_index_backfill()
+    await _start_hash_index_warm()
     await ensure_auth_indexes()
     await helper_userbot.start()
     helper_manager.bind()
