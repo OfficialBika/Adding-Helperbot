@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import logging
-from collections import Counter
 from threading import RLock
 from typing import Any
 
@@ -16,6 +16,7 @@ _RECORDS: dict[str, dict[str, Any]] = {}
 _BUCKETS: dict[tuple[str, str, str], set[str]] = {}
 _SOURCES: set[str] = set()
 _PENDING: dict[str, dict[str, Any] | None] = {}
+_SOURCE_KEYS: dict[str, set[str]] = {}
 
 
 def _chunks(value: str | None, count: int = 9) -> list[str]:
@@ -59,6 +60,12 @@ def _remove_locked(key: str) -> None:
         return
 
     source = str(old.get("source_key") or "").strip().lower()
+    source_keys = _SOURCE_KEYS.get(source)
+    if source_keys is not None:
+        source_keys.discard(key)
+        if not source_keys:
+            _SOURCE_KEYS.pop(source, None)
+
     for kind, field, hash_field in (
         ("p", "phash_chunks", "phash"),
         ("d", "dhash_chunks", "dhash"),
@@ -98,6 +105,15 @@ def _insert_locked(doc: dict[str, Any]) -> None:
 
     _RECORDS[key] = record
     _SOURCES.add(source)
+    _SOURCE_KEYS.setdefault(source, set()).add(key)
+    try:
+        record["_phash_int"] = int(str(record.get("phash") or ""), 16)
+    except (TypeError, ValueError):
+        record["_phash_int"] = None
+    try:
+        record["_dhash_int"] = int(str(record.get("dhash") or ""), 16)
+    except (TypeError, ValueError):
+        record["_dhash_int"] = None
 
     for kind, field, hash_field in (
         ("p", "phash_chunks", "phash"),
@@ -205,6 +221,11 @@ async def warm_photo_hash_index(characters) -> int:
             _BUCKETS.update(local_buckets)
             _SOURCES.clear()
             _SOURCES.update(local_sources)
+            _SOURCE_KEYS.clear()
+            for key, record in _RECORDS.items():
+                source = str(record.get("source_key") or "").strip().lower()
+                if source:
+                    _SOURCE_KEYS.setdefault(source, set()).add(key)
 
             pending = list(_PENDING.items())
             _PENDING.clear()
@@ -234,39 +255,50 @@ def lookup_photo_candidates(
     dhash: str | None,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
-    """Return likely photo candidates ranked by shared pHash/dHash chunks."""
     if not phash and not dhash:
+        return []
+    try:
+        query_p = int(str(phash or ''), 16) if phash else None
+    except (TypeError, ValueError):
+        query_p = None
+    try:
+        query_d = int(str(dhash or ''), 16) if dhash else None
+    except (TypeError, ValueError):
+        query_d = None
+    if query_p is None and query_d is None:
         return []
 
     with _LOCK:
         if not _READY:
             return []
-
-        sources = {
+        sources = [
             str(source).strip().lower()
             for source in (scope or ())
-            if str(source).strip()
-        }
-        if not sources:
-            sources = set(_SOURCES)
-
-        votes: Counter[str] = Counter()
-        queries = (
-            ("p", _chunks(phash)),
-            ("d", _chunks(dhash)),
-        )
+            if str(source).strip().lower()
+        ] or list(_SOURCES)
+        take = max(1, int(limit))
+        selected: dict[str, dict[str, Any]] = {}
         for source in sources:
-            for kind, chunks in queries:
-                for chunk in chunks:
-                    for key in _BUCKETS.get((source, kind, chunk), ()):
-                        votes[key] += 1
-
-        if not votes:
-            return []
-
-        keys = sorted(votes, key=lambda key: (-votes[key], key))
-        keys = keys[: max(1, int(limit))]
-        return [dict(_RECORDS[key]) for key in keys if key in _RECORDS]
+            records = [
+                _RECORDS[key]
+                for key in _SOURCE_KEYS.get(source, ())
+                if key in _RECORDS
+            ]
+            if query_p is not None:
+                for record in heapq.nsmallest(
+                    take,
+                    (r for r in records if r.get('_phash_int') is not None),
+                    key=lambda r: (r['_phash_int'] ^ query_p).bit_count(),
+                ):
+                    selected[_record_key(record)] = record
+            if query_d is not None:
+                for record in heapq.nsmallest(
+                    take,
+                    (r for r in records if r.get('_dhash_int') is not None),
+                    key=lambda r: (r['_dhash_int'] ^ query_d).bit_count(),
+                ):
+                    selected[_record_key(record)] = record
+        return [dict(record) for record in selected.values()]
 
 
 __all__ = [
