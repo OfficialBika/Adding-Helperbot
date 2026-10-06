@@ -414,6 +414,8 @@ async def _photo_hash_match(
     scope: list[str] | None,
     *,
     global_mode: bool = False,
+    use_ram: bool = True,
+    use_mongo: bool = True,
 ):
     if not media_hash.phash and not media_hash.dhash:
         return None, 0.0
@@ -470,7 +472,7 @@ async def _photo_hash_match(
 
     # RAM candidate index is the primary cold-hash accelerator once warmed.
     # Mongo remains the correctness/compatibility fallback.
-    if hash_index_ready():
+    if use_ram and hash_index_ready():
         ram_started = time.perf_counter()
         ram_candidates = lookup_photo_candidates(
             scope,
@@ -492,7 +494,10 @@ async def _photo_hash_match(
                 ram_score,
             )
             if ram_doc:
-                return ram_doc, f"phash_ram:{ram_score:.3f}"
+                return ram_doc, f"phash_ram:{ram_s    if not use_mongo:
+        return None, ram_score if 'ram_score' in locals() else 0.0
+
+core:.3f}"
 
     mongo_query_started = time.perf_counter()
     mongo_candidates = await characters.find(
@@ -648,6 +653,8 @@ async def _hash_fallback(
                     fast_hash,
                     collections,
                     global_mode=False,
+                    use_ram=True,
+                    use_mongo=False,
                 )
                 fast_match_ms = (time.perf_counter() - fast_match_started) * 1000
                 log.info(
@@ -663,15 +670,62 @@ async def _hash_fallback(
                 if fast_doc:
                     return fast_doc, f"phash_fast:{fast_score:.3f}"
 
+                # The RAM shortlist did not produce a safe match. Start the
+                # full-resolution download and the Mongo perceptual lookup at
+                # the same time so the two ~1-2s stages do not become serial.
+                full_download_task = asyncio.create_task(
+                    _download(bot, file_id, priority="full")
+                )
+                mongo_match_task = asyncio.create_task(
+                    _photo_hash_match(
+                        fast_hash,
+                        collections,
+                        global_mode=False,
+                        use_ram=False,
+                        use_mongo=True,
+                    )
+                )
+                try:
+                    mongo_doc, mongo_score = await mongo_match_task
+                except Exception:
+                    log.exception(
+                        "HASH MONGO MATCH task failed message=%s",
+                        getattr(source_message, "message_id", None),
+                    )
+                    mongo_doc, mongo_score = None, 0.0
+                if mongo_doc:
+                    full_download_task.cancel()
+                    try:
+                        await full_download_task
+                    except asyncio.CancelledError:
+                        pass
+                    return mongo_doc, f"phash_fast_mongo:{mongo_score:.3f}"
+                data = await full_download_task
+                download_ms = 0.0
+                if data is not None:
+                    # The actual transfer timing is already emitted by _download.
+                    # Keep the full-stage processing below without downloading twice.
+                    pass
+                else:
+                    log.info(
+                        "HASH FULL TIMING message=%s result=download_failed_after_overlap",
+                        getattr(source_message, "message_id", None),
+                    )
+                    return None, "hash_download_failed"
+                download_ms = 0.0
+
     # FULL FALLBACK:
     # Needed for exact SHA-256 recovery, legacy records that are not found by
     # the fast perceptual pass, or ambiguous similarity cases. This preserves
     # the existing exact-match semantics instead of replacing them with a
     # perceptual-only lookup.
     started = time.perf_counter()
-    download_started = started
-    data = await _download(bot, file_id, priority="full")
-    download_ms = (time.perf_counter() - download_started) * 1000
+    if 'data' not in locals():
+        download_started = started
+        data = await _download(bot, file_id, priority="full")
+        download_ms = (time.perf_counter() - download_started) * 1000
+    else:
+        download_ms = 0.0
     if not data:
         log.info("HASH TIMING message=%s download_ms=%.1f result=download_failed", getattr(source_message, "message_id", None), download_ms)
         return None, "hash_download_failed"
