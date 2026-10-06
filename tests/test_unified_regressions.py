@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from unified.config import Settings
-from unified.lookup import _chunks, _coerce_match_score, _learn_verified_uids, _ordered_uid_sources
+from unified.lookup import _chunks, _coerce_match_score, _learn_verified_uids, _ordered_uid_sources, _schedule_uid_learning
 import unified.uid_index as uid_index
 
 
@@ -61,6 +61,9 @@ class LookupOrderingTests(unittest.TestCase):
         score, reason = _coerce_match_score("not-a-score")
         self.assertEqual(score, 0.0)
         self.assertEqual(reason, "not-a-score")
+
+    def test_uid_learning_scheduler_is_defined(self):
+        self.assertTrue(callable(_schedule_uid_learning))
 
 
 class ForceJoinConfigTests(unittest.TestCase):
