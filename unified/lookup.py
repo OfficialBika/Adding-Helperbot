@@ -54,7 +54,7 @@ def _coerce_match_score(value: Any) -> tuple[float, str]:
     """
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         score = float(value)
-        return score, f"phash:{score:.3f}"
+        return score, f"phash_fast:{score:.3f}"
 
     text = str(value or "").strip()
     if text:
