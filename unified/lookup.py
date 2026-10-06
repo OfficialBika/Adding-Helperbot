@@ -9,7 +9,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import Message
 
-from services.hash_service import hamming_hex, hash_photo, hash_photo_fast, hash_video
+from services.hash_service import hamming_hex, hash_photo_lookup, hash_photo_fast, hash_video, sha256_bytes
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import characters
@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 # Allow the 24-GB / 12-vCPU VPS to process more cold lookups concurrently.
 # The semaphore protects Telegram download pressure without serializing the
 # rest of the lookup pipeline. Keep this separate from hash/DB concurrency.
-_HASH_DOWNLOAD_SEM = asyncio.Semaphore(12)
+_HASH_FAST_DOWNLOAD_SEM = asyncio.Semaphore(24)\n_FULL_DOWNLOAD_SEM = asyncio.Semaphore(6)\n_HASH_FAST_CHUNK_SIZE = 256 * 1024\n_HASH_FULL_CHUNK_SIZE = 1024 * 1024
 # Keep the first similarity pass bounded. Chunk indexes already narrow the
 # candidate set; a smaller cap prevents Python-side ranking from becoming the
 # dominant cost on large source datasets.
@@ -553,54 +553,7 @@ def _fast_photo_variant(source_message: Message):
     return min(photos, key=lambda photo: dimensions(photo)[2])
 
 
-async def _download(bot: Bot, file_id: str, *, timeout: float | None = None) -> bytes | None:
-    if not file_id:
-        return None
-
-    # Measure semaphore wait separately from the actual Telegram transfer.
-    # Production logs previously reported both as one "download_ms" value,
-    # which made a busy concurrency queue look like a slow Telegram CDN.
-    wait_started = time.perf_counter()
-    async with _HASH_DOWNLOAD_SEM:
-        wait_ms = (time.perf_counter() - wait_started) * 1000
-        transfer_started = time.perf_counter()
-        try:
-            result = await bot.download(
-                file_id,
-                timeout=int(timeout or getattr(settings, "download_timeout_seconds", 20)),
-                chunk_size=_HASH_DOWNLOAD_CHUNK_SIZE,
-            )
-        except Exception as exc:
-            transfer_ms = (time.perf_counter() - transfer_started) * 1000
-            log.info(
-                "HASH DOWNLOAD TIMING wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f result=failed error=%s",
-                wait_ms,
-                transfer_ms,
-                wait_ms + transfer_ms,
-                exc,
-            )
-            return None
-        transfer_ms = (time.perf_counter() - transfer_started) * 1000
-
-        if isinstance(result, io.BytesIO):
-            data = result.getvalue()
-        elif hasattr(result, "read"):
-            value = result.read()
-            data = value if isinstance(value, bytes) else None
-        else:
-            data = None
-
-        log.info(
-            "HASH DOWNLOAD TIMING wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f bytes=%s",
-            wait_ms,
-            transfer_ms,
-            wait_ms + transfer_ms,
-            len(data) if data is not None else 0,
-        )
-        return data
-
-
-async def _hash_fallback(
+async def _download(\n    bot: Bot,\n    file_id: str,\n    *,\n    timeout: float | None = None,\n    priority: str = "fast",\n) -> bytes | None:\n    if not file_id:\n        return None\n\n    if priority == "full":\n        semaphore = _FULL_DOWNLOAD_SEM\n        chunk_size = _HASH_FULL_CHUNK_SIZE\n    else:\n        semaphore = _HASH_FAST_DOWNLOAD_SEM\n        chunk_size = _HASH_FAST_CHUNK_SIZE\n\n    wait_started = time.perf_counter()\n    async with semaphore:\n        wait_ms = (time.perf_counter() - wait_started) * 1000\n        transfer_started = time.perf_counter()\n        try:\n            result = await bot.download(\n                file_id,\n                timeout=int(timeout or getattr(settings, "download_timeout_seconds", 20)),\n                chunk_size=chunk_size,\n            )\n        except Exception as exc:\n            transfer_ms = (time.perf_counter() - transfer_started) * 1000\n            log.info(\n                "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f result=failed error=%s",\n                priority, wait_ms, transfer_ms, wait_ms + transfer_ms, exc,\n            )\n            return None\n\n        transfer_ms = (time.perf_counter() - transfer_started) * 1000\n        if isinstance(result, io.BytesIO):\n            data = result.getvalue()\n        elif hasattr(result, "read"):\n            value = result.read()\n            data = value if isinstance(value, bytes) else None\n        else:\n            data = None\n\n        log.info(\n            "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f bytes=%s",\n            priority, wait_ms, transfer_ms, wait_ms + transfer_ms, len(data) if data is not None else 0,\n        )\n        return data\n\nasync def _hash_fallback(
     bot: Bot,
     media,
     source_message: Message,
@@ -623,7 +576,7 @@ async def _hash_fallback(
         fast_file_id = str(getattr(fast_media, "file_id", "") or "").strip()
         if fast_file_id:
             fast_download_started = time.perf_counter()
-            fast_data = await _download(bot, fast_file_id)
+            fast_data = await _download(bot, fast_file_id, priority="fast")
             fast_download_ms = (time.perf_counter() - fast_download_started) * 1000
             if fast_data:
                 fast_hash_started = time.perf_counter()
@@ -656,58 +609,13 @@ async def _hash_fallback(
     # perceptual-only lookup.
     started = time.perf_counter()
     download_started = started
-    data = await _download(bot, file_id)
+    data = await _download(bot, file_id, priority="full")
     download_ms = (time.perf_counter() - download_started) * 1000
     if not data:
         log.info("HASH TIMING message=%s download_ms=%.1f result=download_failed", getattr(source_message, "message_id", None), download_ms)
         return None, "hash_download_failed"
 
-    hash_started = time.perf_counter()
-    media_hash = await asyncio.to_thread(
-        hash_photo if media.media_type == "photo" else hash_video,
-        data,
-    )
-    hash_ms = (time.perf_counter() - hash_started) * 1000
-
-    # Start the expensive pHash candidate scan while the exact SHA-256
-    # lookup is in flight. SHA-256 still has strict priority if it matches, but
-    # a SHA miss no longer adds a second full Mongo round trip before pHash.
-    phash_task = None
-    if media.media_type == "photo":
-        phash_task = asyncio.create_task(
-            _photo_hash_match(
-                media_hash,
-                collections,
-                global_mode=False,
-            )
-        )
-
-    # SHA-256 is byte-exact and remains the first accepted fallback after UID.
-    if media_hash.sha256:
-        sha_started = time.perf_counter()
-        doc = await _hash_exact_find(collections, media_hash.sha256)
-        sha_ms = (time.perf_counter() - sha_started) * 1000
-        if doc:
-            if phash_task is not None:
-                phash_task.cancel()
-            return doc, "sha256"
-
-        if allow_global_fallback:
-            global_sha_started = time.perf_counter()
-            global_docs = await _hash_global_candidates(media_hash.sha256, limit=2)
-            global_sha_ms = (time.perf_counter() - global_sha_started) * 1000
-            if len(global_docs) == 1:
-                if phash_task is not None:
-                    phash_task.cancel()
-                return global_docs[0], "sha256_global"
-            if len(global_docs) > 1:
-                log.warning(
-                    "SHA global recovery ambiguous message=%s candidates=%s",
-                    getattr(source_message, "message_id", None),
-                    len(global_docs),
-                )
-
-    # Perceptual hashing is only for photos. It is similarity, not identity,
+    # Exact bytes are the strongest and cheapest full-fallback test.\n    # Do not calculate expensive perceptual hashes until exact SHA-256 misses.\n    sha_hash_started = time.perf_counter()\n    sha256 = await asyncio.to_thread(sha256_bytes, data)\n    sha_hash_ms = (time.perf_counter() - sha_hash_started) * 1000\n\n    sha_started = time.perf_counter()\n    doc = await _hash_exact_find(collections, sha256)\n    sha_ms = (time.perf_counter() - sha_started) * 1000\n    if doc:\n        log.info(\n            "HASH EXACT TIMING message=%s sha_hash_ms=%.1f sha_db_ms=%.1f",\n            getattr(source_message, "message_id", None), sha_hash_ms, sha_ms,\n        )\n        return doc, "sha256"\n\n    if allow_global_fallback:\n        global_sha_started = time.perf_counter()\n        global_docs = await _hash_global_candidates(sha256, limit=2)\n        global_sha_ms = (time.perf_counter() - global_sha_started) * 1000\n        if len(global_docs) == 1:\n            log.info(\n                "HASH EXACT GLOBAL TIMING message=%s sha_hash_ms=%.1f sha_db_ms=%.1f",\n                getattr(source_message, "message_id", None), sha_hash_ms, global_sha_ms,\n            )\n            return global_docs[0], "sha256_global"\n        if len(global_docs) > 1:\n            log.warning(\n                "SHA global recovery ambiguous message=%s candidates=%s",\n                getattr(source_message, "message_id", None), len(global_docs),\n            )\n\n    hash_started = time.perf_counter()\n    media_hash = await asyncio.to_thread(\n        hash_photo_lookup if media.media_type == "photo" else hash_video,\n        data,\n    )\n    hash_ms = (time.perf_counter() - hash_started) * 1000\n\n    phash_task = None\n    if media.media_type == "photo":\n        phash_task = asyncio.create_task(\n            _photo_hash_match(\n                media_hash,\n                collections,\n                global_mode=False,\n            )\n        )\n\n    log.info(\n        "HASH FULL TIMING message=%s download_ms=%.1f sha_hash_ms=%.1f sha_db_ms=%.1f perceptual_hash_ms=%.1f",\n        getattr(source_message, "message_id", None),\n        download_ms,\n        sha_hash_ms,\n        sha_ms,\n        hash_ms,\n    )\n    # Perceptual hashing is only for photos. It is similarity, not identity,
     # so it is source-scoped by default and requires a strong score + margin.
     if phash_task is not None:
         phash_started = time.perf_counter()
