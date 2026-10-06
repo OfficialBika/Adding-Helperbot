@@ -204,6 +204,14 @@ async def warm_photo_hash_index(characters) -> int:
             }
             if not record["phash"] and not record["dhash"]:
                 continue
+            try:
+                record["_phash_int"] = int(str(record.get("phash") or ""), 16)
+            except (TypeError, ValueError):
+                record["_phash_int"] = None
+            try:
+                record["_dhash_int"] = int(str(record.get("dhash") or ""), 16)
+            except (TypeError, ValueError):
+                record["_dhash_int"] = None
 
             local_records[key] = record
             local_sources.add(source)
