@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+import time
 
 from unified.store import db
 
@@ -23,6 +24,7 @@ async def get_global_lookup_enabled() -> bool:
 
 
 async def set_global_lookup_enabled(enabled: bool, changed_by: int | None = None) -> None:
+    global _global_lookup_cache
     payload = {"key": GLOBAL_SETTINGS_KEY, "enabled": bool(enabled), "updated_at": _now()}
     if changed_by is not None:
         payload["updated_by"] = int(changed_by)
@@ -31,6 +33,7 @@ async def set_global_lookup_enabled(enabled: bool, changed_by: int | None = None
         {"$set": payload, "$setOnInsert": {"created_at": _now()}},
         upsert=True,
     )
+    _global_lookup_cache = (time.monotonic(), bool(enabled))
 
 
 async def ensure_auth_indexes():
