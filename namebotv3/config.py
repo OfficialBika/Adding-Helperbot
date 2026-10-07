@@ -293,6 +293,10 @@ class Settings:
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = _int("PORT", 8000)
 
+    # Optional self-hosted Telegram Bot API. Empty preserves api.telegram.org.
+    bot_api_base_url: str = os.getenv("BOT_API_BASE_URL", "").strip().rstrip("/")
+    bot_api_is_local: bool = _bool("BOT_API_IS_LOCAL", False)
+
     support_group_username: str = os.getenv("SUPPORT_GROUP_USERNAME", "")
     support_group_id: int = _int("SUPPORT_GROUP_ID", 0)
     # Private diagnostics group. User-facing lookup replies are unchanged.
