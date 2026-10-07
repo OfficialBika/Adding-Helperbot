@@ -30,7 +30,7 @@ radial-gradient(circle at 50% 70%,rgba(34,180,255,.06),transparent 30%),var(--bg
 color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 button,input{font:inherit}
 a{color:inherit;text-decoration:none}
-.app{display:grid;grid-template-columns:225px minmax(0,1fr);min-height:100vh}
+.app{display:grid;grid-template-columns:180px minmax(0,1fr);min-height:100vh}
 .sidebar{position:sticky;top:0;height:100vh;border-right:1px solid rgba(111,76,214,.28);background:linear-gradient(180deg,rgba(11,7,27,.96),rgba(6,4,17,.98));padding:22px 15px;z-index:20}
 .brand{padding:4px 10px 22px}
 .brand b{display:block;font-size:38px;line-height:1;font-weight:900;letter-spacing:-2px;background:linear-gradient(90deg,#ff17d3,#a548ff,#20c9ff);-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -45,7 +45,7 @@ a{color:inherit;text-decoration:none}
 .sidebar-card strong{display:block;margin-top:6px}
 .sidebar-card p{margin:7px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
 .sidebar-card .btn{margin-top:12px;width:100%}
-.main{min-width:0;padding:16px 18px 30px}
+.main{min-width:0;padding:10px 14px 26px}
 .topbar{height:58px;display:flex;gap:12px;align-items:center;margin-bottom:12px}
 .menu-btn{display:none}
 .search{flex:1;position:relative}
@@ -58,7 +58,7 @@ a{color:inherit;text-decoration:none}
 .balance b{color:var(--gold)}
 .profile{display:flex;align-items:center;gap:10px;padding-right:6px}
 .avatar{width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#df2eff,#4d38ff);display:grid;place-items:center;font-weight:800}
-.hero-grid{display:grid;grid-template-columns:minmax(0,2.1fr) minmax(280px,.9fr);gap:12px}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(365px,1fr);gap:12px}
 .hero{position:relative;overflow:hidden;border-radius:18px;border:1px solid #4a28a3;min-height:280px;padding:28px;background:
 radial-gradient(circle at 82% 22%,rgba(255,30,218,.48),transparent 25%),
 radial-gradient(circle at 78% 78%,rgba(21,181,255,.25),transparent 28%),
@@ -66,7 +66,7 @@ linear-gradient(135deg,#251050,#0b0922 62%,#08051a);box-shadow:var(--shadow)}
 .hero:before,.hero:after{content:"";position:absolute;border-radius:50%;filter:blur(2px)}
 .hero:before{width:280px;height:280px;right:-70px;top:-85px;border:1px solid rgba(255,87,231,.55);box-shadow:0 0 70px rgba(255,35,214,.26)}
 .hero:after{width:170px;height:170px;right:110px;bottom:-85px;border:1px solid rgba(37,210,255,.45);box-shadow:0 0 60px rgba(32,183,255,.2)}
-.hero-content{position:relative;z-index:2;max-width:65%}
+.hero-content{position:relative;z-index:2;max-width:60%}
 .kicker{display:inline-flex;align-items:center;gap:7px;color:#cfc7ff;border:1px solid #4b3989;padding:6px 10px;border-radius:999px;background:rgba(20,11,49,.72);font-size:11px;font-weight:800;letter-spacing:.7px}
 .hero h1{font-size:clamp(40px,6vw,77px);line-height:.9;margin:20px 0 12px;letter-spacing:-4px}
 .hero h1 span{display:block;background:linear-gradient(90deg,#ff35d7,#3ba6ff);-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -97,7 +97,7 @@ radial-gradient(circle at 95% 30%,rgba(255,215,77,.35),transparent 28%);position
 .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 2px 9px}
 .section-head h2{font-size:15px;margin:0}
 .section-head span{font-size:11px;color:#968caf}
-.games{display:grid;grid-template-columns:repeat(7,minmax(130px,1fr));gap:9px;overflow:hidden}
+.games{display:grid;grid-template-columns:repeat(8,minmax(130px,1fr));gap:9px;overflow:hidden}
 .game{position:relative;min-height:173px;border-radius:16px;border:1px solid #39267f;background:linear-gradient(180deg,#171035,#0c0920);overflow:hidden;cursor:pointer;transition:.22s;box-shadow:0 12px 30px rgba(0,0,0,.27)}
 .game:hover{transform:translateY(-3px);border-color:#8a54ff;box-shadow:0 18px 40px rgba(86,44,204,.25)}
 .game-art{height:108px;position:relative;overflow:hidden;background:#1a1035}
@@ -111,11 +111,11 @@ radial-gradient(circle at 95% 30%,rgba(255,215,77,.35),transparent 28%);position
 .game-body b{display:block;font-size:12px}
 .game-body small{color:#8e87ac;font-size:10px}
 .play{margin-top:7px;width:100%;padding:7px;border-radius:8px;border:1px solid #4c34a5;background:linear-gradient(90deg,#4725f9,#1c8fff);color:#fff;font-weight:800;font-size:10px}
-.dashboard{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:10px;margin-top:14px}
-.widget{min-height:250px;border-radius:17px;border:1px solid var(--line);background:linear-gradient(145deg,#100a27,#09071c);overflow:hidden;box-shadow:var(--shadow)}
+.dashboard{display:grid;grid-template-columns:1.35fr 1fr 1fr 1fr;gap:10px;margin-top:14px}
+.widget{min-height:344px;border-radius:17px;border:1px solid var(--line);background:linear-gradient(145deg,#100a27,#09071c);overflow:hidden;box-shadow:var(--shadow)}
 .widget-head{height:45px;padding:0 13px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(58,40,111,.55);font-size:13px;font-weight:800}
 .widget-head small{font-size:9px;color:#8f88ac}
-.crash{height:202px;padding:15px;display:flex;flex-direction:column;justify-content:flex-end;position:relative;background:
+.crash{height:284px;padding:15px;display:flex;flex-direction:column;justify-content:flex-end;position:relative;background:
 linear-gradient(180deg,rgba(28,18,65,.15),rgba(3,2,14,.25)),
 repeating-linear-gradient(0deg,transparent,transparent 36px,rgba(60,45,113,.18) 37px),
 repeating-linear-gradient(90deg,transparent,transparent 58px,rgba(60,45,113,.16) 59px)}
@@ -128,7 +128,7 @@ repeating-linear-gradient(90deg,transparent,transparent 58px,rgba(60,45,113,.16)
 .symbol{height:51px;border-radius:10px;border:1px solid #5d2f9b;background:radial-gradient(circle,#3a1b72,#140b2e);display:grid;place-items:center;font-size:23px;box-shadow:inset 0 0 22px rgba(255,31,215,.1)}
 .field{display:flex;justify-content:space-between;align-items:center;margin-top:10px;border:1px solid #34256d;border-radius:9px;padding:8px 9px;background:#0d0922}
 .field span{color:#9189a9;font-size:9px}.field b{font-size:11px}
-.blackjack{height:202px;padding:14px;display:flex;flex-direction:column;justify-content:space-between;background:radial-gradient(circle at 50% 20%,#3a1737,#170c26 58%,#09061a)}
+.blackjack{height:284px;padding:14px;display:flex;flex-direction:column;justify-content:space-between;background:radial-gradient(circle at 50% 20%,#3a1737,#170c26 58%,#09061a)}
 .table{border-radius:16px;border:1px solid #55356c;background:radial-gradient(circle at center,#2a1a29,#110919);height:118px;display:grid;place-items:center;position:relative}
 .cards{display:flex;gap:6px;transform:rotate(-6deg)}
 .card{height:61px;width:44px;border-radius:6px;background:#fff;color:#111;display:grid;place-items:center;font-size:20px;font-weight:900;box-shadow:0 8px 16px rgba(0,0,0,.4)}
@@ -145,6 +145,7 @@ repeating-linear-gradient(90deg,transparent,transparent 58px,rgba(60,45,113,.16)
 @media (max-width:1200px){.games{grid-template-columns:repeat(4,1fr)}.dashboard{grid-template-columns:1fr 1fr}.wallet-widget{grid-column:span 2}}
 @media (max-width:900px){.app{grid-template-columns:1fr}.sidebar{display:none}.main{padding:10px 10px 74px}.menu-btn{display:grid;place-items:center;width:42px;height:42px;border:1px solid #34256d;border-radius:12px;background:#0b0820;color:#fff}.topbar{height:48px}.top-pill{display:none}.hero-grid{grid-template-columns:1fr}.side-stack{grid-template-columns:1fr 1fr}.hero-content{max-width:100%}.hero{min-height:330px}.games{grid-template-columns:repeat(2,1fr)}.dashboard{grid-template-columns:1fr}.wallet-widget{grid-column:auto}.mobile-nav{display:flex;position:fixed;z-index:30;left:8px;right:8px;bottom:8px;height:58px;border:1px solid #3a2a79;background:rgba(10,6,26,.94);backdrop-filter:blur(14px);border-radius:16px;justify-content:space-around;align-items:center;box-shadow:0 16px 44px rgba(0,0,0,.48)}.mobile-nav button{border:0;background:transparent;color:#9189ad;font-size:10px;display:grid;gap:3px;justify-items:center}.mobile-nav button.active{color:#fff}.mobile-nav .mi{font-size:18px}}
 @media (max-width:560px){.side-stack{grid-template-columns:1fr}.hero{padding:20px;min-height:360px}.hero h1{font-size:48px}.stats-strip{grid-template-columns:repeat(2,1fr)}.games{grid-template-columns:repeat(2,1fr)}.game{min-height:165px}.game-art{height:100px}.footer{display:block}.footer span{display:block;margin-top:4px}}
+.mobile-preview{margin-top:16px;border:1px solid #2e2268;border-radius:18px;background:linear-gradient(180deg,#0c0821,#070515);padding:12px}.mobile-preview .label{display:flex;align-items:center;justify-content:center;margin:-2px auto 12px;width:max-content;padding:7px 16px;border:1px solid #3f2d7e;border-radius:999px;background:#0b0820;color:#d8d0ef;font-size:10px;font-weight:900;letter-spacing:.7px}.phones{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;overflow:hidden}.phone{min-width:0;height:138px;border-radius:16px;border:1px solid #332571;background:linear-gradient(180deg,#120d31,#070518);padding:7px;box-shadow:inset 0 0 28px rgba(119,49,255,.08)}.phone .ph-head{font-size:7px;color:#8f88ab;margin-bottom:7px;display:flex;justify-content:space-between}.phone .screen{height:73px;border-radius:10px;border:1px solid #45328b;background:radial-gradient(circle at 65% 25%,rgba(255,35,211,.4),transparent 25%),linear-gradient(145deg,#221048,#09071c);display:grid;place-items:center;font-size:25px}.phone b{display:block;font-size:8px;margin-top:7px}.phone small{font-size:7px;color:#827b9e}@media (max-width:900px){.mobile-preview{display:none}}
 </style>
 </head>
 <body>
@@ -171,13 +172,16 @@ repeating-linear-gradient(90deg,transparent,transparent 58px,rgba(60,45,113,.16)
     </div>
   </aside>
 
-  <main class="main">
+  <main class="main" id="home">
     <header class="topbar">
       <button class="menu-btn" onclick="toast('Use the bottom navigation on mobile')">☰</button>
       <div class="search"><input id="search" type="search" placeholder="Search characters, sources, or events..."><span>⌕</span></div>
       <div class="top-pill"><span class="dot"></span><span>Service Ready</span></div>
       <div class="top-pill balance">Database <b id="sourceCount">—</b></div>
-      <div class="top-pill profile"><div class="avatar">B</div><div><b style="font-size:12px">Official Bika</b><div style="font-size:9px;color:#938ba9">Arena Admin</div></div></div>
+      <div class="top-pill profile"><div class="avatar">B</div><div><b style="font-size:12px">Official Bika</b><div style="font-size:9px;color:#938ba9">Level 18</div></div></div>
+      <button class="btn" style="height:42px;padding:0 16px;border-radius:12px;white-space:nowrap" onclick="toast('Deposit flow is not connected to the existing bot data')">DEPOSIT</button>
+      <div class="top-pill" style="font-size:16px;padding:0 11px">✈️</div>
+      <div class="top-pill" style="font-size:16px;padding:0 11px">⛶</div>
     </header>
 
     <section class="hero-grid">
@@ -232,7 +236,8 @@ repeating-linear-gradient(90deg,transparent,transparent 58px,rgba(60,45,113,.16)
         <article class="game"><div class="game-art"><div class="game-icon">🎲</div></div><div class="game-body"><b>Shan Koe Mee</b><small>Game card ready</small><button class="play" onclick="toast('Shan Koe Mee shell selected')">PLAY NOW</button></div></article>
         <article class="game"><div class="game-art"><div class="game-icon">✨</div></div><div class="game-body"><b>Plinko</b><small>Arcade-style panel</small><button class="play" onclick="toast('Plinko shell selected')">PLAY NOW</button></div></article>
         <article class="game"><div class="game-art"><div class="game-icon">🎡</div></div><div class="game-body"><b>Lucky Wheel</b><small>Reward wheel shell</small><button class="play" onclick="toast('Lucky Wheel shell selected')">PLAY NOW</button></div></article>
-        <article class="game"><div class="game-art"><span class="tag" style="background:#4d416c">SOON</span><div class="game-icon">💠</div></div><div class="game-body"><b>More Games</b><small>Coming soon</small><button class="play" onclick="toast('More games are coming soon')">COMING SOON</button></div></article>
+        <article class="game"><div class="game-art"><span class="tag blue">LIVE</span><div class="game-icon">💣</div></div><div class="game-body"><b>Mines</b><small>Arcade-style panel</small><button class="play" onclick="toast('Mines shell selected')">PLAY NOW</button></div></article>
+        <article class="game"><div class="game-art"><span class="tag" style="background:#4d416c">SOON</span><div class="game-icon">♛</div></div><div class="game-body"><b>Coming Soon</b><small>More arena games</small><button class="play" onclick="toast('Coming soon')">COMING SOON</button></div></article>
       </div>
     </section>
 
@@ -287,6 +292,18 @@ repeating-linear-gradient(90deg,transparent,transparent 58px,rgba(60,45,113,.16)
       <div class="section-head"><h2>🗂️ Latest Character Data</h2><span id="updatedAt">Waiting for sync…</span></div>
       <div class="widget" style="min-height:0">
         <div id="recent" style="padding:10px 13px;color:#8f88a7;font-size:10px">Loading authoritative MongoDB data…</div>
+      </div>
+    </section>
+
+<section class="mobile-preview">
+      <div class="label">▣ MOBILE VERSION (RESPONSIVE DESIGN)</div>
+      <div class="phones">
+        <div class="phone"><div class="ph-head"><span>BIKA GAME</span><span>•••</span></div><div class="screen">🎮</div><b>Home</b><small>Play now</small></div>
+        <div class="phone"><div class="ph-head"><span>Games</span><span>●</span></div><div class="screen">🚀</div><b>Games</b><small>Popular</small></div>
+        <div class="phone"><div class="ph-head"><span>Rocket</span><span>LIVE</span></div><div class="screen">3.42x</div><b>Rocket Crash</b><small>Multiplier</small></div>
+        <div class="phone"><div class="ph-head"><span>Slot</span><span>HOT</span></div><div class="screen">🎰</div><b>Premium Slot</b><small>Spin now</small></div>
+        <div class="phone"><div class="ph-head"><span>Blackjack</span><span>LIVE</span></div><div class="screen">🃏</div><b>Blackjack</b><small>Hit / Stand</small></div>
+        <div class="phone"><div class="ph-head"><span>Profile</span><span>⚙</span></div><div class="screen">B</div><b>Official Bika</b><small>Level 18</small></div>
       </div>
     </section>
 
