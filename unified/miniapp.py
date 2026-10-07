@@ -15,6 +15,17 @@ INDEX_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#080518">
 <meta name="description" content="BIKA Game Arena">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+  (() => {
+    const tg = window.Telegram?.WebApp;
+    if (!tg) return;
+    try {
+      tg.ready();
+      tg.expand();
+    } catch (_) {}
+  })();
+</script>
 <title>BIKA GAME — Arena</title>
 <style>
 :root{
@@ -23,11 +34,13 @@ INDEX_HTML = r"""<!doctype html>
   --cyan:#23e2ff;--green:#24e6a0;--gold:#ffd15c;--shadow:0 20px 70px rgba(0,0,0,.45);
 }
 *{box-sizing:border-box}
-html,body{margin:0;min-height:100%;background:
+html{min-height:100%;overflow-x:hidden}
+html,body{margin:0;min-height:100%;overflow-x:hidden;background:
 radial-gradient(circle at 12% 10%,rgba(119,45,255,.18),transparent 26%),
 radial-gradient(circle at 87% 6%,rgba(255,31,200,.13),transparent 24%),
 radial-gradient(circle at 50% 70%,rgba(34,180,255,.06),transparent 30%),var(--bg);
 color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+img,video,canvas{display:block;max-width:100%;height:auto;object-fit:contain}
 button,input{font:inherit}
 a{color:inherit;text-decoration:none}
 .app{display:grid;grid-template-columns:180px minmax(0,1fr);min-height:100vh}
