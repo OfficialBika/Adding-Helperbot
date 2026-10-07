@@ -862,7 +862,7 @@ async def _hash_fallback(
 
 
 async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: bool = False):
-    """Lookup order: Telegram UID -> RAM/SQLite -> exact Mongo UID -> hash fallback.
+    """Lookup order: Telegram UID cache -> RAM exact UID -> Mongo UID -> hash fallback.
 
     Photo hash fallback uses a small Telegram preview first. If that does not
     produce a safe match, the full media is downloaded, exact SHA-256 is checked
