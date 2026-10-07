@@ -34,13 +34,15 @@ INDEX_HTML = r"""<!doctype html>
   --cyan:#23e2ff;--green:#24e6a0;--gold:#ffd15c;--shadow:0 20px 70px rgba(0,0,0,.45);
 }
 *{box-sizing:border-box}
-html{min-height:100%;overflow-x:hidden}
-html,body{margin:0;min-height:100%;overflow-x:hidden;background:
+html{min-height:100%;width:100%;max-width:100%;overflow-x:hidden}
+html,body{margin:0;min-height:100%;width:100%;max-width:100%;overflow-x:hidden;background:
 radial-gradient(circle at 12% 10%,rgba(119,45,255,.18),transparent 26%),
 radial-gradient(circle at 87% 6%,rgba(255,31,200,.13),transparent 24%),
 radial-gradient(circle at 50% 70%,rgba(34,180,255,.06),transparent 30%),var(--bg);
 color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-img,video,canvas{display:block;max-width:100%;height:auto;object-fit:contain}
+body{min-height:var(--tg-viewport-height,100dvh)}
+img,video,canvas,svg{display:block;max-width:100%;box-sizing:border-box}
+img{width:auto!important;height:auto!important;max-height:280px!important;object-fit:contain!important}
 button,input{font:inherit}
 a{color:inherit;text-decoration:none}
 .app{display:grid;grid-template-columns:180px minmax(0,1fr);min-height:100vh}
@@ -335,6 +337,28 @@ repeating-linear-gradient(90deg,transparent,transparent 58px,rgba(60,45,113,.16)
 
 <script>
 const $ = (id)=>document.getElementById(id);
+
+function containImages(root=document){
+  root.querySelectorAll?.('img')?.forEach(img=>{
+    img.style.setProperty('max-width','100%','important');
+    img.style.setProperty('width','auto','important');
+    img.style.setProperty('height','auto','important');
+    img.style.setProperty('max-height','280px','important');
+    img.style.setProperty('object-fit','contain','important');
+    if(!img.getAttribute('alt')) img.setAttribute('alt','');
+  });
+}
+containImages();
+new MutationObserver(mutations=>{
+  for(const m of mutations){
+    for(const node of m.addedNodes){
+      if(node.nodeType===1){
+        if(node.matches?.('img')) containImages(node.parentElement||document);
+        else containImages(node);
+      }
+    }
+  }
+}).observe(document.documentElement,{subtree:true,childList:true});
 function toast(message){const t=$('toast');t.textContent=message;t.classList.add('show');clearTimeout(window.__toast);window.__toast=setTimeout(()=>t.classList.remove('show'),1800)}
 function scrollToId(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth',block:'start'});else window.scrollTo({top:0,behavior:'smooth'})}
 function fmt(n){return new Intl.NumberFormat().format(Number(n||0))}
