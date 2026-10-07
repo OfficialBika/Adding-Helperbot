@@ -163,18 +163,43 @@ class HashIndexFastPathTests(unittest.TestCase):
 class LookupGateCacheTests(unittest.TestCase):
     def test_global_lookup_gate_is_cached(self):
         auth._global_lookup_cache = None
-        with patch("unified.auth.db.settings.find_one", new=AsyncMock(return_value={"key": "global_lookup", "enabled": True})) as find_one:
-            self.assertTrue(asyncio.run(auth.get_global_lookup_enabled()))
-            self.assertTrue(asyncio.run(auth.get_global_lookup_enabled()))
+        find_one = AsyncMock(return_value={"key": "global_lookup", "enabled": True})
+        fake_db = SimpleNamespace(settings=SimpleNamespace(find_one=find_one))
+
+        async def exercise():
+            with patch.object(auth, "db", fake_db):
+                first = await auth.get_global_lookup_enabled()
+                second = await auth.get_global_lookup_enabled()
+                return first, second
+
+        first, second = asyncio.run(exercise())
+        self.assertTrue(first)
+        self.assertTrue(second)
         find_one.assert_awaited_once()
 
     def test_force_join_gate_is_cached(self):
         force_join._enabled_cache = None
-        with patch("unified.services.force_join._channels", return_value=((1, "https://t.me/a", "A"),)):
-            with patch.object(force_join, "settings", SimpleNamespace(force_join_enabled=True)):
-                with patch("unified.services.force_join.db.settings.find_one", new=AsyncMock(return_value={"key": "force_join:enabled", "enabled": True})) as find_one:
-                    self.assertTrue(asyncio.run(force_join._enabled()))
-                    self.assertTrue(asyncio.run(force_join._enabled()))
+        find_one = AsyncMock(return_value={"key": "force_join:enabled", "enabled": True})
+        fake_db = SimpleNamespace(settings=SimpleNamespace(find_one=find_one))
+
+        async def exercise():
+            with patch(
+                "unified.services.force_join._channels",
+                return_value=((1, "https://t.me/a", "A"),),
+            ):
+                with patch.object(
+                    force_join,
+                    "settings",
+                    SimpleNamespace(force_join_enabled=True),
+                ):
+                    with patch.object(force_join, "db", fake_db):
+                        first = await force_join._enabled()
+                        second = await force_join._enabled()
+                        return first, second
+
+        first, second = asyncio.run(exercise())
+        self.assertTrue(first)
+        self.assertTrue(second)
         find_one.assert_awaited_once()
 
 class ForceJoinConfigTests(unittest.TestCase):
