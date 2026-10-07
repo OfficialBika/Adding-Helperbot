@@ -3,20 +3,26 @@ services:
     build:
       context: .
       args:
-        TELEGRAM_BOT_API_REF: ${TELEGRAM_BOT_API_REF:-master}
+        TELEGRAM_BOT_API_REF: master
     container_name: bika-telegram-bot-api
     restart: unless-stopped
     env_file:
       - .env
-    user: "${BOT_API_UID:-1000}:${BOT_API_GID:-1000}"
+    user: "1000:1000"
     environment:
-      TZ: ${TZ:-Asia/Bangkok}
+      TZ: Asia/Bangkok
     volumes:
-      - ${BOT_API_DATA_DIR:-/srv/telegram-bot-api/data}:/var/lib/telegram-bot-api
+      - /srv/telegram-bot-api-test/data:/srv/telegram-bot-api-test/data
     ports:
       - "127.0.0.1:8081:8081"
     networks:
       - bika_net
+    command:
+      - --local
+      - --dir=/srv/telegram-bot-api-test/data
+      - --temp-dir=/srv/telegram-bot-api-test/data/temp
+      - --http-port=8081
+      - --verbosity=1
     stop_grace_period: 30s
 
 networks:
