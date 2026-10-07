@@ -212,3 +212,16 @@ class UIDIndexTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoreSafetyTests(unittest.TestCase):
+    def test_force_join_urls_must_be_non_empty(self):
+        with self.assertRaises(ValueError):
+            Settings(
+                force_join_chat_ids=(1, 2),
+                force_join_urls=("https://t.me/a", ""),
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

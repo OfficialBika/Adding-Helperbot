@@ -161,7 +161,7 @@ async def global_lookup_allowed(message: Message) -> bool:
 
 
 GLOBAL_OFF_TEXT = (
-    "⚠️ Global lookup is currently disabled here.\\n\\n"
+    "⚠️ Global lookup is currently disabled here.\n\n"
     "Please use @BikaWaifuCheatBot Main Bot for lookup."
 )
 
@@ -379,7 +379,7 @@ async def global_lookup_command(message: Message):
         await message.reply("✅ Global lookup is now <b>ON</b>.")
     elif value in {"off", "disable", "disabled", "0", "false"}:
         await set_global_lookup_enabled(False, message.from_user.id)
-        await message.reply("🔒 Global lookup is now <b>OFF</b>.\\nOnly the owner and owner-approved groups can use lookup.")
+        await message.reply("🔒 Global lookup is now <b>OFF</b>.\nOnly the owner and owner-approved groups can use lookup.")
     elif value in {"status", "state"}:
         enabled = await get_global_lookup_enabled()
         await message.reply(f"🌐 Global lookup: <b>{'ON' if enabled else 'OFF'}</b>")
