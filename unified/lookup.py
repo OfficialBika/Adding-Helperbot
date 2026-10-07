@@ -671,17 +671,19 @@ async def _download(
                     and root is not None
                     and _path_is_within(local_path, root)
                 ):
+                    read_started = time.perf_counter()
                     data = await asyncio.to_thread(local_path.read_bytes)
+                    get_file_ms = (read_started - local_started) * 1000
+                    read_ms = (time.perf_counter() - read_started) * 1000
                     total_ms = (time.perf_counter() - transfer_started) * 1000
-                    local_ms = (time.perf_counter() - local_started) * 1000
                     log.info(
-                        "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f bytes=%s mode=local_file local_ms=%.1f",
+                        "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f getfile_ms=%.1f local_read_ms=%.1f total_ms=%.1f bytes=%s mode=local_file",
                         priority,
                         wait_ms,
-                        local_ms,
+                        get_file_ms,
+                        read_ms,
                         total_ms,
                         len(data),
-                        local_ms,
                     )
                     return data
 

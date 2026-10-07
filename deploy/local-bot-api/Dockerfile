@@ -34,7 +34,7 @@ RUN apt-get update \
         libssl3t64 \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin botapi \
+    && useradd --uid 1000 --user-group --create-home --shell /usr/sbin/nologin botapi \
     && mkdir -p /var/lib/telegram-bot-api/temp \
     && chown -R 1000:1000 /var/lib/telegram-bot-api
 
