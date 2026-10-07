@@ -1,4 +1,5 @@
 import asyncio
+import io
 import tempfile
 import unittest
 import sys
@@ -16,7 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from unified.config import Settings
-from unified.lookup import _chunks, _coerce_match_score, _learn_verified_uids, _ordered_uid_sources, _schedule_uid_learning
+from unified.lookup import _chunks, _coerce_match_score, _download, _learn_verified_uids, _ordered_uid_sources, _path_is_within, _schedule_uid_learning
 import unified.uid_index as uid_index
 
 
@@ -64,6 +65,71 @@ class LookupOrderingTests(unittest.TestCase):
 
     def test_uid_learning_scheduler_is_defined(self):
         self.assertTrue(callable(_schedule_uid_learning))
+
+
+
+class LocalBotApiDirectFileTests(unittest.TestCase):
+    def test_path_is_within_accepts_children_and_rejects_outside(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child = root / "bot" / "photo.jpg"
+            outside = root.parent / "outside-photo.jpg"
+            self.assertTrue(_path_is_within(child, root))
+            self.assertFalse(_path_is_within(outside, root))
+
+    def test_download_reads_local_bot_api_file_without_http_download(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                local_file = root / "100" / "photo.jpg"
+                local_file.parent.mkdir(parents=True)
+                local_file.write_bytes(b"local-data")
+
+                bot = SimpleNamespace(
+                    get_file=AsyncMock(
+                        return_value=SimpleNamespace(file_path=str(local_file))
+                    ),
+                    download=AsyncMock(),
+                )
+                fake_settings = SimpleNamespace(
+                    bot_api_is_local=True,
+                    bot_api_local_files_root=str(root),
+                    download_timeout_seconds=20,
+                )
+                with patch("unified.lookup.settings", fake_settings):
+                    data = await _download(bot, "FILE-ID")
+
+                self.assertEqual(data, b"local-data")
+                bot.download.assert_not_awaited()
+
+        asyncio.run(run())
+
+    def test_download_falls_back_when_local_path_is_outside_allowed_root(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "allowed"
+                root.mkdir()
+                outside = Path(tmp) / "outside.jpg"
+                outside.write_bytes(b"outside")
+
+                bot = SimpleNamespace(
+                    get_file=AsyncMock(
+                        return_value=SimpleNamespace(file_path=str(outside))
+                    ),
+                    download=AsyncMock(return_value=io.BytesIO(b"http-data")),
+                )
+                fake_settings = SimpleNamespace(
+                    bot_api_is_local=True,
+                    bot_api_local_files_root=str(root),
+                    download_timeout_seconds=20,
+                )
+                with patch("unified.lookup.settings", fake_settings):
+                    data = await _download(bot, "FILE-ID")
+
+                self.assertEqual(data, b"http-data")
+                bot.download.assert_awaited_once()
+
+        asyncio.run(run())
 
 
 class ForceJoinConfigTests(unittest.TestCase):

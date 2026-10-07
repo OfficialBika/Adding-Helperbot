@@ -4,6 +4,7 @@ import asyncio
 import io
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
@@ -619,6 +620,16 @@ def _fast_photo_variant(source_message: Message):
     return min(photos, key=lambda photo: dimensions(photo)[2])
 
 
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return True only when path resolves to root itself or a child of root."""
+    try:
+        resolved_path = path.resolve()
+        resolved_root = root.resolve()
+        return resolved_path == resolved_root or resolved_root in resolved_path.parents
+    except OSError:
+        return False
+
+
 async def _download(
     bot: Bot,
     file_id: str,
@@ -640,6 +651,55 @@ async def _download(
     async with semaphore:
         wait_ms = (time.perf_counter() - wait_started) * 1000
         transfer_started = time.perf_counter()
+
+        # Local Bot API mode can return an absolute filesystem path from getFile().
+        # Reading that path directly removes the second HTTP transfer from the
+        # lookup hot path. The safety root is mandatory for direct reads; any
+        # mismatch falls back to the existing aiogram download path.
+        if getattr(settings, "bot_api_is_local", False):
+            local_started = time.perf_counter()
+            try:
+                file = await bot.get_file(file_id)
+                raw_path = str(getattr(file, "file_path", "") or "").strip()
+                local_path = Path(raw_path) if raw_path else None
+                root_raw = str(getattr(settings, "bot_api_local_files_root", "") or "").strip()
+                root = Path(root_raw).expanduser() if root_raw else None
+
+                if (
+                    local_path is not None
+                    and local_path.is_absolute()
+                    and root is not None
+                    and _path_is_within(local_path, root)
+                ):
+                    data = await asyncio.to_thread(local_path.read_bytes)
+                    total_ms = (time.perf_counter() - transfer_started) * 1000
+                    local_ms = (time.perf_counter() - local_started) * 1000
+                    log.info(
+                        "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f bytes=%s mode=local_file local_ms=%.1f",
+                        priority,
+                        wait_ms,
+                        local_ms,
+                        total_ms,
+                        len(data),
+                        local_ms,
+                    )
+                    return data
+
+                log.info(
+                    "Local Bot API file path not used file_id=%s path_absolute=%s root_configured=%s",
+                    file_id,
+                    bool(local_path and local_path.is_absolute()),
+                    bool(root),
+                )
+            except Exception as exc:
+                local_ms = (time.perf_counter() - local_started) * 1000
+                log.info(
+                    "Local Bot API direct read failed file_id=%s local_ms=%.1f error=%s; falling back to HTTP download",
+                    file_id,
+                    local_ms,
+                    exc,
+                )
+
         try:
             result = await bot.download(
                 file_id,
