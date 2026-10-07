@@ -265,12 +265,13 @@ def lookup_photo_candidates(
 ) -> list[dict[str, Any]]:
     if not phash and not dhash:
         return []
+
     try:
-        query_p = int(str(phash or ''), 16) if phash else None
+        query_p = int(str(phash or ""), 16) if phash else None
     except (TypeError, ValueError):
         query_p = None
     try:
-        query_d = int(str(dhash or ''), 16) if dhash else None
+        query_d = int(str(dhash or ""), 16) if dhash else None
     except (TypeError, ValueError):
         query_d = None
     if query_p is None and query_d is None:
@@ -279,6 +280,7 @@ def lookup_photo_candidates(
     with _LOCK:
         if not _READY:
             return []
+
         sources = [
             str(source).strip().lower()
             for source in (scope or ())
@@ -286,26 +288,76 @@ def lookup_photo_candidates(
         ] or list(_SOURCES)
         take = max(1, int(limit))
         selected: dict[str, dict[str, Any]] = {}
+
         for source in sources:
-            records = [
+            # Use the prebuilt chunk buckets to build a compact candidate set.
+            # The old path scanned every record in the source before ranking,
+            # which becomes O(N) as the media library grows.
+            candidate_keys: set[str] = set()
+
+            if phash:
+                for chunk in _chunks(phash):
+                    candidate_keys.update(
+                        _BUCKETS.get((source, "p", chunk), ())
+                    )
+
+            if dhash:
+                for chunk in _chunks(dhash):
+                    candidate_keys.update(
+                        _BUCKETS.get((source, "d", chunk), ())
+                    )
+
+            # Legacy/imported records may not have chunk fields. Keep the
+            # source-wide fallback only when no bucket candidate exists, so
+            # backward compatibility never disappears.
+            if not candidate_keys:
+                candidate_keys.update(_SOURCE_KEYS.get(source, ()))
+
+            if not candidate_keys:
+                continue
+
+            records = (
                 _RECORDS[key]
-                for key in _SOURCE_KEYS.get(source, ())
+                for key in candidate_keys
                 if key in _RECORDS
-            ]
+            )
+
             if query_p is not None:
                 for record in heapq.nsmallest(
                     take,
-                    (r for r in records if r.get('_phash_int') is not None),
-                    key=lambda r: (r['_phash_int'] ^ query_p).bit_count(),
+                    (
+                        record
+                        for record in records
+                        if record.get("_phash_int") is not None
+                    ),
+                    key=lambda record: (
+                        record["_phash_int"] ^ query_p
+                    ).bit_count(),
                 ):
                     selected[_record_key(record)] = record
+
+                # Re-create the generator for dHash after consuming the first
+                # nearest-neighbour pass.
+                records = (
+                    _RECORDS[key]
+                    for key in candidate_keys
+                    if key in _RECORDS
+                )
+
             if query_d is not None:
                 for record in heapq.nsmallest(
                     take,
-                    (r for r in records if r.get('_dhash_int') is not None),
-                    key=lambda r: (r['_dhash_int'] ^ query_d).bit_count(),
+                    (
+                        record
+                        for record in records
+                        if record.get("_dhash_int") is not None
+                    ),
+                    key=lambda record: (
+                        record["_dhash_int"] ^ query_d
+                    ).bit_count(),
                 ):
                     selected[_record_key(record)] = record
+
         return [dict(record) for record in selected.values()]
 
 
