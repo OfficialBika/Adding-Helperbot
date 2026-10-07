@@ -34,6 +34,8 @@ _PROMPT_TTL = 30.0
 # a Telegram deep-link from groups into the bot's private chat.
 _bot_username: str = ""
 _bot_username_lock = asyncio.Lock()
+_ENABLED_CACHE_TTL = 3.0
+_enabled_cache: tuple[float, bool] | None = None
 
 
 def _channels() -> tuple[tuple[int, str, str], ...]:
@@ -71,16 +73,29 @@ def _channels() -> tuple[tuple[int, str, str], ...]:
 
 
 async def _enabled() -> bool:
-    """Resolve runtime Force Join state, falling back to environment config."""
+    global _enabled_cache
+
     if not _channels():
         return False
+
+    now = time.monotonic()
+    cached = _enabled_cache
+    if cached is not None and now - cached[0] <= _ENABLED_CACHE_TTL:
+        return cached[1]
+
     try:
         doc = await db.settings.find_one({"key": "force_join:enabled"})
-        if doc is not None:
-            return bool(doc.get("enabled", False))
+        enabled = (
+            bool(doc.get("enabled", False))
+            if doc is not None
+            else bool(settings.force_join_enabled)
+        )
     except Exception:
         log.exception("FORCE_JOIN runtime state read failed; using env default")
-    return bool(settings.force_join_enabled)
+        enabled = bool(settings.force_join_enabled)
+
+    _enabled_cache = (time.monotonic(), enabled)
+    return enabled
 
 
 async def _get_bot_username(bot) -> str:
@@ -370,6 +385,7 @@ async def _prompt(message: Message, unavailable: bool = False) -> None:
 
 async def set_force_join_enabled(enabled: bool) -> bool:
     """Persist runtime Force Join state and clear verification caches."""
+    global _enabled_cache
     await db.settings.update_one(
         {"key": "force_join:enabled"},
         {
@@ -384,6 +400,7 @@ async def set_force_join_enabled(enabled: bool) -> bool:
     async with _cache_lock:
         _membership_cache.clear()
         _prompt_cache.clear()
+    _enabled_cache = (time.monotonic(), bool(enabled))
     return bool(enabled)
 
 

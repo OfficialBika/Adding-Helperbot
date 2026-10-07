@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+import time
 
 from unified.store import db
 
@@ -15,14 +16,26 @@ def _now():
 
 
 GLOBAL_SETTINGS_KEY = "global_lookup"
+_GLOBAL_LOOKUP_CACHE_TTL = 3.0
+_global_lookup_cache: tuple[float, bool] | None = None
 
 
 async def get_global_lookup_enabled() -> bool:
+    global _global_lookup_cache
+
+    now = time.monotonic()
+    cached = _global_lookup_cache
+    if cached is not None and now - cached[0] <= _GLOBAL_LOOKUP_CACHE_TTL:
+        return cached[1]
+
     doc = await db.settings.find_one({"key": GLOBAL_SETTINGS_KEY})
-    return True if doc is None else bool(doc.get("enabled", True))
+    enabled = True if doc is None else bool(doc.get("enabled", True))
+    _global_lookup_cache = (time.monotonic(), enabled)
+    return enabled
 
 
 async def set_global_lookup_enabled(enabled: bool, changed_by: int | None = None) -> None:
+    global _global_lookup_cache
     payload = {"key": GLOBAL_SETTINGS_KEY, "enabled": bool(enabled), "updated_at": _now()}
     if changed_by is not None:
         payload["updated_by"] = int(changed_by)
@@ -31,6 +44,7 @@ async def set_global_lookup_enabled(enabled: bool, changed_by: int | None = None
         {"$set": payload, "$setOnInsert": {"created_at": _now()}},
         upsert=True,
     )
+    _global_lookup_cache = (time.monotonic(), bool(enabled))
 
 
 async def ensure_auth_indexes():
