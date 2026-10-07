@@ -1,0 +1,25 @@
+services:
+  telegram-bot-api:
+    build:
+      context: .
+      args:
+        TELEGRAM_BOT_API_REF: ${TELEGRAM_BOT_API_REF:-master}
+    container_name: bika-telegram-bot-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    user: "${BOT_API_UID:-1000}:${BOT_API_GID:-1000}"
+    environment:
+      TZ: ${TZ:-Asia/Bangkok}
+    volumes:
+      - ${BOT_API_DATA_DIR:-/srv/telegram-bot-api/data}:/var/lib/telegram-bot-api
+    ports:
+      - "127.0.0.1:8081:8081"
+    networks:
+      - bika_net
+    stop_grace_period: 30s
+
+networks:
+  bika_net:
+    name: bika_net
+    driver: bridge
