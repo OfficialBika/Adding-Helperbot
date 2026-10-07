@@ -35,6 +35,7 @@ from unified.services.force_join import require_join, send_dm_verification, set_
 from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
 from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
+from unified.miniapp import register_miniapp
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -870,6 +871,7 @@ async def run():
     if webhook:
         path = settings.webhook_path if settings.webhook_path.startswith("/") else "/" + settings.webhook_path
         app = web.Application()
+        register_miniapp(app)
         app.router.add_get(
             "/healthz",
             lambda _: web.json_response({
@@ -905,6 +907,7 @@ async def run():
     else:
         await bot.delete_webhook(drop_pending_updates=True)
         app = web.Application()
+        register_miniapp(app)
         app.router.add_get(
             "/healthz",
             lambda _: web.json_response({
