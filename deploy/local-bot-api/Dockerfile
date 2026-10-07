@@ -36,10 +36,4 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=5 \
   CMD ["bash", "-c", "timeout 3 bash -c \"</dev/tcp/127.0.0.1/8081\""]
 
 ENTRYPOINT ["/usr/local/bin/telegram-bot-api"]
-CMD [
-  "--local",
-  "--dir=/var/lib/telegram-bot-api",
-  "--temp-dir=/var/lib/telegram-bot-api/temp",
-  "--http-port=8081",
-  "--verbosity=1"
-]
+CMD ["--local","--dir=/var/lib/telegram-bot-api","--temp-dir=/var/lib/telegram-bot-api/temp","--http-port=8081","--verbosity=1"]
