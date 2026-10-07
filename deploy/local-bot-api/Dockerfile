@@ -7,15 +7,7 @@ ARG TELEGRAM_BOT_API_REF=master
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        git \
-        g++ \
-        cmake \
-        make \
-        pkg-config \
-        libssl-dev \
-        zlib1g-dev \
-        gperf \
+        ca-certificates git g++ cmake make pkg-config libssl-dev zlib1g-dev gperf \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -32,10 +24,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        libssl3t64 \
-        zlib1g \
-        curl \
+        ca-certificates libssl3t64 zlib1g curl \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/lib/telegram-bot-api/temp
 
@@ -44,7 +33,7 @@ COPY --from=builder /usr/local/bin/telegram-bot-api /usr/local/bin/telegram-bot-
 EXPOSE 8081
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=5 \
-  CMD-SHELL 'timeout 3 bash -c "</dev/tcp/127.0.0.1/8081"' || exit 1
+  CMD ["bash", "-c", "timeout 3 bash -c \"</dev/tcp/127.0.0.1/8081\""]
 
 ENTRYPOINT ["/usr/local/bin/telegram-bot-api"]
 CMD [
