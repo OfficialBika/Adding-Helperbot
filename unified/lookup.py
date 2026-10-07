@@ -14,10 +14,8 @@ from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import characters
 from unified.lookup_cache import positive_uid_cache
-from unified.uid_index import lookup_global as sqlite_lookup_global
 from unified.uid_index import lookup_hot_global as ram_lookup_global
 from unified.uid_index import lookup_hot_source as ram_lookup_source
-from unified.uid_index import lookup_source as sqlite_lookup_source
 from unified.uid_index import persist_uid_mappings, remember_hot_source
 from unified.hash_index import lookup_photo_candidates, is_ready as hash_index_ready
 from utils.media import extract_media
@@ -118,51 +116,42 @@ async def _exact_find(scope: list[str] | None, uids: list[str]):
         "media_type": 1,
     }
 
-    # Catch source priority is a result-selection rule, not a reason to
-    # serialize the two independent Mongo probes. Probe each source in parallel,
-    # then deterministically prefer primary Catch over FW Catch. This removes
-    # avoidable network round-trip time while preserving the exact requested
-    # result when the same UID exists in both sources.
     ordered_scope = _ordered_uid_sources(scope or [])
-    if ordered_scope and {
-        "items_character_catcher",
-        "items_character_catcher_fw",
-    }.intersection(ordered_scope):
-        async def find_source(source: str):
-            base = {"source_key": source}
-            # New records use the indexed file_unique_ids field. Try that first
-            # because it is the hot path and avoids the slower legacy $or.
-            doc = await characters.find_one(
-                {**base, **_uid_query_new(uids)},
-                projection,
+    if ordered_scope:
+        # Stage 1: probe only the canonical indexed UID array. All requested
+        # sources are queried concurrently, then deterministic source priority
+        # is applied. The common exact-match path therefore needs one Mongo
+        # query wave even when multiple source namespaces are in scope.
+        async def find_sources(query: dict) -> dict | None:
+            results = await asyncio.gather(
+                *(
+                    characters.find_one(
+                        {"source_key": source, **query},
+                        projection,
+                    )
+                    for source in ordered_scope
+                )
             )
-            if doc:
-                return doc
-            # Legacy records are still fully supported, but only pay for this
-            # compatibility query after the fast indexed query misses.
-            return await characters.find_one(
-                {**base, **_uid_query_legacy(uids)},
-                projection,
-            )
+            for source, doc in zip(ordered_scope, results):
+                if doc:
+                    return doc
+            return None
 
-        results = await asyncio.gather(
-            *(find_source(source) for source in ordered_scope)
-        )
-        for doc in results:
-            if doc:
-                return doc
-        return None
+        doc = await find_sources(_uid_query_new(uids))
+        if doc:
+            return doc
 
-    prefix = {"source_key": {"$in": scope}} if scope else {}
-    query = {
-        **prefix,
-        "$or": [
-            _uid_query_new(uids),
-            *_uid_query_legacy(uids)["$or"],
-        ],
-    }
-    return await characters.find_one(query, projection)
+        # Compatibility stage: only probe legacy UID fields after the fast
+        # indexed field misses. Existing imported/legacy records remain usable.
+        return await find_sources({"$or": _uid_query_legacy(uids)["$or"]})
 
+    doc = await characters.find_one(_uid_query_new(uids), projection)
+    if doc:
+        return doc
+    return await characters.find_one(
+        {"$or": _uid_query_legacy(uids)["$or"]},
+        projection,
+    )
 
 def _cache_doc(
     doc: dict | None,
@@ -905,9 +894,10 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
         )
         return cached_doc, "uid_cache"
 
-    # Process-local exact UID index is the first persistent-data accelerator.
-    # It is populated from SQLite at startup and updated on every UID upsert.
-    # MongoDB remains authoritative, so RAM/SQLite misses always fall through.
+    # Process-local exact UID index is the first accelerator.
+    # It is loaded from SQLite at startup and hot-synced on every verified
+    # ingest/lookup, so a miss should go directly to Mongo rather than doing
+    # a redundant SQLite thread hop and indexed disk query.
     if collections:
         ram_doc = ram_lookup_source(collections, uids)
         if ram_doc:
@@ -919,17 +909,6 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
             )
             _cache_doc(ram_doc, uids)
             return ram_doc, "uid_ram"
-
-        sqlite_doc = await sqlite_lookup_source(collections, uids)
-        if sqlite_doc:
-            log.info(
-                "UID SQLITE HIT message=%s source=%s name=%s",
-                getattr(message, "message_id", None),
-                sqlite_doc.get("source_key"),
-                sqlite_doc.get("name"),
-            )
-            _cache_doc(sqlite_doc, uids)
-            return sqlite_doc, "uid_sqlite"
 
     log.info(
         "UID DEBUG message=%s source_message=%s media_type=%s collections=%s uids=%s",
@@ -966,19 +945,14 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
     # an exact global UID fallback. This is safe because file_unique_id is
     # Telegram's native exact media identity. Source-scoped lookup always wins.
     if allow_global_fallback:
-        # Try the RAM exact-UID index before SQLite/Mongo global recovery.
+        # The process-local exact-UID index is fully warmed from SQLite
+        # at startup and hot-synced on verified writes/lookups. A miss therefore
+        # goes directly to MongoDB instead of paying a second local-index query.
         global_docs = ram_lookup_global(uids, limit=2)
         if len(global_docs) == 1:
             _cache_doc(global_docs[0], uids, persist_index=True)
             return global_docs[0], "uid_ram_global"
-
-        # Try the persistent local exact-UID index before Mongo recovery.
-        global_docs = await sqlite_lookup_global(uids, limit=2)
-        if len(global_docs) == 1:
-            _cache_doc(global_docs[0], uids, persist_index=True)
-            return global_docs[0], "uid_sqlite_global"
         if len(global_docs) > 1:
-            # Keep the same ambiguity rules as Mongo; SQLite only accelerates.
             preferred = next(
                 (
                     doc for doc in global_docs
@@ -989,12 +963,13 @@ async def lookup_message(bot: Bot, message: Message, *, allow_global_fallback: b
             )
             if preferred:
                 _cache_doc(preferred, uids, persist_index=True)
-                return preferred, "uid_sqlite_global"
+                return preferred, "uid_ram_global"
             log.warning(
-                "UID SQLite global recovery ambiguous message=%s candidates=%s",
+                "UID RAM global recovery ambiguous message=%s candidates=%s",
                 getattr(message, "message_id", None),
                 len(global_docs),
             )
+
         global_docs = await _exact_global_candidates(uids, limit=2)
         if len(global_docs) == 1:
             log.info(
