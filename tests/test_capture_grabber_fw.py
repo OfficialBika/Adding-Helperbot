@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from unified.parser import extract_character_id, extract_name
-from services.source_resolver import grabber_source_variant, resolve_source_collection
+from unified.source_resolver import grabber_source_variant, resolve_source_collection
 from unified.store import _index_source_variant
 
 
