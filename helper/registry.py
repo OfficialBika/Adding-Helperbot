@@ -265,7 +265,7 @@ def match_config(
     if username:
         chat_values.add(_norm_source(username))
     if title:
-        chat_values.add(_norm_source(title))
+        # Titles are user-controlled; do not trust them for dynamic forward-source authorization.
 
     for config in _CACHE.values():
         if forward:
