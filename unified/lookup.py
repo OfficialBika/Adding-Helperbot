@@ -461,18 +461,21 @@ def _photo_score(query_hash, candidate: dict) -> tuple[float, int | None, int | 
     return score, p, d
 
 
-def _photo_match_identity(candidate: dict) -> tuple[str, str, str]:
-    """Return the user-visible result identity used for hash ambiguity checks.
+def _photo_match_identity(candidate: dict) -> tuple[str, str]:
+    """Return the stable user-visible identity for hash ambiguity checks.
 
-    The command controls output formatting/routing metadata; it is not a
-    different character identity. Same-source records with the same normalized
-    name and media type therefore must not create a false ambiguity merely
-    because they were stored with different output commands.
+    Hash records can legitimately vary in command, media-type label (photo vs
+    image), or invisible Unicode formatting while still representing the same
+    character. Ambiguity must compare actual identities, not storage metadata.
     """
+    import unicodedata
+
+    name = unicodedata.normalize("NFKC", str(candidate.get("name") or ""))
+    name = "".join(ch for ch in name if ch not in "\u200b\u200c\u200d\u200e\u200f\u2060\ufeff")
+    name = " ".join(name.split()).casefold()
     return (
         str(candidate.get("source_key") or "").strip().lower(),
-        str(candidate.get("name") or "").strip().casefold(),
-        str(candidate.get("media_type") or "photo").strip().lower(),
+        name,
     )
 
 
