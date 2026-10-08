@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly Local Telegram Bot API temp cleanup
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+AccuracySec=1m
+Unit=bika-telegram-bot-api-temp-cleanup.service
+
+[Install]
+WantedBy=timers.target

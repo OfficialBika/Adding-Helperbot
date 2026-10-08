@@ -4,15 +4,24 @@ import asyncio
 import io
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
 from aiogram.types import Message
 
-from services.hash_service import hamming_hex, hash_photo_lookup, hash_photo_fast, hash_video, sha256_bytes
+from services.hash_service import (
+    crop_hash_distance,
+    hamming_hex,
+    hash_photo,
+    hash_photo_lookup,
+    hash_photo_fast,
+    hash_video,
+    sha256_bytes,
+)
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
-from unified.store import characters
+from unified.store import _name_key, characters
 from unified.lookup_cache import positive_uid_cache
 from unified.uid_index import lookup_global as sqlite_lookup_global
 from unified.uid_index import lookup_hot_global as ram_lookup_global
@@ -460,6 +469,140 @@ def _photo_score(query_hash, candidate: dict) -> tuple[float, int | None, int | 
     return score, p, d
 
 
+def _photo_match_identity(candidate: dict) -> str:
+    """Return the canonical user-visible character identity for hash matching.
+
+    The same character may exist in multiple source namespaces (for example
+    Catch and FW Catch) and the stored command/media labels may differ. Those
+    records are not competing character identities for ambiguity purposes.
+    """
+    return _name_key(str(candidate.get("name") or ""))
+
+
+def _photo_source_priority(candidate: dict) -> int:
+    """Prefer the primary Catch namespace when same-name hash records tie."""
+    source = str(candidate.get("source_key") or "").strip().lower()
+    return {
+        "items_character_catcher": 0,
+        "items_character_catcher_fw": 1,
+    }.get(source, 2)
+
+
+def _accept_photo_candidates(
+    ranked: list[tuple[float, int | None, int | None, dict]],
+    *,
+    global_mode: bool = False,
+    exact_pixel_sha256: str | None = None,
+    exact_crop_hash: str | None = None,
+):
+    """Accept a strong pHash match while ignoring duplicate records of one identity.
+
+    A zero margin is normally a useful ambiguity signal. However, records that
+    resolve to the same canonical character name are not competing user-visible
+    results. Keep the best-scoring/source-priority representative of each name
+    before applying the margin rule.
+    """
+    if not ranked:
+        return None, 0.0
+
+    representatives: dict[str, tuple[float, int | None, int | None, dict]] = {}
+    duplicate_count = 0
+    for row in ranked:
+        identity = _photo_match_identity(row[3])
+        previous = representatives.get(identity)
+        if previous is None:
+            representatives[identity] = row
+        else:
+            duplicate_count += 1
+            if (
+                row[0] > previous[0]
+                or (
+                    row[0] == previous[0]
+                    and _photo_source_priority(row[3]) < _photo_source_priority(previous[3])
+                )
+            ):
+                representatives[identity] = row
+
+    unique_ranked = sorted(representatives.values(), key=lambda row: row[0], reverse=True)
+    best = unique_ranked[0]
+    second_score = unique_ranked[1][0] if len(unique_ranked) > 1 else 0.0
+    threshold = _PHASH_MIN_SCORE if global_mode else _PHASH_MIN_SCORE - 0.01
+    margin = best[0] - second_score
+    structural_ok = (
+        best[1] is not None and best[1] <= _PHASH_THRESHOLD
+    ) or (
+        best[2] is not None and best[2] <= 12
+    )
+    if not structural_ok or best[0] < threshold:
+        return None, best[0]
+
+    if duplicate_count:
+        log.info(
+            "pHash duplicate identities collapsed source=%s name=%s duplicates=%s unique=%s",
+            best[3].get("source_key"),
+            best[3].get("name"),
+            duplicate_count,
+            len(unique_ranked),
+        )
+
+    if len(unique_ranked) > 1 and margin < _PHASH_MIN_MARGIN:
+        # pHash can legitimately collide across two differently named records.
+        # Before rejecting the lookup as ambiguous, use the stronger full-image
+        # fingerprints when this is the full-resolution fallback path.
+        if exact_pixel_sha256:
+            pixel_matches = [
+                row for row in unique_ranked
+                if str(row[3].get("pixel_sha256") or "") == exact_pixel_sha256
+            ]
+            if len(pixel_matches) == 1:
+                log.info(
+                    "pHash ambiguity resolved by pixel_sha256 source=%s name=%s",
+                    pixel_matches[0][3].get("source_key"),
+                    pixel_matches[0][3].get("name"),
+                )
+                return pixel_matches[0][3], pixel_matches[0][0]
+
+        if exact_crop_hash:
+            crop_ranked = []
+            for row in unique_ranked:
+                candidate_crop = str(row[3].get("crop_hash") or "").strip()
+                if not candidate_crop:
+                    continue
+                distance = crop_hash_distance(exact_crop_hash, candidate_crop)
+                if distance is not None:
+                    crop_ranked.append((distance, row))
+            crop_ranked.sort(key=lambda item: item[0])
+            if (
+                crop_ranked
+                and crop_ranked[0][0] == 0
+                and (len(crop_ranked) == 1 or crop_ranked[1][0] > 0)
+            ):
+                row = crop_ranked[0][1]
+                log.info(
+                    "pHash ambiguity resolved by crop_hash source=%s name=%s",
+                    row[3].get("source_key"),
+                    row[3].get("name"),
+                )
+                return row[3], row[0]
+
+        log.warning(
+            "pHash ambiguous source=%s best=%s second=%s second_source=%s "
+            "margin=%.4f best_p=%s best_d=%s second_p=%s second_d=%s",
+            best[3].get("source_key"),
+            best[3].get("name"),
+            unique_ranked[1][3].get("name"),
+            unique_ranked[1][3].get("source_key"),
+            margin,
+            best[1],
+            best[2],
+            unique_ranked[1][1],
+            unique_ranked[1][2],
+        )
+        return None, best[0]
+
+    return best[3], best[0]
+
+
 async def _photo_hash_match(
     media_hash,
     scope: list[str] | None,
@@ -467,6 +610,8 @@ async def _photo_hash_match(
     global_mode: bool = False,
     use_ram: bool = True,
     use_mongo: bool = True,
+    exact_pixel_sha256: str | None = None,
+    exact_crop_hash: str | None = None,
 ):
     if not media_hash.phash and not media_hash.dhash:
         return None, 0.0
@@ -482,6 +627,8 @@ async def _photo_hash_match(
         "dhash": 1,
         "whash": 1,
         "colorhash": 1,
+        "pixel_sha256": 1,
+        "crop_hash": 1,
     }
 
     def rank_candidates(candidates):
@@ -497,29 +644,12 @@ async def _photo_hash_match(
         return ranked
 
     async def accept(ranked):
-        if not ranked:
-            return None, 0.0
-        best = ranked[0]
-        second_score = ranked[1][0] if len(ranked) > 1 else 0.0
-        threshold = _PHASH_MIN_SCORE if global_mode else _PHASH_MIN_SCORE - 0.01
-        margin = best[0] - second_score
-        structural_ok = (
-            best[1] is not None and best[1] <= _PHASH_THRESHOLD
-        ) or (
-            best[2] is not None and best[2] <= 12
+        return _accept_photo_candidates(
+            ranked,
+            global_mode=global_mode,
+            exact_pixel_sha256=exact_pixel_sha256,
+            exact_crop_hash=exact_crop_hash,
         )
-        if not structural_ok or best[0] < threshold:
-            return None, best[0]
-        if len(ranked) > 1 and margin < _PHASH_MIN_MARGIN:
-            log.warning(
-                "pHash ambiguous source=%s best=%s second=%s margin=%.4f",
-                best[3].get("source_key"),
-                best[3].get("name"),
-                ranked[1][3].get("name"),
-                margin,
-            )
-            return None, best[0]
-        return best[3], best[0]
 
     # RAM candidate index is the primary cold-hash accelerator once warmed.
     # Mongo remains the correctness/compatibility fallback.
@@ -619,6 +749,16 @@ def _fast_photo_variant(source_message: Message):
     return min(photos, key=lambda photo: dimensions(photo)[2])
 
 
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return True only when path resolves to root itself or a child of root."""
+    try:
+        resolved_path = path.resolve()
+        resolved_root = root.resolve()
+        return resolved_path == resolved_root or resolved_root in resolved_path.parents
+    except OSError:
+        return False
+
+
 async def _download(
     bot: Bot,
     file_id: str,
@@ -640,6 +780,57 @@ async def _download(
     async with semaphore:
         wait_ms = (time.perf_counter() - wait_started) * 1000
         transfer_started = time.perf_counter()
+
+        # Local Bot API mode can return an absolute filesystem path from getFile().
+        # Reading that path directly removes the second HTTP transfer from the
+        # lookup hot path. The safety root is mandatory for direct reads; any
+        # mismatch falls back to the existing aiogram download path.
+        if getattr(settings, "bot_api_is_local", False):
+            local_started = time.perf_counter()
+            try:
+                file = await bot.get_file(file_id)
+                raw_path = str(getattr(file, "file_path", "") or "").strip()
+                local_path = Path(raw_path) if raw_path else None
+                root_raw = str(getattr(settings, "bot_api_local_files_root", "") or "").strip()
+                root = Path(root_raw).expanduser() if root_raw else None
+
+                if (
+                    local_path is not None
+                    and local_path.is_absolute()
+                    and root is not None
+                    and _path_is_within(local_path, root)
+                ):
+                    read_started = time.perf_counter()
+                    data = await asyncio.to_thread(local_path.read_bytes)
+                    get_file_ms = (read_started - local_started) * 1000
+                    read_ms = (time.perf_counter() - read_started) * 1000
+                    total_ms = (time.perf_counter() - transfer_started) * 1000
+                    log.info(
+                        "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f getfile_ms=%.1f local_read_ms=%.1f total_ms=%.1f bytes=%s mode=local_file",
+                        priority,
+                        wait_ms,
+                        get_file_ms,
+                        read_ms,
+                        total_ms,
+                        len(data),
+                    )
+                    return data
+
+                log.info(
+                    "Local Bot API file path not used file_id=%s path_absolute=%s root_configured=%s",
+                    file_id,
+                    bool(local_path and local_path.is_absolute()),
+                    bool(root),
+                )
+            except Exception as exc:
+                local_ms = (time.perf_counter() - local_started) * 1000
+                log.info(
+                    "Local Bot API direct read failed file_id=%s local_ms=%.1f error=%s; falling back to HTTP download",
+                    file_id,
+                    local_ms,
+                    exc,
+                )
+
         try:
             result = await bot.download(
                 file_id,
@@ -855,6 +1046,32 @@ async def _hash_fallback(
         )
         if doc:
             return doc, f"phash:{score:.3f}"
+
+        # A pHash tie can still be resolvable from the stronger full-image
+        # fingerprints. Compute those only after the cheap perceptual pass has
+        # failed, so normal lookups keep the low-latency path.
+        if media.media_type == "photo":
+            full_fingerprint_started = time.perf_counter()
+            full_hash = await asyncio.to_thread(hash_photo, data)
+            full_fingerprint_ms = (time.perf_counter() - full_fingerprint_started) * 1000
+            log.info(
+                "HASH FINGERPRINT TIMING message=%s full_hash_ms=%.1f pixel_sha=%s crop_hash=%s",
+                getattr(source_message, "message_id", None),
+                full_fingerprint_ms,
+                bool(full_hash.pixel_sha256),
+                bool(full_hash.crop_hash),
+            )
+            fingerprint_doc, fingerprint_score = await _photo_hash_match(
+                media_hash,
+                collections,
+                global_mode=False,
+                use_ram=True,
+                use_mongo=True,
+                exact_pixel_sha256=full_hash.pixel_sha256,
+                exact_crop_hash=full_hash.crop_hash,
+            )
+            if fingerprint_doc:
+                return fingerprint_doc, f"phash_fingerprint:{fingerprint_score:.3f}"
 
         # With an explicitly allowed global/manual lookup and no source scope,
         # perform the global similarity pass only after the source-scoped pass.

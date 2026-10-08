@@ -1,0 +1,14 @@
+[Unit]
+Description=Clean stale Local Telegram Bot API temporary files
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=bika
+Group=bika
+EnvironmentFile=-/etc/bika-telegram-bot-api-cleanup.env
+ExecStart=/usr/local/bin/bika-telegram-bot-api-temp-cleanup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true

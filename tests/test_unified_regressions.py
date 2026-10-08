@@ -1,4 +1,5 @@
 import asyncio
+import io
 import tempfile
 import unittest
 import sys
@@ -16,7 +17,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from unified.config import Settings
-from unified.lookup import _chunks, _coerce_match_score, _learn_verified_uids, _ordered_uid_sources, _schedule_uid_learning
+from unified.lookup import _accept_photo_candidates, _chunks, _coerce_match_score, _download, _learn_verified_uids, _ordered_uid_sources, _path_is_within, _schedule_uid_learning
+from unified.main import auto_lookup_allowed
 import unified.uid_index as uid_index
 
 
@@ -64,6 +66,313 @@ class LookupOrderingTests(unittest.TestCase):
 
     def test_uid_learning_scheduler_is_defined(self):
         self.assertTrue(callable(_schedule_uid_learning))
+
+
+
+class PhotoHashAmbiguityTests(unittest.TestCase):
+    def test_duplicate_same_identity_does_not_trigger_ambiguity(self):
+        rows = [
+            (
+                1.000,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                1.000,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertEqual(doc["name"], "Muichiro Tokito")
+        self.assertEqual(doc["source_key"], "items_character_catcher")
+        self.assertAlmostEqual(score, 1.0)
+
+    def test_same_name_across_catch_and_fw_is_not_ambiguous(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher_fw",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertEqual(doc["name"], "Muichiro Tokito")
+        self.assertEqual(doc["source_key"], "items_character_catcher")
+        self.assertAlmostEqual(score, 0.9)
+
+    def test_exact_pixel_fingerprint_can_resolve_phash_tie(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Black Goku",
+                    "command": "/name",
+                    "media_type": "photo",
+                    "pixel_sha256": "PIXEL-BLACK",
+                    "crop_hash": "CROP-BLACK",
+                },
+            ),
+            (
+                0.899,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Son Goku",
+                    "command": "/name",
+                    "media_type": "photo",
+                    "pixel_sha256": "PIXEL-SON",
+                    "crop_hash": "CROP-SON",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(
+            rows,
+            exact_pixel_sha256="PIXEL-BLACK",
+        )
+        self.assertEqual(doc["name"], "Black Goku")
+        self.assertAlmostEqual(score, 0.9)
+
+    def test_different_identities_still_require_margin(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                0.899,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Shinobu Kocho",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertIsNone(doc)
+        self.assertAlmostEqual(score, 0.9)
+
+    def test_same_name_with_different_commands_is_not_ambiguous(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                0.899,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/husbando",
+                    "media_type": "photo",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertEqual(doc["name"], "Muichiro Tokito")
+        self.assertAlmostEqual(score, 0.9)
+
+    def test_same_name_with_unicode_and_media_label_variants_is_not_ambiguous(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                0.899,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro\u200b Tokito",
+                    "command": "/name",
+                    "media_type": "image",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertEqual(doc["name"], "Muichiro Tokito")
+        self.assertAlmostEqual(score, 0.9)
+
+
+class LocalBotApiDirectFileTests(unittest.TestCase):
+    def test_path_is_within_accepts_children_and_rejects_outside(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child = root / "bot" / "photo.jpg"
+            outside = root.parent / "outside-photo.jpg"
+            self.assertTrue(_path_is_within(child, root))
+            self.assertFalse(_path_is_within(outside, root))
+
+    def test_download_reads_local_bot_api_file_without_http_download(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                local_file = root / "100" / "photo.jpg"
+                local_file.parent.mkdir(parents=True)
+                local_file.write_bytes(b"local-data")
+
+                bot = SimpleNamespace(
+                    get_file=AsyncMock(
+                        return_value=SimpleNamespace(file_path=str(local_file))
+                    ),
+                    download=AsyncMock(),
+                )
+                fake_settings = SimpleNamespace(
+                    bot_api_is_local=True,
+                    bot_api_local_files_root=str(root),
+                    download_timeout_seconds=20,
+                )
+                with patch("unified.lookup.settings", fake_settings):
+                    data = await _download(bot, "FILE-ID")
+
+                self.assertEqual(data, b"local-data")
+                bot.download.assert_not_awaited()
+
+        asyncio.run(run())
+
+    def test_download_falls_back_when_local_path_is_outside_allowed_root(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "allowed"
+                root.mkdir()
+                outside = Path(tmp) / "outside.jpg"
+                outside.write_bytes(b"outside")
+
+                bot = SimpleNamespace(
+                    get_file=AsyncMock(
+                        return_value=SimpleNamespace(file_path=str(outside))
+                    ),
+                    download=AsyncMock(return_value=io.BytesIO(b"http-data")),
+                )
+                fake_settings = SimpleNamespace(
+                    bot_api_is_local=True,
+                    bot_api_local_files_root=str(root),
+                    download_timeout_seconds=20,
+                )
+                with patch("unified.lookup.settings", fake_settings):
+                    data = await _download(bot, "FILE-ID")
+
+                self.assertEqual(data, b"http-data")
+                bot.download.assert_awaited_once()
+
+        asyncio.run(run())
+
+
+class AutoLookupScopeTests(unittest.TestCase):
+    def test_private_chat_is_allowed_for_auto_lookup(self):
+        async def run():
+            message = SimpleNamespace(chat=SimpleNamespace(type="private", id=123))
+            self.assertTrue(await auto_lookup_allowed(message))
+
+        asyncio.run(run())
+
+    def test_public_group_is_denied_even_when_global_lookup_is_enabled(self):
+        async def run():
+            message = SimpleNamespace(chat=SimpleNamespace(type="supergroup", id=-100123))
+            find_one = AsyncMock(return_value=None)
+            fake_db = SimpleNamespace(
+                settings=SimpleNamespace(find_one=find_one),
+            )
+            with patch("unified.main.db", fake_db):
+                self.assertFalse(await auto_lookup_allowed(message))
+                find_one.assert_awaited_once_with(
+                    {"key": "gapprove:-100123"},
+                    {"enabled": 1},
+                )
+
+        asyncio.run(run())
+
+    def test_approved_group_is_allowed_for_auto_lookup(self):
+        async def run():
+            message = SimpleNamespace(chat=SimpleNamespace(type="group", id=-123))
+            fake_db = SimpleNamespace(
+                settings=SimpleNamespace(
+                    find_one=AsyncMock(return_value={"enabled": True}),
+                ),
+            )
+            with patch("unified.main.db", fake_db):
+                self.assertTrue(await auto_lookup_allowed(message))
+
+        asyncio.run(run())
+
+    def test_disabled_approval_record_denies_auto_lookup(self):
+        async def run():
+            message = SimpleNamespace(chat=SimpleNamespace(type="group", id=-123))
+            fake_db = SimpleNamespace(
+                settings=SimpleNamespace(
+                    find_one=AsyncMock(return_value={"enabled": False}),
+                ),
+            )
+            with patch("unified.main.db", fake_db):
+                self.assertFalse(await auto_lookup_allowed(message))
+
+        asyncio.run(run())
 
 
 class ForceJoinConfigTests(unittest.TestCase):

@@ -147,9 +147,10 @@ async def has_admin_access(message: Message) -> bool:
 
 
 async def global_lookup_allowed(message: Message) -> bool:
-    # Private-chat auto/manual lookup is independent of public-group Global mode.
-    # Global OFF only restricts public groups; Force Join is still checked by
-    # the lookup handlers themselves.
+    # Manual lookup keeps the existing Global mode semantics.
+    # Private chats are always allowed; public groups are allowed when Global
+    # mode is on, the owner is using the bot, or that specific group is
+    # explicitly approved with /gapprove.
     if message.chat.type == "private":
         return True
     if await get_global_lookup_enabled():
@@ -157,6 +158,24 @@ async def global_lookup_allowed(message: Message) -> bool:
     if owner(message):
         return True
     doc = await db.settings.find_one({"key": f"gapprove:{int(message.chat.id)}"})
+    return bool(doc and doc.get("enabled", True))
+
+
+async def auto_lookup_allowed(message: Message) -> bool:
+    """Auto lookup is restricted to DM and explicitly approved groups.
+
+    The owner/global switch must never turn auto lookup on across every public
+    group. Only /gapprove records grant the group-specific auto-lookup access.
+    """
+    chat_type = str(getattr(getattr(message, "chat", None), "type", "") or "")
+    if chat_type == "private":
+        return True
+    if chat_type not in {"group", "supergroup"}:
+        return False
+    doc = await db.settings.find_one(
+        {"key": f"gapprove:{int(message.chat.id)}"},
+        {"enabled": 1},
+    )
     return bool(doc and doc.get("enabled", True))
 
 
@@ -590,8 +609,14 @@ async def adding_ingest(message: Message):
     F.func(is_media),
 )
 async def lookup_media(message: Message):
-    if not await global_lookup_allowed(message):
-        await message.reply(GLOBAL_OFF_TEXT)
+    # Auto lookup is intentionally narrower than manual lookup: only DMs and
+    # groups explicitly approved through /gapprove may trigger on media.
+    if not await auto_lookup_allowed(message):
+        log.info(
+            "AUTO LOOKUP SKIP chat=%s type=%s reason=not_dm_or_approved_group",
+            getattr(message.chat, "id", None),
+            getattr(message.chat, "type", None),
+        )
         return
     if not await require_join(message):
         return
