@@ -152,8 +152,7 @@ async def ingest_message(
 
     media_info = _media_info(target)
     media_type = media_info["media_type"] if media_info else "metadata"
-    text = "
-".join(
+    text = "\n".join(
         value
         for value in (
             getattr(target, "caption", None),
