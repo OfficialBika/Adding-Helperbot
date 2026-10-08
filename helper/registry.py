@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
-from parsers import PARSER_MAP
+from parsers import PARSERS, PARSER_MAP
 from unified.store import db
 
 log_name = "helper-registry"
@@ -149,18 +149,40 @@ def parse_addnewbot(text: str) -> AddedBotConfig:
 
     values: dict[str, str] = {}
     parser_values: dict[int, str] = {}
+    active_parser_index: int | None = None
+    active_parser_lines: list[str] = []
+
+    def flush_parser_sample() -> None:
+        nonlocal active_parser_index, active_parser_lines
+        if active_parser_index is not None:
+            sample = "\n".join(active_parser_lines).strip()
+            if sample:
+                parser_values[active_parser_index] = sample
+        active_parser_index = None
+        active_parser_lines = []
 
     for line in lines[1:]:
         match = FIELD_RE.match(line)
-        if not match:
+        if match:
+            key = re.sub(r"\s+", " ", match.group(1).strip().lower())
+            parser_match = PARSER_FIELD_RE.match(key)
+            if parser_match:
+                flush_parser_sample()
+                active_parser_index = int(parser_match.group(1))
+                value = match.group(2).strip()
+                if value:
+                    active_parser_lines.append(value)
+                continue
+
+        if active_parser_index is not None:
+            # Everything until the next ParserN line belongs to this sample.
+            active_parser_lines.append(line)
             continue
-        key = re.sub(r"\s+", " ", match.group(1).strip().lower())
-        value = match.group(2).strip()
-        parser_match = PARSER_FIELD_RE.match(key)
-        if parser_match:
-            parser_values[int(parser_match.group(1))] = value
-        else:
-            values[key] = value
+
+        if match:
+            values[key] = match.group(2).strip()
+
+    flush_parser_sample()
 
     bot = head[1]
     command = values.get("cmd") or values.get("command")
@@ -196,13 +218,44 @@ def parse_addnewbot(text: str) -> AddedBotConfig:
     if not parsers:
         parsers = ("generic",)
 
-    canonical_parsers = tuple(PARSER_ALIASES.get(name, name) for name in parsers)
-    unknown = [name for name in canonical_parsers if name not in PARSER_MAP]
-    if unknown:
+    def resolve_parser_spec(spec: str) -> str:
+        normalized = _norm(spec)
+        direct = PARSER_ALIASES.get(normalized, normalized)
+        if direct in PARSER_MAP:
+            return direct
+
+        # ParserN may contain a full multiline example instead of a parser
+        # alias. Identify which existing common parser understands that sample.
+        best_name = ""
+        best_score = -1.0
+        best_fields = -1
+        for parser in PARSERS:
+            try:
+                candidate = parser.parse(spec)
+            except Exception:
+                continue
+            if candidate is None or not candidate.is_valid:
+                continue
+            score = float(candidate.confidence)
+            fields = len(candidate.matched_fields)
+            if (score, fields) > (best_score, best_fields):
+                best_name = parser.name
+                best_score = score
+                best_fields = fields
+
+        if best_name and best_score >= 0.70:
+            return best_name
+
         available = ", ".join(PARSER_ALIASES)
+        preview = re.sub(r"\s+", " ", spec).strip()
+        if len(preview) > 80:
+            preview = preview[:77] + "..."
         raise ValueError(
-            f"Unknown parser(s): {', '.join(unknown)}. Available aliases: {available}"
+            f"Parser sample could not be recognized: {preview!r}. "
+            f"Use a parser alias or a valid sample. Available aliases: {available}"
         )
+
+    canonical_parsers = tuple(resolve_parser_spec(item) for item in parsers)
 
     normalized_commands = tuple(_command(item) for item in commands)
     if len(set(normalized_commands)) != len(normalized_commands):
