@@ -62,7 +62,11 @@ def is_allowed_source(message: Any) -> bool:
         if origin_values & {_norm(x) for x in BOT_SOURCE_COLLECTION}:
             return True
 
-    for user in (_forwarded_source_user(message), getattr(message, "via_bot", None)):
+    for user in (
+        _forwarded_source_user(message),
+        getattr(message, "via_bot", None),
+        getattr(message, "from_user", None) if getattr(getattr(message, "from_user", None), "is_bot", False) else None,
+    ):
         if user is None:
             continue
         values = _user_values(user)
