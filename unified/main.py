@@ -21,6 +21,7 @@ from helper.runtime import HelperUserbot
 from unified.auth import ensure_auth_indexes, grant, is_authorized, list_authorized, revoke
 from unified.config import settings
 from unified.ingest import ingest_message
+from helper.registry import ensure_registry_indexes, load_registry
 from unified.source_resolver import resolve_source_collection
 from unified.source_whitelist import is_allowed_source
 from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
@@ -282,7 +283,7 @@ async def adding_ingest(message: Message):
 
 HELPER_COMMANDS: set[str] = {
     "helper", "addhelper", "starthelper", "stophelper", "resethelperprogress",
-    "startfwcatchbotvd",
+    "startfwcatchbotvd", "addnewbot",
 }
 for _, (_, starts, resumes) in SOURCES.items():
     HELPER_COMMANDS.update(cmd.lstrip("/") for cmd in (*starts, *resumes))
@@ -295,6 +296,16 @@ for key in FORWARD_SOURCES:
 
 @router.message(Command(*sorted(HELPER_COMMANDS)))
 async def helper_commands(message: Message):
+    if not await has_admin_access(message):
+        return
+    await helper_manager.handle_command(message)
+
+
+@router.message(
+    F.chat.id == settings.adding_chat_id,
+    F.text.regexp(r"^/[A-Za-z0-9_]+(?:\\s|$)")
+)
+async def dynamic_helper_commands(message: Message):
     if not await has_admin_access(message):
         return
     await helper_manager.handle_command(message)
@@ -324,6 +335,9 @@ async def run():
 
     await ensure_indexes()
     await ensure_auth_indexes()
+    await ensure_registry_indexes()
+    registered_bots = await load_registry()
+    log.info("Dynamic helper bot registry loaded: %s bots", registered_bots)
     await helper_userbot.start()
     helper_manager.bind()
 
