@@ -13,7 +13,7 @@ from aiogram.types import Message
 from services.hash_service import hamming_hex, hash_photo_lookup, hash_photo_fast, hash_video, sha256_bytes
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
-from unified.store import characters
+from unified.store import _name_key, characters
 from unified.lookup_cache import positive_uid_cache
 from unified.uid_index import lookup_global as sqlite_lookup_global
 from unified.uid_index import lookup_hot_global as ram_lookup_global
@@ -468,11 +468,7 @@ def _photo_match_identity(candidate: dict) -> tuple[str, str]:
     image), or invisible Unicode formatting while still representing the same
     character. Ambiguity must compare actual identities, not storage metadata.
     """
-    import unicodedata
-
-    name = unicodedata.normalize("NFKC", str(candidate.get("name") or ""))
-    name = "".join(ch for ch in name if ch not in "\u200b\u200c\u200d\u200e\u200f\u2060\ufeff")
-    name = " ".join(name.split()).casefold()
+    name = _name_key(str(candidate.get("name") or ""))
     return (
         str(candidate.get("source_key") or "").strip().lower(),
         name,
