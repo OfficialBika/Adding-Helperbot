@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - main
+      - unified-adding-namebotv3
       - "feature/**"
       - "fix/**"
       - "optimize/**"
   pull_request:
     branches:
       - main
+      - unified-adding-namebotv3
   workflow_dispatch:
 
 permissions:
@@ -24,38 +26,30 @@ jobs:
     name: Python validation
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python 3.14.4
         uses: actions/setup-python@v5
         with:
           python-version: "3.14.4"
           cache: pip
           cache-dependency-path: requirements.txt
-
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
-
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-
       - name: Compile all Python files
         run: python -m compileall -q .
-
       - name: Verify installed dependency consistency
         run: python -m pip check
-
       - name: Run regression tests
         env:
-          PYTHONPATH: namebotv3:.
+          PYTHONPATH: .
           MONGO_URI: mongodb://127.0.0.1:27017
           DB_NAME: ci_test
         run: python -m unittest discover -s tests -p "test_*.py" -v
-
-      - name: Verify runtime and native imports
+      - name: Verify adding-only runtime imports
         run: |
           python --version
-          python -c "import asyncio; asyncio.set_event_loop(asyncio.new_event_loop()); import aiogram, aiohttp, numpy, cv2, PIL, imagehash, pymongo, motor, pyrogram; print('Python 3.14 runtime imports OK')"
+          python -c "import aiogram, aiohttp, pymongo, motor, pyrogram; import unified.main; print('Adding-only runtime imports OK')"
