@@ -255,7 +255,9 @@ def parse_addnewbot(text: str) -> AddedBotConfig:
             f"Use a parser alias or a valid sample. Available aliases: {available}"
         )
 
-    canonical_parsers = tuple(resolve_parser_spec(item) for item in parsers)
+    canonical_parsers = tuple(
+        dict.fromkeys(resolve_parser_spec(item) for item in parsers)
+    )
 
     normalized_commands = tuple(_command(item) for item in commands)
     if len(set(normalized_commands)) != len(normalized_commands):
@@ -267,7 +269,7 @@ def parse_addnewbot(text: str) -> AddedBotConfig:
         inline_source=inline_source,
         forward_source=forward_source,
         commands=normalized_commands,
-        parsers=parsers,
+        parsers=canonical_parsers,
     )
 
 
