@@ -11,6 +11,7 @@ log = logging.getLogger("unified-parser")
 
 MIN_CONFIDENCE = 0.70
 SOURCE_BOOST = 0.055
+PARSER_PREFERENCE_BOOST = 0.04
 
 
 def _combined_text(text: str | None) -> str:
@@ -28,6 +29,7 @@ def parse_candidates(
 
     candidates: list[ParsedCharacter] = []
     preferred_names = parser_names_for_source(source_key)
+    preferred_rank = {name: index for index, name in enumerate(preferred_names)}
     if preferred_names:
         preferred = [PARSER_MAP[name] for name in preferred_names if name in PARSER_MAP]
         preferred_set = {parser.name for parser in preferred}
@@ -49,6 +51,10 @@ def parse_candidates(
         score = candidate.confidence
         if source_key and source_key in getattr(parser, "source_keys", frozenset()):
             score = min(1.0, score + SOURCE_BOOST)
+
+        rank = preferred_rank.get(parser.name)
+        if rank is not None:
+            score = min(1.0, score + max(0.0, PARSER_PREFERENCE_BOOST - rank * 0.0125))
 
         candidate = replace(candidate, confidence=score)
         if candidate.confidence >= MIN_CONFIDENCE:
