@@ -1,15 +1,34 @@
 """Takers (/take) parser."""
-import re
-from .base import ParsedCharacter
 
-def parse(text: str) -> ParsedCharacter:
-    text = text or ""
-    n = re.search(r"Name\s*:\s*(.+)", text, re.I)
-    r = re.search(r"Rarity\s*:\s*(.+)", text, re.I)
-    i = re.search(r"Character\s*ID\s*:\s*(\d+)", text, re.I)
-    return ParsedCharacter(
-        name=n.group(1).strip() if n else None,
-        id=int(i.group(1)) if i else None,
-        rarity=r.group(1).strip() if r else None,
-        raw=text,
-    )
+from __future__ import annotations
+
+import re
+
+from .base import CharacterParser, ParsedCharacter, clean_value, norm
+
+
+class TakersParser(CharacterParser):
+    name = "takers"
+    priority = 92
+    source_keys = frozenset({"items_takers_character"})
+
+    @classmethod
+    def parse(cls, text: str) -> ParsedCharacter | None:
+        raw = norm(text)
+        if not raw:
+            return None
+
+        name = re.search(r"(?im)^\s*Name\s*[:：-]\s*(.+?)\s*$", raw)
+        cid = re.search(r"(?im)^\s*Character\s*ID\s*[:：-]\s*(\d+)\s*$", raw)
+        if not name or not cid:
+            return None
+
+        rarity = re.search(r"(?im)^\s*Rarity\s*[:：-]\s*(.+?)\s*$", raw)
+        return cls.make(
+            name=name.group(1),
+            id=int(cid.group(1)),
+            rarity=clean_value(rarity.group(1)) if rarity else None,
+            confidence=0.98,
+            matched_fields=("name", "id", "rarity") if rarity else ("name", "id"),
+            raw=raw,
+        )
