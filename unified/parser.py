@@ -65,9 +65,10 @@ def _parse_with_parsers(
         if source_key and source_key in getattr(parser, "source_keys", frozenset()):
             score = min(1.0, score + SOURCE_BOOST)
 
-        rank = preferred_rank.get(parser.name)
-        if rank is not None:
-            score = min(1.0, score + max(0.0, PARSER_PREFERENCE_BOOST - rank * 0.0125))
+        if ordered_preference:
+            rank = preferred_rank.get(parser.name)
+            if rank is not None:
+                score = min(1.0, score + max(0.0, PARSER_PREFERENCE_BOOST - rank * 0.0125))
 
         candidate = replace(candidate, confidence=score)
         if candidate.confidence >= MIN_CONFIDENCE:
