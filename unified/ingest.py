@@ -5,6 +5,7 @@ import logging
 from aiogram import Bot
 from aiogram.types import Message
 
+from helper.registry import match_config
 from unified.parser import parse_message
 from unified.source_resolver import (
     BOT_SOURCE_COLLECTION,
@@ -102,6 +103,15 @@ def _configured_bot_sender(target: Message) -> bool:
     user = getattr(target, "from_user", None)
     if user is None or not getattr(user, "is_bot", False):
         return False
+
+    dynamic = match_config(
+        username=getattr(user, "username", None),
+        user_id=getattr(user, "id", None),
+        forward=False,
+    )
+    if dynamic:
+        return True
+
     username = str(getattr(user, "username", "") or "").strip().lower()
     if username and f"@{username.lstrip('@')}" in BOT_SOURCE_COLLECTION:
         return True
