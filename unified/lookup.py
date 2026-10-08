@@ -10,7 +10,15 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import Message
 
-from services.hash_service import hamming_hex, hash_photo_lookup, hash_photo_fast, hash_video, sha256_bytes
+from services.hash_service import (
+    crop_hash_distance,
+    hamming_hex,
+    hash_photo,
+    hash_photo_lookup,
+    hash_photo_fast,
+    hash_video,
+    sha256_bytes,
+)
 from services.source_resolver import resolve_lookup_scope
 from unified.config import settings
 from unified.store import _name_key, characters
@@ -536,6 +544,45 @@ def _accept_photo_candidates(
         )
 
     if len(unique_ranked) > 1 and margin < _PHASH_MIN_MARGIN:
+        # pHash can legitimately collide across two differently named records.
+        # Before rejecting the lookup as ambiguous, use the stronger full-image
+        # fingerprints when this is the full-resolution fallback path.
+        if exact_pixel_sha256:
+            pixel_matches = [
+                row for row in unique_ranked
+                if str(row[3].get("pixel_sha256") or "") == exact_pixel_sha256
+            ]
+            if len(pixel_matches) == 1:
+                log.info(
+                    "pHash ambiguity resolved by pixel_sha256 source=%s name=%s",
+                    pixel_matches[0][3].get("source_key"),
+                    pixel_matches[0][3].get("name"),
+                )
+                return pixel_matches[0][3], pixel_matches[0][0]
+
+        if exact_crop_hash:
+            crop_ranked = []
+            for row in unique_ranked:
+                candidate_crop = str(row[3].get("crop_hash") or "").strip()
+                if not candidate_crop:
+                    continue
+                distance = crop_hash_distance(exact_crop_hash, candidate_crop)
+                if distance is not None:
+                    crop_ranked.append((distance, row))
+            crop_ranked.sort(key=lambda item: item[0])
+            if (
+                crop_ranked
+                and crop_ranked[0][0] == 0
+                and (len(crop_ranked) == 1 or crop_ranked[1][0] > 0)
+            ):
+                row = crop_ranked[0][1]
+                log.info(
+                    "pHash ambiguity resolved by crop_hash source=%s name=%s",
+                    row[3].get("source_key"),
+                    row[3].get("name"),
+                )
+                return row[3], row[0]
+
         log.warning(
             "pHash ambiguous source=%s best=%s second=%s second_source=%s "
             "margin=%.4f best_p=%s best_d=%s second_p=%s second_d=%s",
@@ -561,6 +608,8 @@ async def _photo_hash_match(
     global_mode: bool = False,
     use_ram: bool = True,
     use_mongo: bool = True,
+    exact_pixel_sha256: str | None = None,
+    exact_crop_hash: str | None = None,
 ):
     if not media_hash.phash and not media_hash.dhash:
         return None, 0.0
@@ -576,6 +625,8 @@ async def _photo_hash_match(
         "dhash": 1,
         "whash": 1,
         "colorhash": 1,
+        "pixel_sha256": 1,
+        "crop_hash": 1,
     }
 
     def rank_candidates(candidates):
@@ -988,6 +1039,32 @@ async def _hash_fallback(
         )
         if doc:
             return doc, f"phash:{score:.3f}"
+
+        # A pHash tie can still be resolvable from the stronger full-image
+        # fingerprints. Compute those only after the cheap perceptual pass has
+        # failed, so normal lookups keep the low-latency path.
+        if media.media_type == "photo":
+            full_fingerprint_started = time.perf_counter()
+            full_hash = await asyncio.to_thread(hash_photo, data)
+            full_fingerprint_ms = (time.perf_counter() - full_fingerprint_started) * 1000
+            log.info(
+                "HASH FINGERPRINT TIMING message=%s full_hash_ms=%.1f pixel_sha=%s crop_hash=%s",
+                getattr(source_message, "message_id", None),
+                full_fingerprint_ms,
+                bool(full_hash.pixel_sha256),
+                bool(full_hash.crop_hash),
+            )
+            fingerprint_doc, fingerprint_score = await _photo_hash_match(
+                media_hash,
+                collections,
+                global_mode=False,
+                use_ram=True,
+                use_mongo=True,
+                exact_pixel_sha256=full_hash.pixel_sha256,
+                exact_crop_hash=full_hash.crop_hash,
+            )
+            if fingerprint_doc:
+                return fingerprint_doc, f"phash_fingerprint:{fingerprint_score:.3f}"
 
         # With an explicitly allowed global/manual lookup and no source scope,
         # perform the global similarity pass only after the source-scoped pass.
