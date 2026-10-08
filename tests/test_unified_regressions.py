@@ -130,7 +130,7 @@ class PhotoHashAmbiguityTests(unittest.TestCase):
         self.assertIsNone(doc)
         self.assertAlmostEqual(score, 0.9)
 
-    def test_same_name_but_different_command_is_still_ambiguous(self):
+    def test_same_name_with_different_commands_is_not_ambiguous(self):
         rows = [
             (
                 0.900,
@@ -157,7 +157,7 @@ class PhotoHashAmbiguityTests(unittest.TestCase):
         ]
 
         doc, score = _accept_photo_candidates(rows)
-        self.assertIsNone(doc)
+        self.assertEqual(doc["name"], "Muichiro Tokito")
         self.assertAlmostEqual(score, 0.9)
 
 
