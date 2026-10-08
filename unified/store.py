@@ -97,11 +97,21 @@ async def ensure_indexes():
         "idx_global_video_signature", "uq_source_character_id",
         "uq_grabber_source_variant_character_id",
     }
-    for name in obsolete:
+    try:
+        existing_indexes = {
+            str(item["name"])
+            async for item in characters.list_indexes()
+            if item.get("name")
+        }
+    except Exception:
+        existing_indexes = set()
+
+    for name in obsolete & existing_indexes:
         try:
             await characters.drop_index(name)
         except Exception:
-            pass
+            log.warning("failed to drop obsolete index name=%s", name)
+
     for entry in required:
         keys, name = entry[:2]
         options = entry[2] if len(entry) > 2 else {}
