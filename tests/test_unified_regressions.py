@@ -8,7 +8,7 @@ os.environ.setdefault("MONGO_URI", "mongodb://127.0.0.1:27017")
 os.environ.setdefault("DB_NAME", "ci_test")
 
 from unified.ingest import _media_info
-from unified.parser import extract_character_id, extract_name
+from unified.parser import extract_character_id, extract_name, parse_candidates, parse_message, parser_names
 from unified.source_resolver import (
     grabber_source_variant,
     output_command_from_message,
