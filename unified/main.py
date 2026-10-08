@@ -76,8 +76,8 @@ def format_ingest_notice(result: dict) -> str:
     status = str(result.get("status") or "").lower()
     doc = result.get("document") or {}
     name = _esc(doc.get("name") or "Unknown")
-    character_id = _esc(doc.get("character_id") or "—")
-    source = _esc(doc.get("source_key") or "unknown")
+    character_id = _esc(doc.get("character_id") or result.get("character_id") or "—")
+    source = _esc(doc.get("source_key") or result.get("source_key") or "unknown")
     command = _esc(doc.get("command") or "/name")
     media_type = _esc(doc.get("media_type") or "unknown")
 
