@@ -183,6 +183,10 @@ def parse_addnewbot(text: str) -> AddedBotConfig:
         raise ValueError("Missing inlinesource - @botusername")
     if not forward_source:
         raise ValueError("Missing Forwardsource - @channel_or_chat_id")
+    if not re.match(r"^(?:@[A-Za-z0-9_]{3,}|-100\\d{5,})$", forward_source.strip()):
+        raise ValueError("Forwardsource must be @channelusername or a Telegram chat ID like -1001234567890")
+    if not re.match(r"^(?:@[A-Za-z0-9_]{3,}|-100\\d{5,})$", inline_source.strip()):
+        raise ValueError("inlinesource must be @botusername or a Telegram bot chat ID")
     if not commands:
         raise ValueError("Missing commands - start,resume,startfw,resumefw")
     if len(commands) > 8:
@@ -275,6 +279,7 @@ def match_config(
 async def ensure_registry_indexes() -> None:
     await collection.create_index("key", unique=True, name="uq_helper_bot_key")
     await collection.create_index("bot", unique=True, name="uq_helper_bot_username")
+    await collection.create_index("commands", unique=True, name="uq_helper_bot_command")
 
 
 async def load_registry() -> int:
