@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from unified.config import Settings
-from unified.lookup import _chunks, _coerce_match_score, _download, _learn_verified_uids, _ordered_uid_sources, _path_is_within, _schedule_uid_learning
+from unified.lookup import _accept_photo_candidates, _chunks, _coerce_match_score, _download, _learn_verified_uids, _ordered_uid_sources, _path_is_within, _schedule_uid_learning
 import unified.uid_index as uid_index
 
 
@@ -66,6 +66,99 @@ class LookupOrderingTests(unittest.TestCase):
     def test_uid_learning_scheduler_is_defined(self):
         self.assertTrue(callable(_schedule_uid_learning))
 
+
+
+class PhotoHashAmbiguityTests(unittest.TestCase):
+    def test_duplicate_same_identity_does_not_trigger_ambiguity(self):
+        rows = [
+            (
+                1.000,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                1.000,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertEqual(doc["name"], "Muichiro Tokito")
+        self.assertEqual(doc["source_key"], "items_character_catcher")
+        self.assertAlmostEqual(score, 1.0)
+
+    def test_different_identities_still_require_margin(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                0.899,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Shinobu Kocho",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertIsNone(doc)
+        self.assertAlmostEqual(score, 0.9)
+
+    def test_same_name_but_different_command_is_still_ambiguous(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                0.899,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/husbando",
+                    "media_type": "photo",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertIsNone(doc)
+        self.assertAlmostEqual(score, 0.9)
 
 
 class LocalBotApiDirectFileTests(unittest.TestCase):
