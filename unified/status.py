@@ -8,35 +8,16 @@ from aiogram.types import Message
 
 from unified.config import settings
 from unified.store import characters
-from unified.uid_index import get_stats as get_uid_index_stats
 
 PROCESS_STARTED_AT = time.time()
 
 
 class RuntimeMetrics:
     def __init__(self) -> None:
-        self.lookup_total = 0
-        self.lookup_hits = 0
-        self.lookup_misses = 0
-        self.lookup_errors = 0
-        self.lookup_ema_ms = 0.0
         self.ingest_total = 0
         self.ingest_saved = 0
         self.ingest_updated = 0
-
-    def record_lookup(self, elapsed_ms: float, *, hit: bool, error: bool = False) -> None:
-        self.lookup_total += 1
-        if error:
-            self.lookup_errors += 1
-        elif hit:
-            self.lookup_hits += 1
-        else:
-            self.lookup_misses += 1
-        self.lookup_ema_ms = (
-            elapsed_ms
-            if self.lookup_ema_ms == 0
-            else 0.15 * elapsed_ms + 0.85 * self.lookup_ema_ms
-        )
+        self.ingest_skipped = 0
 
     def record_ingest(self, status: str | None) -> None:
         self.ingest_total += 1
@@ -45,17 +26,15 @@ class RuntimeMetrics:
             self.ingest_saved += 1
         elif value == "updated":
             self.ingest_updated += 1
+        else:
+            self.ingest_skipped += 1
 
-    def snapshot(self) -> dict[str, int | float]:
+    def snapshot(self) -> dict[str, int]:
         return {
-            "lookup_total": self.lookup_total,
-            "lookup_hits": self.lookup_hits,
-            "lookup_misses": self.lookup_misses,
-            "lookup_errors": self.lookup_errors,
-            "lookup_ema_ms": self.lookup_ema_ms,
             "ingest_total": self.ingest_total,
             "ingest_saved": self.ingest_saved,
             "ingest_updated": self.ingest_updated,
+            "ingest_skipped": self.ingest_skipped,
         }
 
 
@@ -89,20 +68,20 @@ def _uptime() -> str:
 
 def _ram_info() -> tuple[str, str, str]:
     try:
-        data: dict[str, int] = {}
+        values: dict[str, int] = {}
         with open("/proc/meminfo", "r", encoding="utf-8") as handle:
             for line in handle:
                 parts = line.split()
                 if len(parts) >= 2:
-                    data[parts[0].rstrip(":")] = int(parts[1]) * 1024
-        total = data.get("MemTotal", 0)
-        available = data.get("MemAvailable", 0)
+                    values[parts[0].rstrip(":")] = int(parts[1]) * 1024
+        total = values.get("MemTotal", 0)
+        available = values.get("MemAvailable", 0)
         used = max(total - available, 0)
-
-        def fmt(value: int) -> str:
-            return f"{value / (1024 ** 3):.2f} GB"
-
-        return fmt(used), fmt(available), fmt(total)
+        return (
+            f"{used / (1024 ** 3):.2f} GB",
+            f"{available / (1024 ** 3):.2f} GB",
+            f"{total / (1024 ** 3):.2f} GB",
+        )
     except Exception:
         return "N/A", "N/A", "N/A"
 
@@ -126,12 +105,9 @@ async def _ping_bot(message: Message) -> float | None:
 
 
 async def build_ping_text(message: Message) -> str:
-    db_ping, bot_ping = await asyncio.gather(
-        _ping_db(),
-        _ping_bot(message),
-    )
+    db_ping, bot_ping = await asyncio.gather(_ping_db(), _ping_bot(message))
     return (
-        "🏓 <b>BIKA PING</b>\n"
+        "🏓 <b>BIKA ADDING PING</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"🤖 Bot API : <code>{_fmt_ms(bot_ping)}</code>\n"
         f"🍃 MongoDB : <code>{_fmt_ms(db_ping)}</code>\n"
@@ -140,114 +116,67 @@ async def build_ping_text(message: Message) -> str:
     )
 
 
-async def build_status_text(message: Message) -> str:
-    async def safe_count(query: dict) -> int:
+async def build_status_text(message: Message, *, helper_state: str) -> str:
+    async def count(query: dict) -> int:
         try:
             return await characters.count_documents(query)
         except Exception:
             return 0
 
-    async def safe_sources() -> list[Any]:
+    async def sources() -> list[Any]:
         try:
             return await characters.distinct("source_key")
         except Exception:
             return []
 
-    count, sources, photo_count, video_count, animation_count, document_count, db_ping = await asyncio.gather(
-        safe_count({}),
-        safe_sources(),
-        safe_count({"media_type": "photo"}),
-        safe_count({"media_type": "video"}),
-        safe_count({"media_type": "animation"}),
-        safe_count({"media_type": "document"}),
+    total, source_list, photos, videos, db_ping = await asyncio.gather(
+        count({}),
+        sources(),
+        count({"media_type": "photo"}),
+        count({"media_type": "video"}),
         _ping_db(),
     )
-    media_counts = {
-        "photo": photo_count,
-        "video": video_count,
-        "animation": animation_count,
-        "document": document_count,
-    }
-    try:
-        uid_stats = await get_uid_index_stats()
-        uid_index_state = "READY"
-    except Exception:
-        uid_stats = {"sqlite_rows": 0, "ram_entries": 0}
-        uid_index_state = "DEGRADED"
-    snap = metrics.snapshot()
-    lookup_state = "READY" if db_ping is not None else "DEGRADED"
-
     return (
-        "♻ <b>ADDING & HELPER STATUS</b>\n"
+        "♻ <b>BIKA ADDING HELPER STATUS</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"‣ Service : <code>ONLINE</code>\n"
+        "‣ Service : <code>ONLINE</code>\n"
         f"‣ Database : <code>{settings.db_name}</code>\n"
-        f"‣ MongoDB : <code>{lookup_state}</code>\n"
+        f"‣ MongoDB : <code>{'READY' if db_ping is not None else 'DEGRADED'}</code>\n"
         f"‣ Adding Group : <code>{settings.adding_chat_id}</code>\n"
-        f"‣ Total Media : <code>{_fmt_int(count)}</code>\n"
-        f"‣ Sources : <code>{_fmt_int(len(sources))}</code>\n"
-        f"‣ Photos : <code>{_fmt_int(media_counts['photo'])}</code>\n"
-        f"‣ Videos : <code>{_fmt_int(media_counts['video'])}</code>\n"
-        f"‣ GIF/Animation : <code>{_fmt_int(media_counts['animation'])}</code>\n\n"
-        "⚡ <b>LOOKUP ENGINE</b>\n"
-        f"‣ Exact UID : <code>ENABLED</code>\n"
-        f"‣ Global UID Fallback : <code>{'ENABLED' if settings.v3_global_exact_fallback else 'DISABLED'}</code>\n"
-        f"‣ Hash Fallback : <code>ENABLED</code>\n"
-        f"‣ UID Index : <code>{uid_index_state}</code>\n"
-        f"‣ UID SQLite Rows : <code>{_fmt_int(uid_stats['sqlite_rows'])}</code>\n"
-        f"‣ UID RAM Entries : <code>{_fmt_int(uid_stats['ram_entries'])}</code>\n"
-        f"‣ Lookup EMA : <code>{_fmt_ms(float(snap['lookup_ema_ms'])) if snap['lookup_total'] else 'N/A'}</code>\n"
-        f"‣ Lookup Hits : <code>{_fmt_int(snap['lookup_hits'])}</code>\n"
-        f"‣ Lookup Misses : <code>{_fmt_int(snap['lookup_misses'])}</code>\n\n"
+        f"‣ Total Records : <code>{_fmt_int(total)}</code>\n"
+        f"‣ Sources : <code>{_fmt_int(len(source_list))}</code>\n"
+        f"‣ Photos : <code>{_fmt_int(photos)}</code>\n"
+        f"‣ Videos : <code>{_fmt_int(videos)}</code>\n"
+        f"‣ Helper : <code>{helper_state}</code>\n"
         f"⏱ Uptime : <code>{_uptime()}</code>\n"
         "━━━━━━━━━━━━━━━━━━"
     )
 
 
 async def build_stats_text(message: Message, *, helper_state: str) -> str:
-    async def safe_count() -> int:
-        try:
-            return await characters.count_documents({})
-        except Exception:
-            return 0
-
-    db_ping, bot_ping, count = await asyncio.gather(
-        _ping_db(),
-        _ping_bot(message),
-        safe_count(),
-    )
-    used, available, total = _ram_info()
+    try:
+        total = await characters.count_documents({})
+    except Exception:
+        total = 0
+    db_ping, bot_ping = await asyncio.gather(_ping_db(), _ping_bot(message))
+    used, available, ram_total = _ram_info()
     snap = metrics.snapshot()
-
-    hit_rate = (
-        (int(snap["lookup_hits"]) / int(snap["lookup_total"]) * 100)
-        if int(snap["lookup_total"])
-        else 0.0
-    )
-
     return (
-        "📊 <b>ADDING & LOOKUP STATS</b>\n"
+        "📊 <b>BIKA ADDING STATS</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"‣ Uptime : <code>{_uptime()}</code>\n"
         f"‣ DB Ping : <code>{_fmt_ms(db_ping)}</code>\n"
         f"‣ Bot Ping : <code>{_fmt_ms(bot_ping)}</code>\n"
         f"‣ RAM Used : <code>{used}</code>\n"
         f"‣ RAM Available : <code>{available}</code>\n"
-        f"‣ RAM Total : <code>{total}</code>\n\n"
-        "⚡ <b>LOOKUP PERFORMANCE</b>\n"
-        f"‣ Total Lookups : <code>{_fmt_int(snap['lookup_total'])}</code>\n"
-        f"‣ Hits : <code>{_fmt_int(snap['lookup_hits'])}</code>\n"
-        f"‣ Misses : <code>{_fmt_int(snap['lookup_misses'])}</code>\n"
-        f"‣ Errors : <code>{_fmt_int(snap['lookup_errors'])}</code>\n"
-        f"‣ Hit Rate : <code>{hit_rate:.1f}%</code>\n"
-        f"‣ EMA Latency : <code>{_fmt_ms(float(snap['lookup_ema_ms'])) if snap['lookup_total'] else 'N/A'}</code>\n\n"
+        f"‣ RAM Total : <code>{ram_total}</code>\n\n"
         "📥 <b>ADDING PERFORMANCE</b>\n"
-        f"‣ Total Ingests : <code>{_fmt_int(snap['ingest_total'])}</code>\n"
+        f"‣ Total : <code>{_fmt_int(snap['ingest_total'])}</code>\n"
         f"‣ New Records : <code>{_fmt_int(snap['ingest_saved'])}</code>\n"
-        f"‣ Updated Records : <code>{_fmt_int(snap['ingest_updated'])}</code>\n\n"
+        f"‣ Updated Records : <code>{_fmt_int(snap['ingest_updated'])}</code>\n"
+        f"‣ Skipped : <code>{_fmt_int(snap['ingest_skipped'])}</code>\n\n"
         "🗄 <b>DATABASE</b>\n"
-        f"‣ Characters : <code>{_fmt_int(count)}</code>\n"
-        f"‣ DB : <code>{settings.db_name}</code>\n"
+        f"‣ Characters : <code>{_fmt_int(total)}</code>\n"
         f"‣ Helper : <code>{helper_state}</code>\n"
         "━━━━━━━━━━━━━━━━━━"
     )
