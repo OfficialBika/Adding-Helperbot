@@ -204,5 +204,122 @@ class AddingOnlyArchitectureTests(unittest.TestCase):
                 self.assertNotIn(token, text, f"{token} remains in {path}")
 
 
+
+class CommonParserRegressionTests(unittest.TestCase):
+    def test_hallow_parser_wins_and_returns_one_consistent_result(self):
+        result = parse_message(
+            "Character Name: Kafka\nRarity: SSR\nID: 77",
+            source_key="items_characters_hallow",
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.name, "Kafka")
+        self.assertEqual(result.character_id, "77")
+        self.assertEqual(result.parser, "hallow")
+        self.assertGreaterEqual(result.confidence, 0.99)
+
+    def test_capture_parser(self):
+        result = parse_message(
+            "🎉 New Character Added\n🎭 Name: Ruan Mei\n🆔 ID: 81",
+            source_key="items_capture_character",
+        )
+        self.assertEqual(result.name, "Ruan Mei")
+        self.assertEqual(result.character_id, "81")
+        self.assertEqual(result.parser, "capture_character")
+
+    def test_kairo_parser(self):
+        result = parse_message(
+            "✨ New Card Added\n📛 Character: March 7th\nID: 3",
+            source_key="items_kairo_character",
+        )
+        self.assertEqual(result.name, "March 7th")
+        self.assertEqual(result.character_id, "3")
+        self.assertEqual(result.parser, "kairo")
+
+    def test_waifux_parser(self):
+        result = parse_message(
+            "Global Character Info\n➤ Tsunade Senju 🟠\n• Series: Naruto/Boruto\n• ID: 1",
+            source_key="items_waifux_grab",
+        )
+        self.assertEqual(result.name, "Tsunade Senju")
+        self.assertEqual(result.character_id, "1")
+        self.assertEqual(result.anime, "Naruto/Boruto")
+        self.assertEqual(result.parser, "waifux_global")
+
+    def test_owo_numbered_parser(self):
+        result = parse_message(
+            "OwO! Check out this character!\nAnime\n35: Yoru [👶]\n(SSR)",
+            source_key="items_character_catcher",
+        )
+        self.assertEqual(result.name, "Yoru [👶]")
+        self.assertEqual(result.character_id, "35")
+        self.assertEqual(result.parser, "character_catcher_owo")
+
+    def test_senpai_parser(self):
+        result = parse_message(
+            "media + 🎴 Kafka | Limited\n🆔 ID: 42",
+            source_key="items_senpai_catcher",
+        )
+        self.assertEqual(result.name, "Kafka")
+        self.assertEqual(result.character_id, "42")
+        self.assertEqual(result.rarity, "Limited")
+        self.assertEqual(result.parser, "senpai")
+
+    def test_grab_parser_does_not_store_anime_as_name(self):
+        result = parse_message(
+            "Grab Garden\nHonkai: Star Rail\n1456: Ai Hoshino 👘\n🃏 CATEGORY: Divine",
+            source_key="items_waifux_grab",
+        )
+        self.assertEqual(result.name, "Ai Hoshino 👘")
+        self.assertEqual(result.character_id, "1456")
+        self.assertEqual(result.parser, "grab_family")
+
+    def test_takers_parser(self):
+        result = parse_message(
+            "Name: Kafka\nRarity: Mythic\nCharacter ID: 99",
+            source_key="items_takers_character",
+        )
+        self.assertEqual(result.name, "Kafka")
+        self.assertEqual(result.character_id, "99")
+        self.assertEqual(result.parser, "takers")
+
+    def test_smash_parser(self):
+        result = parse_message(
+            "Look at this character!\nKafka from Honkai: Star Rail!",
+            source_key="items_smash_character",
+        )
+        self.assertEqual(result.name, "Kafka")
+        self.assertEqual(result.anime, "Honkai: Star Rail")
+        self.assertEqual(result.parser, "smash_character")
+
+    def test_generic_fallback_works_without_source_knowledge(self):
+        result = parse_message(
+            "Name: Sparkle\nID: 1234\nRarity: SSR\nAnime: Honkai: Star Rail"
+        )
+        self.assertEqual(result.name, "Sparkle")
+        self.assertEqual(result.character_id, "1234")
+        self.assertEqual(result.anime, "Honkai: Star Rail")
+        self.assertEqual(result.parser, "generic_structured")
+
+    def test_parser_candidate_list_contains_fallback_and_specialist(self):
+        candidates = parse_candidates(
+            "Character Name: Kafka\nRarity: SSR\nID: 77",
+            source_key="items_characters_hallow",
+        )
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0].parser, "hallow")
+        self.assertIn("generic_structured", {item.parser for item in candidates})
+
+    def test_parser_is_safe_for_unknown_text(self):
+        self.assertIsNone(parse_message("hello there, nothing to parse"))
+        self.assertEqual(extract_name("hello there, nothing to parse"), None)
+
+    def test_parser_registry_is_explicit(self):
+        names = parser_names()
+        self.assertEqual(len(names), len(set(names)))
+        self.assertIn("generic_structured", names)
+        self.assertIn("waifux_global", names)
+
+
+
 if __name__ == "__main__":
     unittest.main()
