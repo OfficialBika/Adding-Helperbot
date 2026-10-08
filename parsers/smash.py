@@ -16,7 +16,7 @@ class SmashParser(CharacterParser):
     def parse(cls, text: str) -> ParsedCharacter | None:
         raw = norm(text)
         match = re.search(
-            r"look\s+at\s+this\s+character\s*(?:\n|\s)+(.+?)\s+from\s+(.+?)(?:!|！|\n|$)",
+            r"look\s+at\s+this\s+character\s*[!！:：-]?\s*(?:\n|\s)+(.+?)\s+from\s+(.+?)(?:!|！|\n|$)",
             raw,
             re.I | re.S,
         )
