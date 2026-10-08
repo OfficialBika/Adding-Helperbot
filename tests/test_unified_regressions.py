@@ -8,7 +8,7 @@ os.environ.setdefault("MONGO_URI", "mongodb://127.0.0.1:27017")
 os.environ.setdefault("DB_NAME", "ci_test")
 
 from helper.registry import _CACHE, parse_addnewbot, parser_names_for_source
-from unified.ingest import _media_info
+from unified.ingest import _is_metadata_edit, _media_info
 from unified.parser import extract_character_id, extract_name, parse_candidates, parse_message, parser_names
 from unified.source_resolver import (
     grabber_source_variant,
@@ -18,7 +18,7 @@ from unified.source_resolver import (
 )
 from unified.source_whitelist import is_allowed_source
 from unified.status import RuntimeMetrics
-from unified.store import _index_source_variant, save_character
+from unified.store import _index_source_variant, save_character, update_character_metadata
 
 
 class DynamicHelperBotTests(unittest.TestCase):
@@ -186,11 +186,93 @@ class AddingOnlyStoreTests(unittest.IsolatedAsyncioTestCase):
         identity = fake_collection.find_one.await_args.args[0]
         self.assertEqual(identity, {"source_key": "items_characters_hallow", "file_unique_ids": "UID-9"})
 
+    async def test_metadata_edit_updates_existing_record_only(self):
+        existing = {
+            "_id": "mongo-id",
+            "name": "Retsu Unahana",
+            "name_key": "retsu unahana",
+            "anime": "Bleach",
+            "rarity": "NOVICE",
+            "character_id": "5726",
+            "source_key": "items_newcardbot",
+        }
+        updated = dict(existing, name="Retsu Unahana New", name_key="retsu unahana new")
+        fake_collection = SimpleNamespace(
+            find_one=AsyncMock(side_effect=[existing, updated]),
+            update_one=AsyncMock(),
+        )
+        with patch("unified.store.characters", fake_collection):
+            result = await update_character_metadata(
+                source_key="items_newcardbot",
+                character_id="5726",
+                name="Retsu Unahana New",
+                anime="Bleach",
+                rarity="NOVICE",
+            )
+        self.assertEqual(result["status"], "updated")
+        self.assertIn("name:", result["changes"][0])
+        self.assertEqual(fake_collection.update_one.await_count, 1)
+        update = fake_collection.update_one.await_args.args[1]
+        self.assertEqual(update["$set"]["name"], "Retsu Unahana New")
+        self.assertEqual(update["$set"]["anime"], "Bleach")
+        self.assertEqual(update["$set"]["rarity"], "NOVICE")
+
+    async def test_metadata_edit_returns_already_added_when_unchanged(self):
+        existing = {
+            "_id": "mongo-id",
+            "name": "Retsu Unahana",
+            "name_key": "retsu unahana",
+            "anime": "Bleach",
+            "rarity": "NOVICE",
+            "character_id": "5726",
+            "source_key": "items_newcardbot",
+        }
+        fake_collection = SimpleNamespace(find_one=AsyncMock(return_value=existing))
+        with patch("unified.store.characters", fake_collection):
+            result = await update_character_metadata(
+                source_key="items_newcardbot",
+                character_id="5726",
+                name="Retsu Unahana",
+                anime="Bleach",
+                rarity="NOVICE",
+            )
+        self.assertEqual(result["status"], "already_added")
+        self.assertEqual(result["changes"], [])
+
+    async def test_metadata_edit_never_creates_missing_record(self):
+        fake_collection = SimpleNamespace(find_one=AsyncMock(return_value=None), insert_one=AsyncMock())
+        with patch("unified.store.characters", fake_collection):
+            result = await update_character_metadata(
+                source_key="items_newcardbot",
+                character_id="5726",
+                name="Retsu Unahana",
+                anime="Bleach",
+                rarity="NOVICE",
+            )
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "edit_target_not_found")
+        fake_collection.insert_one.assert_not_awaited()
+
 
 class AddingOnlyUtilityTests(unittest.TestCase):
     def test_parser_keeps_name_and_id(self):
         self.assertEqual(extract_name("Name: Rin Xi\nID: 123"), "Rin Xi")
         self.assertEqual(extract_character_id("Name: Rin Xi\nID: 123"), "123")
+
+    def test_card_edit_text_is_metadata_only(self):
+        text = "✏️ Card edited\n🆔 Card ID: 5726\n🪪 Name: Retsu Unahana\n🧩 Anime: Bleach\n💎 Rarity: NOVICE"
+        self.assertTrue(_is_metadata_edit(text, None))
+        self.assertFalse(_is_metadata_edit(text, {"media_type": "photo"}))
+
+    def test_card_edit_text_parses_with_generic_parser(self):
+        result = parse_message(
+            "✏️ Card edited\n🆔 Card ID: 5726\n🪪 Name: Retsu Unahana\n🧩 Anime: Bleach\n💎 Rarity: NOVICE"
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.character_id, "5726")
+        self.assertEqual(result.name, "Retsu Unahana")
+        self.assertEqual(result.anime, "Bleach")
+        self.assertEqual(result.rarity, "NOVICE")
 
     def test_whitelist_accepts_known_direct_source_bot(self):
         msg = SimpleNamespace(
