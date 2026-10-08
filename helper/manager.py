@@ -1345,7 +1345,8 @@ class HelperManager:
         if dynamic_configs:
             lines.extend(["", "<b>DYNAMIC BOTS</b>"])
             for config in dynamic_configs:
-                lines.append(f"• <b>{config.bot}</b> — <code>{config.key}</code> Parser: <code>{", ".join(config.parsers)}</code>")
+                parser_text = ", ".join(config.parsers) or "generic"
+                lines.append(f"• <b>{config.bot}</b> — <code>{config.key}</code> Parser: <code>{parser_text}</code>")
 
         lines.extend([
             "",
