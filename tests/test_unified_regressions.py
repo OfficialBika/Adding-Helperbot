@@ -335,10 +335,11 @@ class AutoLookupScopeTests(unittest.TestCase):
     def test_public_group_is_denied_even_when_global_lookup_is_enabled(self):
         async def run():
             message = SimpleNamespace(chat=SimpleNamespace(type="supergroup", id=-100123))
-            with patch(
-                "unified.main.db.settings.find_one",
-                new=AsyncMock(return_value=None),
-            ) as find_one:
+            find_one = AsyncMock(return_value=None)
+            fake_db = SimpleNamespace(
+                settings=SimpleNamespace(find_one=find_one),
+            )
+            with patch("unified.main.db", fake_db):
                 self.assertFalse(await auto_lookup_allowed(message))
                 find_one.assert_awaited_once_with(
                     {"key": "gapprove:-100123"},
@@ -350,10 +351,12 @@ class AutoLookupScopeTests(unittest.TestCase):
     def test_approved_group_is_allowed_for_auto_lookup(self):
         async def run():
             message = SimpleNamespace(chat=SimpleNamespace(type="group", id=-123))
-            with patch(
-                "unified.main.db.settings.find_one",
-                new=AsyncMock(return_value={"enabled": True}),
-            ):
+            fake_db = SimpleNamespace(
+                settings=SimpleNamespace(
+                    find_one=AsyncMock(return_value={"enabled": True}),
+                ),
+            )
+            with patch("unified.main.db", fake_db):
                 self.assertTrue(await auto_lookup_allowed(message))
 
         asyncio.run(run())
@@ -361,10 +364,12 @@ class AutoLookupScopeTests(unittest.TestCase):
     def test_disabled_approval_record_denies_auto_lookup(self):
         async def run():
             message = SimpleNamespace(chat=SimpleNamespace(type="group", id=-123))
-            with patch(
-                "unified.main.db.settings.find_one",
-                new=AsyncMock(return_value={"enabled": False}),
-            ):
+            fake_db = SimpleNamespace(
+                settings=SimpleNamespace(
+                    find_one=AsyncMock(return_value={"enabled": False}),
+                ),
+            )
+            with patch("unified.main.db", fake_db):
                 self.assertFalse(await auto_lookup_allowed(message))
 
         asyncio.run(run())
