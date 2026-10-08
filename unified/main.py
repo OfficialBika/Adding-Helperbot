@@ -303,7 +303,7 @@ async def helper_commands(message: Message):
 
 @router.message(
     F.chat.id == settings.adding_chat_id,
-    F.text.regexp(r"^/[A-Za-z0-9_]+(?:\\s|$)")
+    F.text.regexp(r"^/[A-Za-z0-9_]+(?:@[A-Za-z0-9_]+)?(?:\s|$)")
 )
 async def dynamic_helper_commands(message: Message):
     if not await has_admin_access(message):
