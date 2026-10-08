@@ -1,66 +1,48 @@
-# Unified Adding + Lookup V4
+# Bika Adding-only Architecture
 
-This branch now contains a single runtime for both jobs:
+This branch is the isolated Adding runtime.
 
-- **One Telegram bot process**
-- **One MongoDB database**
-- **One Adding group** configured by `ADDING_CHAT_ID`
-- The Adding group is **ingest-only**
-- Every other allowed private/group chat is **lookup-only**
-- MongoDB collection: `characters`
+## Responsibilities
 
-## MongoDB policy
+- Collect characters from configured source bots/channels through AddHelper.
+- Accept trusted source posts in one Adding Group.
+- Parse character name and optional source character ID.
+- Preserve Telegram file IDs and file_unique_ids.
+- Deduplicate and update MongoDB records.
+- Expose status, stats, ping, authorization, and Helper controls.
 
-The new `characters` collection intentionally does **not** store:
+## Explicitly out of scope
 
-- character ID
-- rarity
-- anime / series / movie
+- Media search handlers
+- Automatic media matching
+- Manual media matching commands
+- Perceptual similarity
+- Photo/video fingerprint generation
+- Search caches
+- Search-only SQLite indexes
+- Search-only access gates
+- Separate NameBot runtime
 
-It stores only what is needed to identify and look up the media:
+## Record flow
 
-- character name
-- output command / source key
-- Telegram file unique IDs
-- SHA-256 aliases
-- photo fingerprints
-- video fingerprints / samples
-- media type / duration
-- source origin and Adding-group archive reference
-- timestamps
+1. Helper asks a configured source bot/channel for data.
+2. The helper response is forwarded or delivered to the Adding Group.
+3. The Adding bot authenticates the source path.
+4. The parser extracts name and optional source ID.
+5. Telegram media identifiers and message metadata are collected.
+6. MongoDB upserts the record using a source-aware identity key.
+7. A compact save/update notice is sent in the Adding Group.
 
-The fingerprint index uses MongoDB chunk fields so approximate photo lookup can avoid scanning the whole collection.
+## Identity policy
 
-## Runtime flow
+Normal sources prefer source_key + character_id.
 
-1. Helper userbot requests characters from configured source bots.
-2. Responses are forwarded into the single Adding group.
-3. The unified bot parses the name and fingerprints the media.
-4. The record is upserted into MongoDB.
-5. Media posted anywhere else is looked up against the same collection.
-6. Exact UID/SHA/origin matches are attempted before similarity matching.
+Hallow and Catcher Logs use source_key + file_unique_id because source IDs are not stable for those datasets.
 
-## Commands
+Grabber FW uses source_key + source_variant + character_id when the Grabber bot identity is known. Unknown Grabber variants fall back to Telegram UID/origin identity.
 
-Owner only:
+Real media is rejected when Telegram file_unique_id is unavailable.
 
-- `/startdmcatchbot`
-- `/startdmgrabbot`
-- `/startdmsenpaibot`
-- `/startdmhallowbot`
-- `/startdmtakersbot`
-- `/stopdm`
-- `/addingstatus`
-- `/stats`
+## Performance goal
 
-## Deployment
-
-Render now starts only:
-
-`python unified/main.py`
-
-Use the variables in `unified/env.example`.
-
-Recommended fresh MongoDB database:
-
-`bika_adding_lookup`
+The Adding hot path avoids unnecessary network and CPU work. It does not download media or build image/video fingerprints merely to save a record.
