@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 
-from parsers import PARSERS
+from parsers import PARSERS, PARSER_MAP
 from parsers.base import ParsedCharacter, clean_name, norm
+from helper.registry import parser_names_for_source
 
 log = logging.getLogger("unified-parser")
 
@@ -26,7 +27,17 @@ def parse_candidates(
         return []
 
     candidates: list[ParsedCharacter] = []
-    for parser in PARSERS:
+    preferred_names = parser_names_for_source(source_key)
+    if preferred_names:
+        preferred = [PARSER_MAP[name] for name in preferred_names if name in PARSER_MAP]
+        preferred_set = {parser.name for parser in preferred}
+        parser_order = tuple(preferred) + tuple(
+            parser for parser in PARSERS if parser.name not in preferred_set
+        )
+    else:
+        parser_order = PARSERS
+
+    for parser in parser_order:
         try:
             candidate = parser.parse(raw)
         except Exception:
