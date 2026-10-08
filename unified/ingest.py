@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from aiogram import Bot
 from aiogram.types import Message
@@ -17,9 +18,18 @@ from unified.source_resolver import (
     source_origin_key,
 )
 from unified.source_whitelist import forwarded_origin_chat, is_allowed_source
-from unified.store import save_character
+from unified.store import save_character, update_character_metadata
 
 log = logging.getLogger("unified-ingest")
+
+_EDIT_MARKER_RE = re.compile(
+    r"\b(?:card|character)\s+(?:edited|updated)\b",
+    re.I,
+)
+
+
+def _is_metadata_edit(text: str | None, media_info: dict | None) -> bool:
+    return media_info is None and bool(_EDIT_MARKER_RE.search(str(text or "")))
 
 
 def _media_info(target: Message) -> dict | None:
@@ -187,6 +197,24 @@ async def ingest_message(
     command = output_command_from_message(target, source_key) or "/name"
     source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
     source_origin = source_origin_key(target)
+
+    if _is_metadata_edit(text, media_info):
+        updated = await update_character_metadata(
+            source_key=source_key,
+            character_id=character_id,
+            name=parsed.name,
+            anime=parsed.anime,
+            rarity=parsed.rarity,
+        )
+        log.info(
+            "ADD metadata edit source=%s parser=%s message=%s id=%s status=%s",
+            source_key,
+            parsed.parser,
+            getattr(target, "message_id", None),
+            character_id,
+            updated.get("status"),
+        )
+        return updated
 
     if media_info and not str(media_info.get("file_unique_id") or "").strip():
         return {
