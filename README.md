@@ -1,39 +1,53 @@
-# Bika Adding + NameBotV3 Unified Repository
+# Bika Adding & Helper — Adding-only Branch
 
-This branch combines Adding-Helperbot and NameBotV3 while keeping them as two independent Render Web Services.
+This branch is intentionally dedicated to the Adding pipeline.
 
-## Services
+## Runtime
 
-- bika-adding -> python app.py
-- bika-namebotv3 -> python namebotv3/main.py
+The branch runs one Telegram bot process:
 
-Both services use the same MongoDB database (waifu_adding_v2).
+python unified/main.py
 
-NameBotV3 uses the SQLite hybrid fingerprint engine. SQLite is a rebuildable secondary index/cache; MongoDB remains the source of truth.
+The helper userbot collects source data and the bot accepts trusted forwarded/source-bot posts in the configured Adding Group.
 
 ## Data flow
 
-Adding -> MongoDB -> NameBotV3 SQLite index -> lookup
+Source bot / source channel
+→ Helper
+→ Adding Group
+→ source resolver
+→ name + optional source ID
+→ MongoDB upsert
 
-The SQLite index is rebuilt from MongoDB after a fresh Render instance/redeploy.
+The runtime does not contain a media search service, similarity engine, fingerprint cache, or separate NameBot process.
 
-## Render
+## Adding rules
 
-Deploy this repository using render.yaml. Render creates two Web Services. Each service needs its own Telegram BOT_TOKEN, PUBLIC_URL, and WEBHOOK_SECRET. Use the same MONGO_URI and DB_NAME for both.
+- Only the configured Adding Group can create records.
+- Forwarded posts must match a configured or known source identity.
+- Direct source-bot messages are accepted only for known source identities.
+- Helper-generated source results are accepted through the trusted Helper userbot identity.
+- Real Telegram media records must include Telegram file_unique_id.
+- The Adding path stores Telegram media identifiers and message metadata; it does not download media for fingerprint generation.
+- Hallow and Catcher Logs use Telegram UID/origin identity where source IDs are not stable.
+- Grabber FW uses a stable source variant when the bot identity is known.
 
-For Adding, also set the Pyrogram API_ID, API_HASH, and SESSION_STRING values required by the existing helper.
+## Helper
 
-For NameBotV3, keep LOOKUP_ENGINE_MODE=sqlite.
+Owner/admin HelperManager commands remain available, including inline and forward collectors with durable progress checkpoints.
 
-Do not commit real tokens, MongoDB credentials, or session strings.
+## Database
 
+MongoDB remains the authoritative Adding database. Existing records are preserved. Obsolete search indexes are removed during startup while adding-related dedupe indexes remain.
 
-## MongoDB ↔ SQLite consistency
+The existing DB name is intentionally preserved to avoid an unnecessary data migration.
 
-- MongoDB is the source of truth for all lookup records.
-- In SQLite mode, exact UID/SHA/origin lookups still query MongoDB directly.
-- SQLite stores rebuildable photo/video similarity fingerprints and compact item snapshots.
-- Adding creates an `updated_at` index on every source collection so NameBotV3 delta sync can use an indexed watermark query.
-- NameBotV3 completes the initial SQLite build before marking the webhook service ready.
-- A periodic full SQLite rebuild (default: every 6 hours) is enabled to recover missed index state and remove rows for documents deleted from MongoDB, because deletions do not carry an `updated_at` watermark.
-- Render local storage is treated as ephemeral; a fresh instance can rebuild the secondary index from MongoDB.
+## Deployment
+
+Render starts:
+
+python unified/main.py
+
+Set BOT_TOKEN, MONGO_URI, OWNER_IDS, and ADDING_CHAT_ID. AddHelper also needs API_ID, API_HASH, and SESSION_STRING.
+
+Do not commit real tokens, MongoDB credentials, or Pyrogram session strings.
