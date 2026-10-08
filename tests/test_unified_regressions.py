@@ -160,6 +160,36 @@ class PhotoHashAmbiguityTests(unittest.TestCase):
         self.assertEqual(doc["name"], "Muichiro Tokito")
         self.assertAlmostEqual(score, 0.9)
 
+    def test_same_name_with_unicode_and_media_label_variants_is_not_ambiguous(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                0.899,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro\u200b Tokito",
+                    "command": "/name",
+                    "media_type": "image",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertEqual(doc["name"], "Muichiro Tokito")
+        self.assertAlmostEqual(score, 0.9)
+
 
 class LocalBotApiDirectFileTests(unittest.TestCase):
     def test_path_is_within_accepts_children_and_rejects_outside(self):
