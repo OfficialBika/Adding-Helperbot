@@ -1524,6 +1524,13 @@ class HelperManager:
     def help_text(self):
         return (
             "AddHelper ready ✅\n\n"
+            "/addnewbot @botusername\n"
+            "  cmd - /grab\n"
+            "  inlinesource - @botusername\n"
+            "  Forwardsource - @channel\n"
+            "  commands - /startX,/resumeX,/startfwX,/resumefwX\n"
+            "  Parser1 - grab\n"
+            "  Parser2 - generic\n\n"
             "/startcatchbot [delay]\n"
             "/resumecatchbot [count] [delay]\n"
             "/starthallowbot [delay]\n"
