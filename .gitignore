@@ -4,7 +4,7 @@ __pycache__/
 .env.*
 data/*.db
 data/*.sqlite3
-namebotv3/data/*.db
 sessions/
 *.session
 seeder_state.json
+addhelper_state.json
