@@ -13,6 +13,8 @@ separate testable branch.
   directly by a host-running Python bot.
 - Safe direct-file lookup with automatic fallback to the existing
   `bot.download()` path.
+- Hourly systemd cleanup for stale files under the Bot API `temp` directory,
+  with a conservative 48-hour default retention.
 
 ## VPS test setup
 
@@ -69,12 +71,79 @@ BOT_API_LOCAL_FILES_ROOT=/srv/telegram-bot-api-test/data
 
 `BOT_API_LOCAL_FILES_ROOT` must exactly match `BOT_API_DATA_DIR`.
 
+## Automatic temp cleanup
+
+The cleanup job intentionally does **not** delete anything from the Bot API
+working directory. It only removes regular files older than the configured
+retention period from:
+
+```text
+<BOT_API_DATA_DIR>/temp
+```
+
+Default policy:
+
+- runs hourly through a persistent systemd timer;
+- keeps temporary files for at least 48 hours;
+- never follows or deletes a symlinked `temp` directory;
+- refuses unsafe paths and retention values;
+- leaves Bot API account/work data untouched.
+
+Install it on the VPS:
+
+```bash
+cd ~/Adding-Helperbot/deploy/local-bot-api
+
+sudo install -m 0755 cleanup-temp.sh /usr/local/bin/bika-telegram-bot-api-temp-cleanup
+sudo install -m 0644 systemd/bika-telegram-bot-api-temp-cleanup.service /etc/systemd/system/
+sudo install -m 0644 systemd/bika-telegram-bot-api-temp-cleanup.timer /etc/systemd/system/
+sudo install -m 0644 cleanup.env.example /etc/bika-telegram-bot-api-cleanup.env
+
+sudoedit /etc/bika-telegram-bot-api-cleanup.env
+```
+
+Set `BOT_API_DATA_DIR` there to the exact same path used by
+`BOT_API_DATA_DIR` in the Local Bot API compose environment. Leave
+`BOT_API_TEMP_RETENTION_HOURS=48` unless you have a deliberate reason to
+change it.
+
+Enable and run it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now bika-telegram-bot-api-temp-cleanup.timer
+
+# Run one cleanup immediately to verify the setup:
+sudo systemctl start bika-telegram-bot-api-temp-cleanup.service
+
+sudo systemctl status bika-telegram-bot-api-temp-cleanup.timer --no-pager
+sudo journalctl -u bika-telegram-bot-api-temp-cleanup.service -n 50 --no-pager
+```
+
+Dry-run before changing anything:
+
+```bash
+BOT_API_DATA_DIR=/srv/telegram-bot-api-test/data \
+BOT_API_TEMP_RETENTION_HOURS=48 \
+/usr/local/bin/bika-telegram-bot-api-temp-cleanup --dry-run
+```
+
+Do not use `rm -rf <BOT_API_DATA_DIR>/*` or delete arbitrary files from the
+Bot API working directory.
+
 ## Verification
 
 Run the existing regression suite from the repository root:
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+Validate the cleanup script itself:
+
+```bash
+bash -n deploy/local-bot-api/cleanup-temp.sh
+bash tests/test_local_bot_api_cleanup.sh
 ```
 
 Then start the existing bot normally and send a test photo. A successful
@@ -86,6 +155,10 @@ back to the existing HTTP download path.
 The implementation does not change MongoDB schemas, source routing, result
 formatting, or lookup decisions. Local Bot API is disabled unless configured
 through environment variables.
+
+The cleanup job is deliberately scoped to temporary files only. It does not
+attempt to clean the Bot API working directory, bot authorization state, or
+other persistent data.
 
 Do not expose port 8081 publicly, and do not commit real tokens, MongoDB
 credentials, Telegram API hashes, or session strings.
