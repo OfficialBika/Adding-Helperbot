@@ -239,5 +239,88 @@ async def save_character(
     return {"status": "updated", "document": updated or existing, "changes": changes}
 
 
+async def update_character_metadata(
+    *,
+    source_key: str,
+    character_id: str | int | None,
+    name: str | None = None,
+    anime: str | None = None,
+    rarity: str | None = None,
+) -> dict:
+    """Update metadata for an existing source-specific character record only.
+
+    This path is intentionally non-creating: a metadata-only edit event must
+    never create a new record when the original media record is missing.
+    """
+    source_key = str(source_key or "").strip().lower()
+    character_id = (
+        str(character_id).strip()
+        if character_id is not None and str(character_id).strip()
+        else None
+    )
+    if not source_key or not character_id:
+        return {
+            "status": "skipped",
+            "document": None,
+            "reason": "missing_source_or_character_id",
+        }
+
+    existing = await characters.find_one({
+        "source_key": source_key,
+        "character_id": character_id,
+    })
+    if existing is None:
+        return {
+            "status": "skipped",
+            "document": None,
+            "reason": "edit_target_not_found",
+            "character_id": character_id,
+            "source_key": source_key,
+        }
+
+    set_fields: dict[str, Any] = {}
+    if name is not None and str(name).strip():
+        normalized_name = str(name).strip()
+        if existing.get("name") != normalized_name:
+            set_fields["name"] = normalized_name
+            set_fields["name_key"] = _name_key(normalized_name)
+
+    for key, value in (("anime", anime), ("rarity", rarity)):
+        if value is not None and str(value).strip():
+            normalized_value = str(value).strip()
+            if existing.get(key) != normalized_value:
+                set_fields[key] = normalized_value
+
+    if not set_fields:
+        return {
+            "status": "already_added",
+            "document": existing,
+            "changes": [],
+            "character_id": character_id,
+            "source_key": source_key,
+        }
+
+    now = _now()
+    set_fields["updated_at"] = now
+    await characters.update_one(
+        {"_id": existing["_id"]},
+        {"$set": set_fields},
+    )
+    updated = await characters.find_one({"_id": existing["_id"]})
+
+    changes = [
+        f"{key}: {existing.get(key, '—')} → {value}"
+        for key, value in set_fields.items()
+        if key != "updated_at"
+    ]
+    return {
+        "status": "updated",
+        "document": updated or existing,
+        "changes": changes,
+        "character_id": character_id,
+        "source_key": source_key,
+    }
+
+
 async def close():
     client.close()
