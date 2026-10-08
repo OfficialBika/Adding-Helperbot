@@ -461,18 +461,23 @@ def _photo_score(query_hash, candidate: dict) -> tuple[float, int | None, int | 
     return score, p, d
 
 
-def _photo_match_identity(candidate: dict) -> tuple[str, str]:
-    """Return the stable user-visible identity for hash ambiguity checks.
+def _photo_match_identity(candidate: dict) -> str:
+    """Return the canonical user-visible character identity for hash matching.
 
-    Hash records can legitimately vary in command, media-type label (photo vs
-    image), or invisible Unicode formatting while still representing the same
-    character. Ambiguity must compare actual identities, not storage metadata.
+    The same character may exist in multiple source namespaces (for example
+    Catch and FW Catch) and the stored command/media labels may differ. Those
+    records are not competing character identities for ambiguity purposes.
     """
-    name = _name_key(str(candidate.get("name") or ""))
-    return (
-        str(candidate.get("source_key") or "").strip().lower(),
-        name,
-    )
+    return _name_key(str(candidate.get("name") or ""))
+
+
+def _photo_source_priority(candidate: dict) -> int:
+    """Prefer the primary Catch namespace when same-name hash records tie."""
+    source = str(candidate.get("source_key") or "").strip().lower()
+    return {
+        "items_character_catcher": 0,
+        "items_character_catcher_fw": 1,
+    }.get(source, 2)
 
 
 def _accept_photo_candidates(
@@ -490,7 +495,7 @@ def _accept_photo_candidates(
     if not ranked:
         return None, 0.0
 
-    representatives: dict[tuple[str, str], tuple[float, int | None, int | None, dict]] = {}
+    representatives: dict[str, tuple[float, int | None, int | None, dict]] = {}
     duplicate_count = 0
     for row in ranked:
         identity = _photo_match_identity(row[3])
@@ -499,7 +504,13 @@ def _accept_photo_candidates(
             representatives[identity] = row
         else:
             duplicate_count += 1
-            if row[0] > previous[0]:
+            if (
+                row[0] > previous[0]
+                or (
+                    row[0] == previous[0]
+                    and _photo_source_priority(row[3]) < _photo_source_priority(previous[3])
+                )
+            ):
                 representatives[identity] = row
 
     unique_ranked = sorted(representatives.values(), key=lambda row: row[0], reverse=True)
@@ -526,11 +537,17 @@ def _accept_photo_candidates(
 
     if len(unique_ranked) > 1 and margin < _PHASH_MIN_MARGIN:
         log.warning(
-            "pHash ambiguous source=%s best=%s second=%s margin=%.4f",
+            "pHash ambiguous source=%s best=%s second=%s second_source=%s "
+            "margin=%.4f best_p=%s best_d=%s second_p=%s second_d=%s",
             best[3].get("source_key"),
             best[3].get("name"),
             unique_ranked[1][3].get("name"),
+            unique_ranked[1][3].get("source_key"),
             margin,
+            best[1],
+            best[2],
+            unique_ranked[1][1],
+            unique_ranked[1][2],
         )
         return None, best[0]
 
