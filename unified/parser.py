@@ -32,17 +32,19 @@ def parse_candidates(
         preferred_parsers = tuple(
             PARSER_MAP[name] for name in preferred_names if name in PARSER_MAP
         )
-        preferred = _parse_with_parsers(raw, preferred_parsers, source_key)
+        preferred = _parse_with_parsers(raw, preferred_parsers, source_key, ordered_preference=True)
         if preferred:
             return preferred
 
-    return _parse_with_parsers(raw, PARSERS, source_key)
+    return _parse_with_parsers(raw, PARSERS, source_key, ordered_preference=False)
 
 
 def _parse_with_parsers(
     raw: str,
     parser_order,
     source_key: str | None,
+    *,
+    ordered_preference: bool,
 ) -> list[ParsedCharacter]:
     candidates: list[ParsedCharacter] = []
     preferred_names = tuple(
@@ -71,13 +73,22 @@ def _parse_with_parsers(
         if candidate.confidence >= MIN_CONFIDENCE:
             candidates.append(candidate)
 
-    candidates.sort(
-        key=lambda item: (
-            -preferred_rank.get(item.parser, 10_000),
-            item.confidence,
-            len(item.matched_fields),
+    if ordered_preference:
+        candidates.sort(
+            key=lambda item: (
+                preferred_rank.get(item.parser, 10_000),
+                -item.confidence,
+                -len(item.matched_fields),
+            )
         )
-    )
+    else:
+        candidates.sort(
+            key=lambda item: (
+                item.confidence,
+                len(item.matched_fields),
+            ),
+            reverse=True,
+        )
     return candidates
 
 
