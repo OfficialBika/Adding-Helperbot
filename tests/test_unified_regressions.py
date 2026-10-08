@@ -42,6 +42,29 @@ class DynamicHelperBotTests(unittest.TestCase):
         ))
         self.assertEqual(config.parsers, ("grab", "generic"))
 
+    def test_addnewbot_accepts_multiline_parser_samples(self):
+        payload = (
+            "/addnewbot @GRAKEDITbot\n"
+            "cmd - /pick\n"
+            "inlinesource - @GRAKEDITbot\n"
+            "Forwardsource - @EditVaultdeta\n"
+            "commands - /startgrakbot,/resumegrakbot,/startfwgrakbot,/resumefwgrakbot\n"
+            "Parser1 - 🆔 Card ID: 109\n"
+            "🪪 Name: Son Goku\n"
+            "🧩 Anime: Dragon Ball\n"
+            "💎 Rarity: CREATIVE\n"
+            "📤 Uploaded by: 𒉭Ŕ𝓜𒉭𝙶𝚄𝚃𝚂𒉭𝙶𝙾𝙺𝚄𒉭\n"
+            "Parser2 - ✏️ Card edited\n"
+            "🆔 Card ID: 5726\n"
+            "🪪 Name: Retsu Unahana\n"
+            "🧩 Anime: Bleach\n"
+            "💎 Rarity: NOVICE"
+        )
+        config = parse_addnewbot(payload)
+        self.assertEqual(config.bot, "@grakeditbot")
+        self.assertEqual(config.command, "/pick")
+        self.assertEqual(config.parsers, ("generic_structured",))
+
     def test_dynamic_sources_and_parser_preferences(self):
         config = parse_addnewbot(
             "/addnewbot @newcardbot\n"
