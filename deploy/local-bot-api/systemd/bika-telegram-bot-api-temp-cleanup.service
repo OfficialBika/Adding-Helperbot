@@ -1,7 +1,6 @@
 [Unit]
 Description=Clean stale Local Telegram Bot API temporary files
-After=local-fs.target docker.service
-Wants=docker.service
+After=local-fs.target
 
 [Service]
 Type=oneshot
