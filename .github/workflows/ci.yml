@@ -52,4 +52,4 @@ jobs:
       - name: Verify adding-only runtime imports
         run: |
           python --version
-          python -c "import aiogram, aiohttp, pymongo, motor, pyrogram; import unified.main; print('Adding-only runtime imports OK')"
+          python -c "import asyncio; asyncio.set_event_loop(asyncio.new_event_loop()); import aiogram, aiohttp, pymongo, motor, pyrogram; import unified.main; print('Adding-only runtime imports OK')"
