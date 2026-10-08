@@ -14,7 +14,7 @@ printf 'old-working' > "$DATA/working/keep.bin"
 touch -d '72 hours ago' "$DATA/temp/old.bin" "$DATA/working/keep.bin"
 touch -d '2 hours ago' "$DATA/temp/fresh.bin"
 
-BOT_API_DATA_DIR="$DATA" BOT_API_TEMP_RETENTION_HOURS=48 "$SCRIPT"
+BOT_API_DATA_DIR="$DATA" BOT_API_TEMP_RETENTION_HOURS=48 bash "$SCRIPT"
 
 [[ ! -e "$DATA/temp/old.bin" ]]
 [[ -e "$DATA/temp/fresh.bin" ]]
@@ -22,7 +22,7 @@ BOT_API_DATA_DIR="$DATA" BOT_API_TEMP_RETENTION_HOURS=48 "$SCRIPT"
 
 printf 'dry-run-old' > "$DATA/temp/dry-run.bin"
 touch -d '72 hours ago' "$DATA/temp/dry-run.bin"
-BOT_API_DATA_DIR="$DATA" BOT_API_TEMP_RETENTION_HOURS=48 "$SCRIPT" --dry-run
+BOT_API_DATA_DIR="$DATA" BOT_API_TEMP_RETENTION_HOURS=48 bash "$SCRIPT" --dry-run
 [[ -e "$DATA/temp/dry-run.bin" ]]
 
 rm -rf -- "$DATA/temp"
