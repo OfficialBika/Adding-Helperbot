@@ -13,6 +13,20 @@ log_name = "helper-registry"
 collection = db.helper_bots
 
 MAX_PARSERS = 12
+
+PARSER_ALIASES = {
+    "capture": "capture_character",
+    "character_catcher": "character_catcher_owo",
+    "catcher": "character_catcher_owo",
+    "generic": "generic_structured",
+    "grab": "grab_family",
+    "hallow": "hallow",
+    "kairo": "kairo",
+    "senpai": "senpai",
+    "smash": "smash_character",
+    "takers": "takers",
+    "waifux": "waifux_global",
+}
 COMMAND_RE = re.compile(r"^/[A-Za-z0-9_]+$")
 FIELD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_ ]*)\s*[-:=]\s*(.*?)\s*$")
 PARSER_FIELD_RE = re.compile(r"^parser\s*(\d+)$", re.I)
@@ -178,11 +192,12 @@ def parse_addnewbot(text: str) -> AddedBotConfig:
     if not parsers:
         parsers = ("generic",)
 
-    unknown = [name for name in parsers if name not in PARSER_MAP]
+    canonical_parsers = tuple(PARSER_ALIASES.get(name, name) for name in parsers)
+    unknown = [name for name in canonical_parsers if name not in PARSER_MAP]
     if unknown:
-        available = ", ".join(PARSER_MAP)
+        available = ", ".join(PARSER_ALIASES)
         raise ValueError(
-            f"Unknown parser(s): {', '.join(unknown)}. Available: {available}"
+            f"Unknown parser(s): {', '.join(unknown)}. Available aliases: {available}"
         )
 
     normalized_commands = tuple(_command(item) for item in commands)
@@ -217,7 +232,7 @@ def get_config_for_command(command: str | None) -> AddedBotConfig | None:
 
 def parser_names_for_source(source_key: str | None) -> tuple[str, ...]:
     config = get_config(source_key)
-    return config.parsers if config else ()
+    return tuple(PARSER_ALIASES.get(name, name) for name in config.parsers) if config else ()
 
 
 def _matches_source(spec: str, values: set[str]) -> bool:
