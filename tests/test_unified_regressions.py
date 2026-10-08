@@ -100,6 +100,37 @@ class PhotoHashAmbiguityTests(unittest.TestCase):
         self.assertEqual(doc["source_key"], "items_character_catcher")
         self.assertAlmostEqual(score, 1.0)
 
+    def test_same_name_across_catch_and_fw_is_not_ambiguous(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher_fw",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Muichiro Tokito",
+                    "command": "/name",
+                    "media_type": "photo",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(rows)
+        self.assertEqual(doc["name"], "Muichiro Tokito")
+        self.assertEqual(doc["source_key"], "items_character_catcher")
+        self.assertAlmostEqual(score, 0.9)
+
     def test_different_identities_still_require_margin(self):
         rows = [
             (
