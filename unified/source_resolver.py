@@ -299,7 +299,7 @@ def source_title(message: Message) -> str | None:
     return str(hidden).strip() if hidden else None
 
 
-def _title_lookup(mapping: dict[str, str], title: str | None) -> str | None:
+def _title_match(mapping: dict[str, str], title: str | None) -> str | None:
     cleaned = _clean_title(title)
     if not cleaned:
         return None
@@ -394,7 +394,7 @@ def resolve_source_collection(message: Message) -> str | None:
     if chat_id is not None and chat_id in BOT_SOURCE_CHAT_ID:
         return BOT_SOURCE_CHAT_ID[chat_id]
 
-    value = _title_lookup(TITLE_SOURCE_COLLECTION, source_title(message))
+    value = _title_match(TITLE_SOURCE_COLLECTION, source_title(message))
     if value:
         return value
 
@@ -429,7 +429,7 @@ def output_command_from_message(message: Message, collection: str | None = None)
     if user_id is not None and user_id in BOT_SOURCE_OUTPUT_USER_ID:
         return BOT_SOURCE_OUTPUT_USER_ID[user_id]
 
-    value = _title_lookup(TITLE_OUTPUT_COMMAND, source_title(message))
+    value = _title_match(TITLE_OUTPUT_COMMAND, source_title(message))
     if value:
         return value
 
