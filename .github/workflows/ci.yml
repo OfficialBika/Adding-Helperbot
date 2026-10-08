@@ -52,4 +52,4 @@ jobs:
       - name: Verify adding-only runtime imports
         run: |
           python --version
-          python -c "import asyncio; asyncio.set_event_loop(asyncio.new_event_loop()); import aiogram, aiohttp, pymongo, motor, pyrogram; import unified.main; print('Adding-only runtime imports OK')"
+          MONGO_URI=mongodb://127.0.0.1:27017 DB_NAME=ci_test python -c "import asyncio; asyncio.set_event_loop(asyncio.new_event_loop()); import aiogram, aiohttp, pymongo, motor, pyrogram; import unified.main; print('Adding-only runtime imports OK')"
