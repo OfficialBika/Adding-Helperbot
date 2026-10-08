@@ -27,17 +27,28 @@ def parse_candidates(
     if not raw:
         return []
 
-    candidates: list[ParsedCharacter] = []
     preferred_names = parser_names_for_source(source_key)
-    preferred_rank = {name: index for index, name in enumerate(preferred_names)}
     if preferred_names:
-        preferred = [PARSER_MAP[name] for name in preferred_names if name in PARSER_MAP]
-        preferred_set = {parser.name for parser in preferred}
-        parser_order = tuple(preferred) + tuple(
-            parser for parser in PARSERS if parser.name not in preferred_set
+        preferred_parsers = tuple(
+            PARSER_MAP[name] for name in preferred_names if name in PARSER_MAP
         )
-    else:
-        parser_order = PARSERS
+        preferred = _parse_with_parsers(raw, preferred_parsers, source_key)
+        if preferred:
+            return preferred
+
+    return _parse_with_parsers(raw, PARSERS, source_key)
+
+
+def _parse_with_parsers(
+    raw: str,
+    parser_order,
+    source_key: str | None,
+) -> list[ParsedCharacter]:
+    candidates: list[ParsedCharacter] = []
+    preferred_names = tuple(
+        parser.name for parser in parser_order
+    )
+    preferred_rank = {name: index for index, name in enumerate(preferred_names)}
 
     for parser in parser_order:
         try:
@@ -60,14 +71,12 @@ def parse_candidates(
         if candidate.confidence >= MIN_CONFIDENCE:
             candidates.append(candidate)
 
-    parser_priority = {parser.name: parser.priority for parser in PARSERS}
     candidates.sort(
         key=lambda item: (
+            -preferred_rank.get(item.parser, 10_000),
             item.confidence,
             len(item.matched_fields),
-            parser_priority.get(item.parser, 0),
-        ),
-        reverse=True,
+        )
     )
     return candidates
 
