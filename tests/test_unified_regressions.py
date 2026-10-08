@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 
 from unified.config import Settings
 from unified.lookup import _accept_photo_candidates, _chunks, _coerce_match_score, _download, _learn_verified_uids, _ordered_uid_sources, _path_is_within, _schedule_uid_learning
+from unified.main import auto_lookup_allowed
 import unified.uid_index as uid_index
 
 
@@ -319,6 +320,52 @@ class LocalBotApiDirectFileTests(unittest.TestCase):
 
                 self.assertEqual(data, b"http-data")
                 bot.download.assert_awaited_once()
+
+        asyncio.run(run())
+
+
+class AutoLookupScopeTests(unittest.TestCase):
+    def test_private_chat_is_allowed_for_auto_lookup(self):
+        async def run():
+            message = SimpleNamespace(chat=SimpleNamespace(type="private", id=123))
+            self.assertTrue(await auto_lookup_allowed(message))
+
+        asyncio.run(run())
+
+    def test_public_group_is_denied_even_when_global_lookup_is_enabled(self):
+        async def run():
+            message = SimpleNamespace(chat=SimpleNamespace(type="supergroup", id=-100123))
+            with patch(
+                "unified.main.db.settings.find_one",
+                new=AsyncMock(return_value=None),
+            ) as find_one:
+                self.assertFalse(await auto_lookup_allowed(message))
+                find_one.assert_awaited_once_with(
+                    {"key": "gapprove:-100123"},
+                    {"enabled": 1},
+                )
+
+        asyncio.run(run())
+
+    def test_approved_group_is_allowed_for_auto_lookup(self):
+        async def run():
+            message = SimpleNamespace(chat=SimpleNamespace(type="group", id=-123))
+            with patch(
+                "unified.main.db.settings.find_one",
+                new=AsyncMock(return_value={"enabled": True}),
+            ):
+                self.assertTrue(await auto_lookup_allowed(message))
+
+        asyncio.run(run())
+
+    def test_disabled_approval_record_denies_auto_lookup(self):
+        async def run():
+            message = SimpleNamespace(chat=SimpleNamespace(type="group", id=-123))
+            with patch(
+                "unified.main.db.settings.find_one",
+                new=AsyncMock(return_value={"enabled": False}),
+            ):
+                self.assertFalse(await auto_lookup_allowed(message))
 
         asyncio.run(run())
 
