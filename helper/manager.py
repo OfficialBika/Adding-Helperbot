@@ -8,6 +8,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
+from .registry import get_config_for_command, parse_addnewbot, register_config
+
 log = logging.getLogger("helper-manager")
 
 STATE_PATH = Path("addhelper_state.json")
@@ -437,12 +439,13 @@ class HelperManager:
         resume=False,
         resume_count=None,
         prefer_checkpoint=True,
+        bot_override=None,
     ):
         """Run an inline source with per-source, restart-safe pagination checkpoints."""
         if key in self.runners and not self.runners[key].task.done():
             raise RuntimeError(f"{key} is already running")
 
-        bot, _, _ = SOURCES[key]
+        bot = bot_override or SOURCES[key][0]
         delay = max(1, min(int(delay), MAX_DELAY))
         progress = self._inline_progress(key)
 
@@ -961,8 +964,9 @@ class HelperManager:
         delay=DEFAULT_DELAY,
         resume_count=None,
         media_filter=None,
+        source_override=None,
     ):
-        source = FORWARD_SOURCES.get(key)
+        source = source_override or FORWARD_SOURCES.get(key)
         if not source:
             raise RuntimeError(f"No forward source configured for {key}")
         if key in self.runners and not self.runners[key].task.done():
@@ -1181,6 +1185,107 @@ class HelperManager:
             self._save()
             self.runners.pop(key, None)
 
+    @staticmethod
+    def _dynamic_inline_bot(config):
+        source = str(config.inline_source or "").strip()
+        if not source:
+            return config.bot
+        return source if source.startswith("@") or source.lstrip("-").isdigit() else f"@{source}"
+
+    @staticmethod
+    def _dynamic_forward_source(config):
+        return str(config.forward_source or "").strip()
+
+    async def _handle_addnewbot(self, message):
+        try:
+            config = parse_addnewbot(message.text or "")
+            saved = await register_config(config)
+        except Exception as exc:
+            await message.reply(
+                "❌ <b>/addnewbot rejected</b>\n\n"
+                f"<code>{str(exc)}</code>\n\n"
+                "Required format:\n"
+                "<code>/addnewbot @botusername\n"
+                "cmd - /grab\n"
+                "inlinesource - @botusername\n"
+                "Forwardsource - @channelusername\n"
+                "commands - /startX,/resumeX,/startfwX,/resumefwX\n"
+                "Parser1 - grab\n"
+                "Parser2 - generic</code>"
+            )
+            return True
+
+        await message.reply(
+            "✅ <b>NEW HELPER BOT REGISTERED</b>\n\n"
+            f"Bot: <code>{saved.bot}</code>\n"
+            f"Key: <code>{saved.key}</code>\n"
+            f"Cmd: <code>{saved.command}</code>\n"
+            f"Inline source: <code>{saved.inline_source}</code>\n"
+            f"Forward source: <code>{saved.forward_source}</code>\n"
+            f"Commands: <code>{', '.join(saved.commands)}</code>\n"
+            f"Parsers: <code>{', '.join(saved.parsers) or 'generic'}</code>\n\n"
+            "The config is stored in MongoDB and is active immediately."
+        )
+        return True
+
+    async def _handle_dynamic_command(self, message, config):
+        text = (message.text or "").strip()
+        cmd = text.split()[0].split("@", 1)[0].lower() if text else ""
+        count, delay = self._parse(text)
+
+        if cmd == config.inline_start_command:
+            await self.start_inline(
+                config.key, delay, resume=False,
+                bot_override=self._dynamic_inline_bot(config),
+            )
+            await message.reply(
+                f"✅ Started <code>{config.bot}</code> inline source.\n"
+                f"Cmd: <code>{config.command}</code>\nDelay: <code>{delay}s</code>"
+            )
+            return True
+
+        if cmd == config.inline_resume_command:
+            await self.start_inline(
+                config.key, delay, resume=True,
+                resume_count=count, prefer_checkpoint=count is None,
+                bot_override=self._dynamic_inline_bot(config),
+            )
+            detail = "saved checkpoint" if count is None else f"explicit count {count}"
+            await message.reply(
+                f"✅ Resumed <code>{config.bot}</code> inline source.\n"
+                f"From: <code>{detail}</code>\nDelay: <code>{delay}s</code>"
+            )
+            return True
+
+        if cmd == config.forward_start_command:
+            await self.start_forward(
+                config.key, delay=delay,
+                source_override=self._dynamic_forward_source(config),
+            )
+            await message.reply(
+                f"✅ Started forward <code>{config.bot}</code>.\n"
+                f"Source: <code>{config.forward_source}</code>\nDelay: <code>{delay}s</code>"
+            )
+            return True
+
+        if cmd == config.forward_resume_command:
+            saved = (self._state.get("forward_progress") or {}).get(config.key) or {}
+            if count is None:
+                count = max(0, int(saved.get("current_index", 0) or 0))
+                delay = max(1, min(int(saved.get("delay", delay) or delay), MAX_DELAY))
+            await self.start_forward(
+                config.key, delay=delay, resume_count=count,
+                source_override=self._dynamic_forward_source(config),
+            )
+            await message.reply(
+                f"✅ Resumed forward <code>{config.bot}</code>.\n"
+                f"From index: <code>{count}</code>\n"
+                f"Source: <code>{config.forward_source}</code>\nDelay: <code>{delay}s</code>"
+            )
+            return True
+
+        return False
+
     async def stop_all(self):
         for r in list(self.runners.values()):
             r.task.cancel()
@@ -1255,6 +1360,13 @@ class HelperManager:
     async def handle_command(self, message):
         text = (message.text or "").strip()
         cmd = text.split()[0].split("@", 1)[0].lower() if text else ""
+        if cmd == "/addnewbot":
+            return await self._handle_addnewbot(message)
+
+        dynamic = get_config_for_command(cmd)
+        if dynamic:
+            return await self._handle_dynamic_command(message, dynamic)
+
         if cmd in {"/helperstatus", "/addhelperstatus"}:
             await message.reply(await self.status_text())
             return True
