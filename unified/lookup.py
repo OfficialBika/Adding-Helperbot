@@ -498,9 +498,9 @@ def _accept_photo_candidates(
     """Accept a strong pHash match while ignoring duplicate records of one identity.
 
     A zero margin is normally a useful ambiguity signal. However, records that
-    resolve to the same source/name identity are not competing user-visible
-    results. Keep the best-scoring representative of each identity before
-    applying the margin rule.
+    resolve to the same canonical character name are not competing user-visible
+    results. Keep the best-scoring/source-priority representative of each name
+    before applying the margin rule.
     """
     if not ranked:
         return None, 0.0
