@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -306,8 +306,6 @@ async def register_config(config: AddedBotConfig) -> AddedBotConfig:
         {"$set": payload},
         upsert=True,
     )
-    saved = AddedBotConfig(
-        **{**config.__dict__, "created_at": payload["created_at"], "updated_at": now}
-    )
+    saved = replace(config, created_at=payload["created_at"], updated_at=now)
     _CACHE[saved.key] = saved
     return saved
