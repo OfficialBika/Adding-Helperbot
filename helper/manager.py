@@ -264,7 +264,7 @@ class HelperManager:
 
                 # Any actual bot response resets the no-response streak. Only
                 # media-bearing responses are forwarded to Adding because the
-                # lookup DB requires media identity; text-only replies are logged
+                # Adding DB requires media identity; text-only replies are logged
                 # and skipped without stopping the sequence.
                 consecutive_no_response = 0
                 has_media = bool(
