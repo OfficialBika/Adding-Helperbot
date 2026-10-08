@@ -46,7 +46,7 @@ class AddingOnlySourceTests(unittest.TestCase):
         msg = SimpleNamespace(
             from_user=SimpleNamespace(id=999, username="helper", is_bot=False),
             via_bot=None, forward_origin=None, forward_from=None, sender_chat=None,
-            forward_from=None, text="OwO! Check out this character",
+            text="OwO! Check out this character",
             caption="🆔 30: Ayaka", external_reply=None,
         )
         self.assertEqual(resolve_trusted_inline_collection(msg), "items_character_catcher")
