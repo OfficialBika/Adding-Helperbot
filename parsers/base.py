@@ -130,7 +130,7 @@ def clean_name(value: str | None) -> str | None:
 
 def line_field(text: str, label: str) -> str | None:
     pattern = re.compile(
-        rf"^\s*[^\w\n\r:：•\-=]{{0,8}}{label}\s*[:：•\-=]\s*(.+?)\s*$",
+        rf"^\s*[^\w\n\r:：•\-=]{{0,8}}(?:{label})\s*[:：•\-=]\s*(.+?)\s*$",
         re.I,
     )
     for line in norm(text).splitlines():
