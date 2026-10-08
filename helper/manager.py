@@ -8,7 +8,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
-from .registry import get_config_for_command, parse_addnewbot, register_config
+from .registry import all_configs, get_config_for_command, parse_addnewbot, register_config
 
 log = logging.getLogger("helper-manager")
 
@@ -1340,6 +1340,12 @@ class HelperManager:
                 ])
         else:
             lines.append("• <code>No inline checkpoint yet.</code>")
+
+        dynamic_configs = all_configs()
+        if dynamic_configs:
+            lines.extend(["", "<b>DYNAMIC BOTS</b>"])
+            for config in dynamic_configs:
+                lines.append(f"• <b>{config.bot}</b> — <code>{config.key}</code> Parser: <code>{", ".join(config.parsers)}</code>")
 
         lines.extend([
             "",
