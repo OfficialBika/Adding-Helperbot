@@ -5,7 +5,7 @@ import logging
 from aiogram import Bot
 from aiogram.types import Message
 
-from unified.parser import extract_character_id, extract_name
+from unified.parser import parse_message
 from unified.source_resolver import (
     BOT_SOURCE_COLLECTION,
     BOT_SOURCE_USER_ID,
@@ -152,7 +152,8 @@ async def ingest_message(
 
     media_info = _media_info(target)
     media_type = media_info["media_type"] if media_info else "metadata"
-    text = "\n".join(
+    text = "
+".join(
         value
         for value in (
             getattr(target, "caption", None),
@@ -163,11 +164,17 @@ async def ingest_message(
         if isinstance(value, str) and value.strip()
     )
 
-    name = extract_name(text)
-    if not name:
+    parsed = parse_message(text, source_key=source_key)
+    if not parsed:
+        log.info(
+            "ADD parser no-match source=%s message=%s",
+            source_key,
+            getattr(target, "message_id", None),
+        )
         return False
 
-    character_id = extract_character_id(text)
+    name = parsed.name
+    character_id = parsed.character_id
     command = output_command_from_message(target, source_key) or "/name"
     source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
     source_origin = source_origin_key(target)
@@ -215,8 +222,10 @@ async def ingest_message(
         ),
     )
     log.info(
-        "ADD saved source=%s message=%s name=%s id=%s status=%s",
+        "ADD saved source=%s parser=%s confidence=%.3f message=%s name=%s id=%s status=%s",
         source_key,
+        parsed.parser,
+        parsed.confidence,
         getattr(target, "message_id", None),
         name,
         character_id,
