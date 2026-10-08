@@ -43,11 +43,12 @@ def parse_candidates(
         if candidate.confidence >= MIN_CONFIDENCE:
             candidates.append(candidate)
 
+    parser_priority = {parser.name: parser.priority for parser in PARSERS}
     candidates.sort(
         key=lambda item: (
             item.confidence,
             len(item.matched_fields),
-            PARSERS.index(next(p for p in PARSERS if p.name == item.parser)),
+            parser_priority.get(item.parser, 0),
         ),
         reverse=True,
     )
