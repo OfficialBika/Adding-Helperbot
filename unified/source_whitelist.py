@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from unified.config import settings
+from helper.registry import match_config
 from unified.source_resolver import BOT_SOURCE_COLLECTION, BOT_SOURCE_USER_ID, BOT_SOURCE_CHAT_ID
 
 
@@ -51,6 +52,15 @@ def _forwarded_source_user(message: Any):
 def is_allowed_source(message: Any) -> bool:
     configured = {_norm(x) for x in settings.source_channels}
     origin_chat = forwarded_origin_chat(message)
+
+    dynamic = match_config(
+        username=getattr(origin_chat, "username", None) if origin_chat else None,
+        chat_id=getattr(origin_chat, "id", None) if origin_chat else None,
+        title=getattr(origin_chat, "title", None) if origin_chat else None,
+        forward=True,
+    )
+    if dynamic:
+        return True
 
     if origin_chat is not None and _chat_values(origin_chat) & configured:
         return True
