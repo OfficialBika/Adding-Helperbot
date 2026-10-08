@@ -461,6 +461,78 @@ def _photo_score(query_hash, candidate: dict) -> tuple[float, int | None, int | 
     return score, p, d
 
 
+def _photo_match_identity(candidate: dict) -> tuple[str, str, str, str]:
+    """Return the result identity used when collapsing duplicate hash records."""
+    return (
+        str(candidate.get("source_key") or "").strip().lower(),
+        str(candidate.get("name") or "").strip().casefold(),
+        str(candidate.get("command") or "").strip().casefold(),
+        str(candidate.get("media_type") or "photo").strip().lower(),
+    )
+
+
+def _accept_photo_candidates(
+    ranked: list[tuple[float, int | None, int | None, dict]],
+    *,
+    global_mode: bool = False,
+):
+    """Accept a strong pHash match while ignoring duplicate records of one identity.
+
+    A zero margin is normally a useful ambiguity signal. However, two records
+    that resolve to the exact same source/name/command/media identity are not
+    competing character identities. Keep the best-scoring representative of
+    each identity before applying the margin rule.
+    """
+    if not ranked:
+        return None, 0.0
+
+    representatives: dict[tuple[str, str, str, str], tuple[float, int | None, int | None, dict]] = {}
+    duplicate_count = 0
+    for row in ranked:
+        identity = _photo_match_identity(row[3])
+        previous = representatives.get(identity)
+        if previous is None:
+            representatives[identity] = row
+        else:
+            duplicate_count += 1
+            if row[0] > previous[0]:
+                representatives[identity] = row
+
+    unique_ranked = sorted(representatives.values(), key=lambda row: row[0], reverse=True)
+    best = unique_ranked[0]
+    second_score = unique_ranked[1][0] if len(unique_ranked) > 1 else 0.0
+    threshold = _PHASH_MIN_SCORE if global_mode else _PHASH_MIN_SCORE - 0.01
+    margin = best[0] - second_score
+    structural_ok = (
+        best[1] is not None and best[1] <= _PHASH_THRESHOLD
+    ) or (
+        best[2] is not None and best[2] <= 12
+    )
+    if not structural_ok or best[0] < threshold:
+        return None, best[0]
+
+    if duplicate_count:
+        log.info(
+            "pHash duplicate identities collapsed source=%s name=%s duplicates=%s unique=%s",
+            best[3].get("source_key"),
+            best[3].get("name"),
+            duplicate_count,
+            len(unique_ranked),
+        )
+
+    if len(unique_ranked) > 1 and margin < _PHASH_MIN_MARGIN:
+        log.warning(
+            "pHash ambiguous source=%s best=%s second=%s margin=%.4f",
+            best[3].get("source_key"),
+            best[3].get("name"),
+            unique_ranked[1][3].get("name"),
+            margin,
+        )
+        return None, best[0]
+
+    return best[3], best[0]
+
+
 async def _photo_hash_match(
     media_hash,
     scope: list[str] | None,
@@ -498,29 +570,7 @@ async def _photo_hash_match(
         return ranked
 
     async def accept(ranked):
-        if not ranked:
-            return None, 0.0
-        best = ranked[0]
-        second_score = ranked[1][0] if len(ranked) > 1 else 0.0
-        threshold = _PHASH_MIN_SCORE if global_mode else _PHASH_MIN_SCORE - 0.01
-        margin = best[0] - second_score
-        structural_ok = (
-            best[1] is not None and best[1] <= _PHASH_THRESHOLD
-        ) or (
-            best[2] is not None and best[2] <= 12
-        )
-        if not structural_ok or best[0] < threshold:
-            return None, best[0]
-        if len(ranked) > 1 and margin < _PHASH_MIN_MARGIN:
-            log.warning(
-                "pHash ambiguous source=%s best=%s second=%s margin=%.4f",
-                best[3].get("source_key"),
-                best[3].get("name"),
-                ranked[1][3].get("name"),
-                margin,
-            )
-            return None, best[0]
-        return best[3], best[0]
+        return _accept_photo_candidates(ranked, global_mode=global_mode)
 
     # RAM candidate index is the primary cold-hash accelerator once warmed.
     # Mongo remains the correctness/compatibility fallback.
