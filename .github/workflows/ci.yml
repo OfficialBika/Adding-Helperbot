@@ -55,6 +55,11 @@ jobs:
           DB_NAME: ci_test
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
+      - name: Validate Local Bot API temp cleanup
+        run: |
+          bash -n deploy/local-bot-api/cleanup-temp.sh
+          bash tests/test_local_bot_api_cleanup.sh
+
       - name: Verify runtime and native imports
         run: |
           python --version
