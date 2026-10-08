@@ -1,75 +1,55 @@
 from __future__ import annotations
 
-import asyncio
-import io
 import logging
 
 from aiogram import Bot
 from aiogram.types import Message
 
-from unified.parser import extract_name, extract_character_id, extract_anime, extract_rarity
-from unified.store import save_character
-from unified.lookup_cache import positive_uid_cache
-from services.hash_service import hash_photo, hash_video
-from services.source_resolver import (
+from unified.parser import extract_character_id, extract_name
+from unified.source_resolver import (
+    BOT_SOURCE_COLLECTION,
+    BOT_SOURCE_USER_ID,
+    grabber_source_variant,
+    output_command_from_message,
     resolve_source_collection,
     resolve_trusted_inline_collection,
-    output_command_from_message,
-    grabber_source_variant,
-    source_author_signature,
+    source_origin_key,
 )
-from unified.source_whitelist import is_allowed_source, forwarded_origin_chat
+from unified.source_whitelist import forwarded_origin_chat, is_allowed_source
+from unified.store import save_character
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("unified-ingest")
 
 
 def _media_info(target: Message) -> dict | None:
-    """Extract the actual Telegram media object and all stable media identifiers.
-
-    aiogram represents Message.photo as a list[PhotoSize]. Returning that list
-    directly was the cause of the previous file_id=None/empty-download failure.
-    We keep every PhotoSize file_id/file_unique_id and download from the largest
-    available PhotoSize.
-    """
     photos = getattr(target, "photo", None) or []
-    if photos:
-        photo_sizes = [p for p in photos if getattr(p, "file_id", None)]
-        if photo_sizes:
-            selected = max(
-                photo_sizes,
-                key=lambda p: (
-                    int(getattr(p, "width", 0) or 0) * int(getattr(p, "height", 0) or 0),
-                    int(getattr(p, "file_size", 0) or 0),
-                ),
-            )
-            return {
-                "media": selected,
-                "media_type": "photo",
-                "file_id": str(getattr(selected, "file_id", "") or ""),
-                "file_unique_id": str(getattr(selected, "file_unique_id", "") or ""),
-                "file_ids": [
-                    str(getattr(p, "file_id", "") or "")
-                    for p in photo_sizes
-                    if getattr(p, "file_id", None)
-                ],
-                "file_unique_ids": [
-                    str(getattr(p, "file_unique_id", "") or "")
-                    for p in photo_sizes
-                    if getattr(p, "file_unique_id", None)
-                ],
-                "width": int(getattr(selected, "width", 0) or 0),
-                "height": int(getattr(selected, "height", 0) or 0),
-                "duration": 0,
-                "file_size": int(getattr(selected, "file_size", 0) or 0),
-                "mime_type": "image/jpeg",
-                "file_name": "",
-            }
+    photo_sizes = [p for p in photos if getattr(p, "file_id", None)]
+    if photo_sizes:
+        selected = max(
+            photo_sizes,
+            key=lambda p: (
+                int(getattr(p, "width", 0) or 0) * int(getattr(p, "height", 0) or 0),
+                int(getattr(p, "file_size", 0) or 0),
+            ),
+        )
+        return {
+            "media_type": "photo",
+            "file_id": str(getattr(selected, "file_id", "") or ""),
+            "file_unique_id": str(getattr(selected, "file_unique_id", "") or ""),
+            "file_ids": [str(getattr(p, "file_id", "") or "") for p in photo_sizes if getattr(p, "file_id", None)],
+            "file_unique_ids": [str(getattr(p, "file_unique_id", "") or "") for p in photo_sizes if getattr(p, "file_unique_id", None)],
+            "width": int(getattr(selected, "width", 0) or 0),
+            "height": int(getattr(selected, "height", 0) or 0),
+            "duration": 0,
+            "file_size": int(getattr(selected, "file_size", 0) or 0),
+            "mime_type": "image/jpeg",
+            "file_name": "",
+        }
 
     for attr, media_type in (("video", "video"), ("animation", "video")):
         obj = getattr(target, attr, None)
-        if obj and getattr(obj, "file_id", None):
+        if obj is not None and getattr(obj, "file_id", None):
             return {
-                "media": obj,
                 "media_type": media_type,
                 "file_id": str(getattr(obj, "file_id", "") or ""),
                 "file_unique_id": str(getattr(obj, "file_unique_id", "") or ""),
@@ -80,11 +60,11 @@ def _media_info(target: Message) -> dict | None:
                 "duration": int(getattr(obj, "duration", 0) or 0),
                 "file_size": int(getattr(obj, "file_size", 0) or 0),
                 "mime_type": str(getattr(obj, "mime_type", "") or ""),
-                "file_name": str(getattr(obj, "file_name", "") or ""),
+                "file_name": "",
             }
 
     obj = getattr(target, "document", None)
-    if obj and getattr(obj, "file_id", None):
+    if obj is not None and getattr(obj, "file_id", None):
         mime = str(getattr(obj, "mime_type", "") or "").lower()
         filename = str(getattr(obj, "file_name", "") or "").lower()
         if mime.startswith("image/") or filename.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
@@ -94,7 +74,6 @@ def _media_info(target: Message) -> dict | None:
         else:
             return None
         return {
-            "media": obj,
             "media_type": media_type,
             "file_id": str(getattr(obj, "file_id", "") or ""),
             "file_unique_id": str(getattr(obj, "file_unique_id", "") or ""),
@@ -104,14 +83,13 @@ def _media_info(target: Message) -> dict | None:
             "height": int(getattr(obj, "height", 0) or 0),
             "duration": int(getattr(obj, "duration", 0) or 0),
             "file_size": int(getattr(obj, "file_size", 0) or 0),
-            "mime_type": str(getattr(obj, "mime_type", "") or ""),
+            "mime_type": mime,
             "file_name": str(getattr(obj, "file_name", "") or ""),
         }
-
     return None
 
 
-def _forwarded(target: Message) -> bool:
+def _is_forwarded(target: Message) -> bool:
     return bool(
         getattr(target, "forward_origin", None)
         or getattr(target, "forward_from_chat", None)
@@ -120,16 +98,17 @@ def _forwarded(target: Message) -> bool:
     )
 
 
-async def _download(bot: Bot, file_id: str) -> bytes | None:
-    if not file_id:
-        return None
-    result = await asyncio.wait_for(bot.download(file_id), timeout=45)
-    if isinstance(result, io.BytesIO):
-        return result.getvalue()
-    if hasattr(result, "read"):
-        value = result.read()
-        return value if isinstance(value, bytes) else None
-    return None
+def _configured_bot_sender(target: Message) -> bool:
+    user = getattr(target, "from_user", None)
+    if user is None or not getattr(user, "is_bot", False):
+        return False
+    username = str(getattr(user, "username", "") or "").strip().lower()
+    if username and f"@{username.lstrip('@')}" in BOT_SOURCE_COLLECTION:
+        return True
+    try:
+        return int(getattr(user, "id", 0) or 0) in BOT_SOURCE_USER_ID
+    except Exception:
+        return False
 
 
 async def ingest_message(
@@ -138,205 +117,109 @@ async def ingest_message(
     trusted_user_ids: set[int] | None = None,
     trusted_source_collection: str | None = None,
 ) -> dict | bool:
-    # The only accepted Adding input is the message itself forwarded from an
-    # explicitly configured source channel. A reply-to message is never used
-    # as an authorization shortcut.
     target = message
     from_user = getattr(target, "from_user", None)
-    sender_is_configured_bot = bool(
-        getattr(from_user, "is_bot", False)
-        and resolve_source_collection(target)
-    )
+    sender_id = getattr(from_user, "id", None)
     trusted = bool(
-        (trusted_user_ids and getattr(from_user, "id", None) in trusted_user_ids)
-        or sender_is_configured_bot
+        (trusted_user_ids and sender_id in trusted_user_ids)
+        or _configured_bot_sender(target)
     )
-    if not _forwarded(target) and not trusted:
+    forwarded = _is_forwarded(target)
+
+    if not forwarded and not trusted:
         log.info(
-            "SKIP untrusted message chat=%s message=%s from_user=%s",
-            getattr(getattr(target, "chat", None), "id", None),
+            "ADD skip untrusted message=%s from_user=%s",
             getattr(target, "message_id", None),
-            getattr(getattr(target, "from_user", None), "id", None),
+            sender_id,
         )
         return False
 
-    if not trusted and not is_allowed_source(target):
-        origin_chat = forwarded_origin_chat(target)
+    if forwarded and not trusted and not is_allowed_source(target):
+        origin = forwarded_origin_chat(target)
         log.warning(
-            "SKIP unauthorized forwarded source chat=%s username=%s message=%s",
-            getattr(origin_chat, "id", None),
-            getattr(origin_chat, "username", None),
+            "ADD skip unauthorized source message=%s chat=%s username=%s",
             getattr(target, "message_id", None),
+            getattr(origin, "id", None),
+            getattr(origin, "username", None),
         )
         return False
 
-    # Resolve the canonical source collection before media extraction so
-    # metadata-only Senpai valuation replies can also be ingested.
     source_key = trusted_source_collection or resolve_source_collection(target)
-    source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
-    source_signature = source_author_signature(target) if source_key == "items_grabber_fw" else None
     if not source_key and trusted:
         source_key = resolve_trusted_inline_collection(target)
-        source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
-        source_signature = source_author_signature(target) if source_key == "items_grabber_fw" else None
     if not source_key:
-        log.warning(
-            "SKIP unknown source chat=%s message=%s",
-            getattr(getattr(target, "chat", None), "id", None),
-            getattr(target, "message_id", None),
-        )
         return False
 
     media_info = _media_info(target)
-    if media_info:
-        media = media_info["media"]
-        media_type = media_info["media_type"]
-    else:
-        media = None
-        media_type = "metadata"
-
+    media_type = media_info["media_type"] if media_info else "metadata"
     text = "\n".join(
-        x for x in (
+        value
+        for value in (
             getattr(target, "caption", None),
             getattr(target, "text", None),
             getattr(target, "html_text", None),
             getattr(target, "md_text", None),
-        ) if isinstance(x, str) and x.strip()
+        )
+        if isinstance(value, str) and value.strip()
     )
 
     name = extract_name(text)
-    character_id = extract_character_id(text)
-    anime = extract_anime(text)
-    rarity = extract_rarity(text)
     if not name:
-        log.warning(
-            "SKIP source=%s: character name not parsed message=%s",
-            source_key,
-            getattr(target, "message_id", None),
-        )
         return False
 
+    character_id = extract_character_id(text)
     command = output_command_from_message(target, source_key) or "/name"
+    source_variant = grabber_source_variant(target) if source_key == "items_grabber_fw" else None
+    source_origin = source_origin_key(target)
 
-    # Catch Log forward records intentionally omit the legacy character ID.
-    # The media UIDs + hashes remain the lookup identities, so the FW dataset
-    # does not depend on the source bot's internal numeric ID.
-    stored_character_id = None if source_key == "items_character_catcher_fw" else character_id
-
-    try:
-        file_id = media_info["file_id"] if media_info else ""
-        data = None
-        try:
-            data = await _download(bot, file_id)
-        except Exception as exc:
-            # Metadata/file IDs are still valid even when Bot API download is
-            # unavailable (for example a file over the current download limit).
-            log.warning(
-                "MEDIA download failed source=%s message=%s type=%s size=%s error=%s",
-                source_key,
-                getattr(target, "message_id", None),
-                media_type,
-                media_info.get("file_size", 0) if media_info else 0,
-                exc,
-            )
-
-        hashed = None
-        if data:
-            log.info(
-                "INGEST media ready source=%s message=%s type=%s bytes=%s name=%s id=%s",
-                source_key,
-                getattr(target, "message_id", None),
-                media_type,
-                len(data),
-                name,
-                stored_character_id,
-            )
-            hashed = await asyncio.to_thread(
-                hash_photo if media_type == "photo" else hash_video,
-                data,
-            )
-        else:
-            log.warning(
-                "INGEST metadata-only save source=%s message=%s type=%s file_id_present=%s unique_ids=%s",
-                source_key,
-                getattr(target, "message_id", None),
-                media_type,
-                bool(file_id),
-                len(media_info.get("file_unique_ids", [])) if media_info else 0,
-            )
-
-        origin_obj = getattr(target, "forward_origin", None)
-        origin_chat = getattr(origin_obj, "chat", None) or getattr(origin_obj, "sender_chat", None)
-        origin_mid = getattr(origin_obj, "message_id", None)
-
-        if origin_chat is None:
-            origin_chat = getattr(target, "forward_from_chat", None)
-            origin_mid = origin_mid or getattr(target, "forward_from_message_id", None)
-
-        origin = None
-        if origin_chat is not None and origin_mid is not None:
-            origin = (int(origin_chat.id), int(origin_mid))
-
-        media_meta = {
-            "width": media_info["width"] if media_info else 0,
-            "height": media_info["height"] if media_info else 0,
-            "duration": media_info["duration"] if media_info else 0,
-            "file_size": media_info["file_size"] if media_info else 0,
-            "mime_type": media_info["mime_type"] if media_info else "",
-            "file_name": media_info["file_name"] if media_info else "",
+    if media_info and not str(media_info.get("file_unique_id") or "").strip():
+        return {
+            "status": "skipped",
+            "document": None,
+            "reason": "missing_file_unique_id",
         }
 
-        # Exact UID architecture: every actual Telegram media record must carry
-        # Telegram's native file_unique_id. Never synthesize an identity from
-        # message IDs, hashes, filenames, or forward origin.
-        if media_info and media_info.get("media_type") != "metadata":
-            exact_uid = str(media_info.get("file_unique_id") or "").strip()
-            if not exact_uid:
-                log.error(
-                    "SKIP media without Telegram file_unique_id source=%s message=%s type=%s",
-                    source_key,
-                    getattr(target, "message_id", None),
-                    media_type,
-                )
-                return {"status": "skipped", "document": None, "reason": "missing_file_unique_id"}
+    media_meta = {
+        "width": media_info["width"] if media_info else 0,
+        "height": media_info["height"] if media_info else 0,
+        "duration": media_info["duration"] if media_info else 0,
+        "file_size": media_info["file_size"] if media_info else 0,
+        "mime_type": media_info["mime_type"] if media_info else "",
+        "file_name": media_info["file_name"] if media_info else "",
+    }
 
-        saved = await save_character(
-            name=name,
-            character_id=stored_character_id,
-            command=command,
-            source_key=source_key,
-            media_type=media_type,
-            file_id=file_id,
-            file_ids=media_info["file_ids"] if media_info else [],
-            file_unique_id=media_info["file_unique_id"] if media_info else None,
-            file_unique_ids=media_info["file_unique_ids"] if media_info else [],
-            media_meta=media_meta,
-            media_hash=hashed,
-            source_origin=origin,
-            source_variant=source_variant,
-            source_signature=source_signature,
-            archive=(message.chat.id, message.message_id),
-        )
-        if isinstance(saved, dict) and saved.get("document"):
-            cached_doc = saved["document"]
-            cached_uids = [
-                str(x).strip()
-                for x in (cached_doc.get("file_unique_ids") or [])
-                if str(x).strip()
-            ]
-            cached_source = str(cached_doc.get("source_key") or "").strip().lower()
-            if cached_uids and cached_source:
-                positive_uid_cache.remember(cached_uids, cached_doc, cached_source)
-
-        log.info(
-            "INGEST save completed source=%s message=%s name=%s id=%s status=%s",
-            source_key,
-            getattr(target, "message_id", None),
-            name,
-            stored_character_id,
-            saved.get("status") if isinstance(saved, dict) else "unknown",
-        )
-        return saved
-    except Exception:
-        log.exception("forward-only ingest failed")
-        return False
+    saved = await save_character(
+        name=name,
+        character_id=character_id,
+        command=command,
+        source_key=source_key,
+        media_type=media_type,
+        file_unique_id=media_info["file_unique_id"] if media_info else None,
+        file_id=media_info["file_id"] if media_info else None,
+        file_unique_ids=media_info["file_unique_ids"] if media_info else [],
+        file_ids=media_info["file_ids"] if media_info else [],
+        media_meta=media_meta,
+        source_origin=source_origin,
+        source_variant=source_variant,
+        source_signature=next(
+            (
+                str(getattr(obj, "author_signature", "") or "").strip()
+                for obj in (getattr(target, "forward_origin", None), target)
+                if str(getattr(obj, "author_signature", "") or "").strip()
+            ),
+            None,
+        ),
+        archive=(
+            int(getattr(target.chat, "id")),
+            int(getattr(target, "message_id")),
+        ),
+    )
+    log.info(
+        "ADD saved source=%s message=%s name=%s id=%s status=%s",
+        source_key,
+        getattr(target, "message_id", None),
+        name,
+        character_id,
+        saved.get("status") if isinstance(saved, dict) else "unknown",
+    )
+    return saved
