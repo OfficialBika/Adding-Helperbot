@@ -81,6 +81,13 @@ def format_ingest_notice(result: dict) -> str:
     command = _esc(doc.get("command") or "/name")
     media_type = _esc(doc.get("media_type") or "unknown")
 
+    if status == "already_added":
+        return (
+            "✅ <b>Already added</b>\n\n"
+            f"Card ID: <code>{character_id}</code>\n"
+            f"Name: <code>{name}</code>\n"
+            f"Source: <code>{source}</code>"
+        )
     if status == "unchanged":
         return "✅ <b>Already saved</b>"
     if status == "saved":
@@ -102,6 +109,13 @@ def format_ingest_notice(result: dict) -> str:
             f"Source: <code>{source}</code>\n"
             f"Media: <code>{media_type}</code>\n\n"
             f"<b>Updated:</b>\n{details}"
+        )
+    if str(result.get("reason") or "") == "edit_target_not_found":
+        return (
+            "⚠️ <b>EDIT SKIPPED</b>\n\n"
+            f"Card ID: <code>{character_id}</code>\n"
+            f"Source: <code>{source}</code>\n"
+            "No existing record with this ID was found in this source DB."
         )
     return ""
 
