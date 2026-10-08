@@ -173,6 +173,20 @@ class AddingOnlyArchitectureTests(unittest.TestCase):
         ):
             self.assertFalse(path.exists(), f"forbidden path still exists: {path}")
 
+    def test_deployment_has_no_lookup_settings(self):
+        render = Path("render.yaml").read_text(encoding="utf-8")
+        for token in (
+            "AUTO_LOOKUP_ENABLED", "LOOKUP_IN_PRIVATE", "LOOKUP_IN_GROUPS",
+            "LOOKUP_REPLY_NOT_FOUND", "MAX_PHOTO_CANDIDATES",
+            "MAX_VIDEO_CANDIDATES",
+        ):
+            self.assertNotIn(token, render, f"stale lookup setting remains: {token}")
+
+    def test_runtime_state_is_ignored(self):
+        gitignore = Path(".gitignore").read_text(encoding="utf-8")
+        self.assertIn("addhelper_state.json", gitignore)
+        self.assertNotIn("namebotv3/data/*.db", gitignore)
+
     def test_adding_runtime_has_no_search_imports(self):
         files = (
             Path("unified/main.py"), Path("unified/ingest.py"),
