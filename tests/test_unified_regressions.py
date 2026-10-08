@@ -191,8 +191,8 @@ class AddingOnlyStoreTests(unittest.IsolatedAsyncioTestCase):
             "_id": "mongo-id",
             "name": "Retsu Unahana",
             "name_key": "retsu unahana",
-            "anime": "Bleach",
-            "rarity": "NOVICE",
+            "anime": "Dragon Ball",
+            "rarity": "RARE",
             "character_id": "5726",
             "source_key": "items_newcardbot",
         }
