@@ -6,6 +6,7 @@ import unicodedata
 from aiogram.types import Message
 
 from unified.config import settings
+from helper.registry import match_config
 
 STYLIZED_LATIN_TRANSLATION = str.maketrans({
     "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ꜰ": "f",
@@ -383,6 +384,15 @@ def resolve_trusted_inline_collection(message: Message) -> str | None:
 
 def resolve_source_collection(message: Message) -> str | None:
     username = source_username(message)
+    dynamic = match_config(
+        username=username,
+        user_id=source_user_id(message),
+        chat_id=source_chat_id(message),
+        title=source_title(message),
+        forward=bool(getattr(message, "forward_origin", None) or getattr(message, "forward_from_chat", None)),
+    )
+    if dynamic:
+        return dynamic.key
     if username and username in BOT_SOURCE_COLLECTION:
         return BOT_SOURCE_COLLECTION[username]
 
@@ -421,6 +431,16 @@ def resolve_source_collection(message: Message) -> str | None:
 
 
 def output_command_from_message(message: Message, collection: str | None = None) -> str | None:
+    dynamic = match_config(
+        username=source_username(message),
+        user_id=source_user_id(message),
+        chat_id=source_chat_id(message),
+        title=source_title(message),
+        forward=bool(getattr(message, "forward_origin", None) or getattr(message, "forward_from_chat", None)),
+    )
+    if dynamic:
+        return dynamic.command
+
     username = source_username(message)
     if username and username in BOT_SOURCE_OUTPUT_COMMAND:
         return BOT_SOURCE_OUTPUT_COMMAND[username]
