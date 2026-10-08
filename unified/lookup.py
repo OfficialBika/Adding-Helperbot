@@ -492,6 +492,8 @@ def _accept_photo_candidates(
     ranked: list[tuple[float, int | None, int | None, dict]],
     *,
     global_mode: bool = False,
+    exact_pixel_sha256: str | None = None,
+    exact_crop_hash: str | None = None,
 ):
     """Accept a strong pHash match while ignoring duplicate records of one identity.
 
@@ -642,7 +644,12 @@ async def _photo_hash_match(
         return ranked
 
     async def accept(ranked):
-        return _accept_photo_candidates(ranked, global_mode=global_mode)
+        return _accept_photo_candidates(
+            ranked,
+            global_mode=global_mode,
+            exact_pixel_sha256=exact_pixel_sha256,
+            exact_crop_hash=exact_crop_hash,
+        )
 
     # RAM candidate index is the primary cold-hash accelerator once warmed.
     # Mongo remains the correctness/compatibility fallback.
