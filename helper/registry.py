@@ -267,7 +267,7 @@ def match_config(
         if forward:
             if _matches_source(config.forward_source, chat_values):
                 return config
-        elif _matches_source(config.inline_source, user_values | chat_values):
+        elif _matches_source(config.inline_source, user_values):
             return config
     return None
 
