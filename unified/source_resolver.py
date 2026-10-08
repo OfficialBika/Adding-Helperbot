@@ -370,9 +370,9 @@ def _content_source(message: Message):
 
 def resolve_trusted_inline_collection(message: Message) -> str | None:
     text = _message_text(message)
-    if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+waifu", text, re.I):
+    if re.search(r"owo!\s*check\s+out\s+this\s+waifu", text, re.I):
         return "items_grab_your_waifu"
-    if re.search(r"media\s*\+\s*owo!\s*check\s+out\s+this\s+character", text, re.I):
+    if re.search(r"owo!\s*check\s+out\s+this\s+character", text, re.I):
         return "items_character_catcher"
     if re.search(r"media\s*\+\s*🎴.*?(?:🎬\s*anime|🆔\s*id\s*:)", text, re.I | re.S):
         return "items_senpai_catcher"
