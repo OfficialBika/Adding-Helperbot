@@ -56,7 +56,7 @@ class DynamicHelperBotTests(unittest.TestCase):
         try:
             _CACHE.clear()
             _CACHE[config.key] = config
-            self.assertEqual(parser_names_for_source(config.key), ("grab", "generic"))
+            self.assertEqual(parser_names_for_source(config.key), ("grab_family", "generic_structured"))
             self.assertEqual(
                 resolve_source_collection(
                     SimpleNamespace(
