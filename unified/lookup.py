@@ -494,7 +494,7 @@ def _accept_photo_candidates(
     if not ranked:
         return None, 0.0
 
-    representatives: dict[tuple[str, str, str], tuple[float, int | None, int | None, dict]] = {}
+    representatives: dict[tuple[str, str], tuple[float, int | None, int | None, dict]] = {}
     duplicate_count = 0
     for row in ranked:
         identity = _photo_match_identity(row[3])
