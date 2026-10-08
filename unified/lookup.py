@@ -461,12 +461,17 @@ def _photo_score(query_hash, candidate: dict) -> tuple[float, int | None, int | 
     return score, p, d
 
 
-def _photo_match_identity(candidate: dict) -> tuple[str, str, str, str]:
-    """Return the result identity used when collapsing duplicate hash records."""
+def _photo_match_identity(candidate: dict) -> tuple[str, str, str]:
+    """Return the user-visible result identity used for hash ambiguity checks.
+
+    The command controls output formatting/routing metadata; it is not a
+    different character identity. Same-source records with the same normalized
+    name and media type therefore must not create a false ambiguity merely
+    because they were stored with different output commands.
+    """
     return (
         str(candidate.get("source_key") or "").strip().lower(),
         str(candidate.get("name") or "").strip().casefold(),
-        str(candidate.get("command") or "").strip().casefold(),
         str(candidate.get("media_type") or "photo").strip().lower(),
     )
 
