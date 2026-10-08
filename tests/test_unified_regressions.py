@@ -131,6 +131,43 @@ class PhotoHashAmbiguityTests(unittest.TestCase):
         self.assertEqual(doc["source_key"], "items_character_catcher")
         self.assertAlmostEqual(score, 0.9)
 
+    def test_exact_pixel_fingerprint_can_resolve_phash_tie(self):
+        rows = [
+            (
+                0.900,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Black Goku",
+                    "command": "/name",
+                    "media_type": "photo",
+                    "pixel_sha256": "PIXEL-BLACK",
+                    "crop_hash": "CROP-BLACK",
+                },
+            ),
+            (
+                0.899,
+                0,
+                0,
+                {
+                    "source_key": "items_character_catcher",
+                    "name": "Son Goku",
+                    "command": "/name",
+                    "media_type": "photo",
+                    "pixel_sha256": "PIXEL-SON",
+                    "crop_hash": "CROP-SON",
+                },
+            ),
+        ]
+
+        doc, score = _accept_photo_candidates(
+            rows,
+            exact_pixel_sha256="PIXEL-BLACK",
+        )
+        self.assertEqual(doc["name"], "Black Goku")
+        self.assertAlmostEqual(score, 0.9)
+
     def test_different_identities_still_require_margin(self):
         rows = [
             (
