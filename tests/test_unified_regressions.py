@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 os.environ.setdefault("MONGO_URI", "mongodb://127.0.0.1:27017")
 os.environ.setdefault("DB_NAME", "ci_test")
 
+from helper.registry import _CACHE, parse_addnewbot, parser_names_for_source
 from unified.ingest import _media_info
 from unified.parser import extract_character_id, extract_name, parse_candidates, parse_message, parser_names
 from unified.source_resolver import (
@@ -18,6 +19,70 @@ from unified.source_resolver import (
 from unified.source_whitelist import is_allowed_source
 from unified.status import RuntimeMetrics
 from unified.store import _index_source_variant, save_character
+
+
+class DynamicHelperBotTests(unittest.TestCase):
+    def test_addnewbot_payload_is_parsed(self):
+        config = parse_addnewbot(
+            "/addnewbot @newcardbot\n"
+            "cmd - /grab\n"
+            "inlinesource - @newcardbot\n"
+            "Forwardsource - @newcardchannel\n"
+            "commands - /startnewcardbot,/resumenewcardbot,/startfwnewcatchbot,/resumefwnewcatchbot\n"
+            "Parser1 - grab\n"
+            "Parser2 - generic"
+        )
+        self.assertEqual(config.key, "items_newcardbot")
+        self.assertEqual(config.command, "/grab")
+        self.assertEqual(config.commands, (
+            "/startnewcardbot",
+            "/resumenewcardbot",
+            "/startfwnewcatchbot",
+            "/resumefwnewcatchbot",
+        ))
+        self.assertEqual(config.parsers, ("grab", "generic"))
+
+    def test_dynamic_sources_and_parser_preferences(self):
+        config = parse_addnewbot(
+            "/addnewbot @newcardbot\n"
+            "cmd - /grab\n"
+            "inlinesource - @newcardbot\n"
+            "Forwardsource - @newcardchannel\n"
+            "commands - /startnewcardbot,/resumenewcardbot,/startfwnewcatchbot,/resumefwnewcatchbot\n"
+            "Parser1 - grab\n"
+            "Parser2 - generic"
+        )
+        previous = dict(_CACHE)
+        try:
+            _CACHE.clear()
+            _CACHE[config.key] = config
+            self.assertEqual(parser_names_for_source(config.key), ("grab", "generic"))
+            self.assertEqual(
+                resolve_source_collection(
+                    SimpleNamespace(
+                        from_user=SimpleNamespace(id=999, username="newcardbot", is_bot=True),
+                        via_bot=None, forward_origin=None, forward_from=None,
+                        forward_from_chat=None, sender_chat=None, text="", caption="",
+                        external_reply=None,
+                    )
+                ),
+                "items_newcardbot",
+            )
+            self.assertEqual(
+                output_command_from_message(
+                    SimpleNamespace(
+                        from_user=SimpleNamespace(id=999, username="newcardbot", is_bot=True),
+                        via_bot=None, forward_origin=None, forward_from=None,
+                        forward_from_chat=None, sender_chat=None, text="", caption="",
+                        external_reply=None,
+                    ),
+                    "items_newcardbot",
+                ),
+                "/grab",
+            )
+        finally:
+            _CACHE.clear()
+            _CACHE.update(previous)
 
 
 class AddingOnlySourceTests(unittest.TestCase):
