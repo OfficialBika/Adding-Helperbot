@@ -183,9 +183,9 @@ def parse_addnewbot(text: str) -> AddedBotConfig:
         raise ValueError("Missing inlinesource - @botusername")
     if not forward_source:
         raise ValueError("Missing Forwardsource - @channel_or_chat_id")
-    if not re.match(r"^(?:@[A-Za-z0-9_]{3,}|-100\\d{5,})$", forward_source.strip()):
+    if not re.match(r"^(?:@[A-Za-z0-9_]{3,}|-100\d{5,})$", forward_source.strip()):
         raise ValueError("Forwardsource must be @channelusername or a Telegram chat ID like -1001234567890")
-    if not re.match(r"^(?:@[A-Za-z0-9_]{3,}|-100\\d{5,})$", inline_source.strip()):
+    if not re.match(r"^(?:@[A-Za-z0-9_]{3,}|-100\d{5,})$", inline_source.strip()):
         raise ValueError("inlinesource must be @botusername or a Telegram bot chat ID")
     if not commands:
         raise ValueError("Missing commands - start,resume,startfw,resumefw")
@@ -264,9 +264,6 @@ def match_config(
         chat_values.add(_norm_source(chat_id))
     if username:
         chat_values.add(_norm_source(username))
-    if title:
-        # Titles are user-controlled; do not trust them for dynamic forward-source authorization.
-
     for config in _CACHE.values():
         if forward:
             if _matches_source(config.forward_source, chat_values):
