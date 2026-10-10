@@ -1,4 +1,6 @@
+import asyncio
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 os.environ.setdefault("MONGO_URI", "mongodb://127.0.0.1:27017")
 os.environ.setdefault("DB_NAME", "ci_test")
 
+from helper.manager import HelperManager, _is_catch_not_found
 from helper.registry import _CACHE, parse_addnewbot, parser_names_for_source
 from unified.ingest import _is_metadata_edit, _media_info
 from unified.parser import extract_character_id, extract_name, parse_candidates, parse_message, parser_names
@@ -106,6 +109,131 @@ class DynamicHelperBotTests(unittest.TestCase):
         finally:
             _CACHE.clear()
             _CACHE.update(previous)
+
+
+class CatchDmCollectorTests(unittest.IsolatedAsyncioTestCase):
+    def test_catch_not_found_matcher(self):
+        self.assertTrue(_is_catch_not_found("🚫 Character with ID 27 not found"))
+        self.assertFalse(_is_catch_not_found("OwO! Check out this character\n27: Rin"))
+
+    async def test_startcatch_command_uses_dm_worker_not_inline(self):
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "helper.manager.STATE_PATH", Path(tmp) / "state.json"
+        ):
+            client = SimpleNamespace(
+                send_message=AsyncMock(),
+                forward_messages=AsyncMock(),
+            )
+            manager = HelperManager(SimpleNamespace(client=client, adding_chat_id=-100123))
+            manager.start_catch = AsyncMock()
+            manager.start_inline = AsyncMock()
+            message = SimpleNamespace(text="/startcatchbot 2", reply=AsyncMock())
+
+            await manager.handle_command(message)
+
+            manager.start_catch.assert_awaited_once_with(1, 2)
+            manager.start_inline.assert_not_awaited()
+            self.assertIn("DM collector", message.reply.await_args.args[0])
+            self.assertIn("20 consecutive not-found", message.reply.await_args.args[0])
+
+    async def test_catch_auto_stops_after_20_consecutive_not_found(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("helper.manager.STATE_PATH", Path(tmp) / "state.json"),
+            patch("helper.manager.asyncio.sleep", new=AsyncMock()),
+        ):
+            client = SimpleNamespace(
+                send_message=AsyncMock(),
+                forward_messages=AsyncMock(),
+            )
+            manager = HelperManager(SimpleNamespace(client=client, adding_chat_id=-100123))
+
+            async def respond(_bot, command):
+                current_id = int(command.rsplit(" ", 1)[1])
+                response = SimpleNamespace(
+                    text=f"🚫 Character with ID {current_id} not found",
+                    caption=None,
+                    chat=SimpleNamespace(id=6157455819),
+                    id=current_id,
+                )
+                await manager.responses.setdefault("catch", asyncio.Queue()).put(response)
+
+            client.send_message.side_effect = respond
+            await manager.start_catch(1, delay=1)
+            task = manager.runners["catch"].task
+            await task
+
+            progress = manager._state["catch_progress"]
+            self.assertEqual(client.send_message.await_count, 20)
+            self.assertEqual(progress["status"], "auto_stopped")
+            self.assertEqual(progress["next_id"], 21)
+            self.assertEqual(progress["consecutive_not_found"], 20)
+            self.assertFalse(progress["running"])
+            client.forward_messages.assert_not_awaited()
+
+    async def test_found_response_resets_not_found_streak(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("helper.manager.STATE_PATH", Path(tmp) / "state.json"),
+            patch("helper.manager.asyncio.sleep", new=AsyncMock()),
+        ):
+            client = SimpleNamespace(
+                send_message=AsyncMock(),
+                forward_messages=AsyncMock(),
+            )
+            manager = HelperManager(SimpleNamespace(client=client, adding_chat_id=-100123))
+
+            async def respond(_bot, command):
+                current_id = int(command.rsplit(" ", 1)[1])
+                if current_id == 6:
+                    response = SimpleNamespace(
+                        text="OwO! Check out this character\n6: Rin",
+                        caption=None,
+                        chat=SimpleNamespace(id=6157455819),
+                        id=6006,
+                    )
+                else:
+                    response = SimpleNamespace(
+                        text=f"🚫 Character with ID {current_id} not found",
+                        caption=None,
+                        chat=SimpleNamespace(id=6157455819),
+                        id=current_id,
+                    )
+                await manager.responses.setdefault("catch", asyncio.Queue()).put(response)
+
+            client.send_message.side_effect = respond
+            await manager.start_catch(1, delay=1)
+            task = manager.runners["catch"].task
+            await task
+
+            progress = manager._state["catch_progress"]
+            self.assertEqual(client.send_message.await_count, 26)
+            self.assertEqual(client.forward_messages.await_count, 1)
+            self.assertEqual(progress["last_success_id"], 6)
+            self.assertEqual(progress["next_id"], 27)
+            self.assertEqual(progress["consecutive_not_found"], 20)
+            self.assertEqual(progress["status"], "auto_stopped")
+
+    async def test_timeout_does_not_count_as_not_found_and_preserves_id(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("helper.manager.STATE_PATH", Path(tmp) / "state.json"),
+            patch("helper.manager.CATCH_RESPONSE_TIMEOUT", 0.01),
+        ):
+            client = SimpleNamespace(
+                send_message=AsyncMock(),
+                forward_messages=AsyncMock(),
+            )
+            manager = HelperManager(SimpleNamespace(client=client, adding_chat_id=-100123))
+            await manager.start_catch(1, delay=1)
+            task = manager.runners["catch"].task
+            await task
+
+            progress = manager._state["catch_progress"]
+            self.assertEqual(progress["status"], "error")
+            self.assertEqual(progress["pending_id"], 1)
+            self.assertEqual(progress["next_id"], 1)
+            self.assertEqual(progress["consecutive_not_found"], 0)
 
 
 class AddingOnlySourceTests(unittest.TestCase):
