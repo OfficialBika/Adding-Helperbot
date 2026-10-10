@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 os.environ.setdefault("MONGO_URI", "mongodb://127.0.0.1:27017")
 os.environ.setdefault("DB_NAME", "ci_test")
 
-from helper.manager import HelperManager, _is_catch_not_found
+from helper.manager import DM_SOURCES, HelperManager, _is_catch_not_found
 from helper.registry import _CACHE, parse_addnewbot, parser_names_for_source
 from unified.ingest import _is_metadata_edit, _media_info
 from unified.parser import extract_character_id, extract_name, parse_candidates, parse_message, parser_names
@@ -112,6 +112,9 @@ class DynamicHelperBotTests(unittest.TestCase):
 
 
 class CatchDmCollectorTests(unittest.IsolatedAsyncioTestCase):
+    def test_catch_dm_source_username(self):
+        self.assertEqual(DM_SOURCES["catch"], ("@Character_Catcher_Bot", "/check"))
+
     def test_catch_not_found_matcher(self):
         self.assertTrue(_is_catch_not_found("🚫 Character with ID 27 not found"))
         self.assertFalse(_is_catch_not_found("OwO! Check out this character\n27: Rin"))
