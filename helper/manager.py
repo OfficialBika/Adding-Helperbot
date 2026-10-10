@@ -30,7 +30,7 @@ def _is_catch_not_found(text: str | None) -> bool:
 
 # Keep the established Adding/Helper source map and command aliases.
 SOURCES = {
-    "catch": ("@CharacterCatcherBot", ("/startcatchbot", "/startcatcherbot", "/startcharactercatcher"), ("/resumecatchbot", "/resumecatcherbot", "/resumecharactercatcher")),
+    "catch": ("@Character_Catcher_Bot", ("/startcatchbot", "/startcatcherbot", "/startcharactercatcher"), ("/resumecatchbot", "/resumecatcherbot", "/resumecharactercatcher")),
     "hallow": ("@Characters_Hallow_bot", ("/starthallowbot", "/starthallow"), ("/resumehallowbot", "/resumehallow")),
     "capture": ("@CaptureCharacterBot", ("/startcapturebot", "/startcapture"), ("/resumecapturebot", "/resumecapture")),
     "seizer": ("@Character_Seizer_Bot", ("/startseizerbot", "/startseizer"), ("/resumeseizerbot", "/resumeseizer")),
@@ -67,7 +67,7 @@ FORWARD_SOURCES = {
 }
 
 DM_SOURCES = {
-    "catch": ("@CharacterCatcherBot", "/check"),
+    "catch": ("@Character_Catcher_Bot", "/check"),
     "grab": ("@GrabGardenBot", "/check"),
     "senpai": ("@SenpaiCatcherBot", "/see"),
     "catch_waifu": ("@Catch_Your_Waifu_Bot", "/w"),
