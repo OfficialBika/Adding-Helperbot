@@ -43,7 +43,7 @@ class DynamicHelperBotTests(unittest.TestCase):
             "/startfwnewcatchbot",
             "/resumefwnewcatchbot",
         ))
-        self.assertEqual(config.parsers, ("grab", "generic"))
+        self.assertEqual(config.parsers, ("grab_family", "generic_structured"))
 
     def test_addnewbot_accepts_multiline_parser_samples(self):
         payload = (
