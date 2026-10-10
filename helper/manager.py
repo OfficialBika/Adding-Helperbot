@@ -17,10 +17,20 @@ DEFAULT_DELAY = 5
 MAX_DELAY = 30
 CATCH_YOUR_WAIFU_RESPONSE_TIMEOUT = 10
 CATCH_YOUR_WAIFU_MAX_MISSES = 20
+CATCH_RESPONSE_TIMEOUT = 45
+CATCH_MAX_CONSECUTIVE_NOT_FOUND = 20
+CATCH_NOT_FOUND_RE = re.compile(
+    r"\bcharacter\s+with\s+id\s*[:#]?\s*\d+\s+not\s+found\b",
+    re.I,
+)
+
+
+def _is_catch_not_found(text: str | None) -> bool:
+    return bool(CATCH_NOT_FOUND_RE.search(str(text or "")))
 
 # Keep the established Adding/Helper source map and command aliases.
 SOURCES = {
-    "catch": ("@Character_Catcher_Bot", ("/startcatchbot", "/startcatcherbot", "/startcharactercatcher"), ("/resumecatchbot", "/resumecatcherbot", "/resumecharactercatcher")),
+    "catch": ("@CharacterCatcherBot", ("/startcatchbot", "/startcatcherbot", "/startcharactercatcher"), ("/resumecatchbot", "/resumecatcherbot", "/resumecharactercatcher")),
     "hallow": ("@Characters_Hallow_bot", ("/starthallowbot", "/starthallow"), ("/resumehallowbot", "/resumehallow")),
     "capture": ("@CaptureCharacterBot", ("/startcapturebot", "/startcapture"), ("/resumecapturebot", "/resumecapture")),
     "seizer": ("@Character_Seizer_Bot", ("/startseizerbot", "/startseizer"), ("/resumeseizerbot", "/resumeseizer")),
@@ -329,6 +339,219 @@ class HelperManager:
         finally:
             catch_state["running"] = False
             catch_state["pending_id"] = None
+            self._state["running"] = False
+            self._save()
+            self.runners.pop(key, None)
+
+    async def start_catch(
+        self,
+        start_id: int = 1,
+        delay: int = DEFAULT_DELAY,
+        *,
+        resume: bool = False,
+        consecutive_not_found: int = 0,
+    ):
+        """Collect CharacterCatcherBot cards sequentially through private /check N."""
+        key = "catch"
+        if key in self.runners and not self.runners[key].task.done():
+            raise RuntimeError("catch is already running")
+
+        start_id = max(1, int(start_id))
+        delay = max(1, min(int(delay), MAX_DELAY))
+        catch_state = self._state.setdefault("catch_progress", {})
+        if not resume:
+            catch_state.clear()
+        consecutive_not_found = max(0, int(consecutive_not_found))
+        catch_state.update({
+            "source": key,
+            "mode": "catch_check",
+            "status": "running",
+            "next_id": start_id,
+            "pending_id": None,
+            "consecutive_not_found": consecutive_not_found,
+            "max_not_found": CATCH_MAX_CONSECUTIVE_NOT_FOUND,
+            "response_timeout": CATCH_RESPONSE_TIMEOUT,
+            "delay": delay,
+            "running": True,
+            "last_error": "",
+        })
+        self._state.update({
+            "source": key,
+            "mode": "catch_check",
+            "next_id": start_id,
+            "consecutive_not_found": consecutive_not_found,
+            "delay": delay,
+            "running": True,
+            "last_error": "",
+        })
+        self._save()
+        task = asyncio.create_task(
+            self._catch_worker(start_id, delay, consecutive_not_found)
+        )
+        self.runners[key] = Runner(task, key, "catch_check")
+
+    async def _catch_worker(
+        self,
+        start_id: int,
+        delay: int,
+        initial_not_found: int = 0,
+    ):
+        key = "catch"
+        bot, command = DM_SOURCES[key]
+        current_id = max(1, int(start_id))
+        consecutive_not_found = max(0, int(initial_not_found))
+        catch_state = self._state.setdefault("catch_progress", {})
+        q = self.responses.setdefault(key, asyncio.Queue())
+        try:
+            while True:
+                # Discard delayed replies so they cannot satisfy the next ID.
+                while not q.empty():
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+                catch_state.update({
+                    "source": key,
+                    "mode": "catch_check",
+                    "status": "running",
+                    "pending_id": current_id,
+                    "next_id": current_id,
+                    "consecutive_not_found": consecutive_not_found,
+                    "running": True,
+                    "last_error": "",
+                })
+                self._state.update({
+                    "source": key,
+                    "mode": "catch_check",
+                    "next_id": current_id,
+                    "consecutive_not_found": consecutive_not_found,
+                    "running": True,
+                    "last_error": "",
+                })
+                self._save()
+
+                await self.client.send_message(bot, f"{command} {current_id}")
+                try:
+                    response = await asyncio.wait_for(
+                        q.get(), timeout=CATCH_RESPONSE_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    # A timeout is not a "not found" response. Preserve this ID
+                    # so /resumecatchbot retries it rather than skipping data.
+                    catch_state.update({
+                        "status": "error",
+                        "pending_id": current_id,
+                        "next_id": current_id,
+                        "consecutive_not_found": consecutive_not_found,
+                        "last_error": f"timeout waiting for /check {current_id}",
+                        "running": False,
+                    })
+                    self._state.update({
+                        "next_id": current_id,
+                        "consecutive_not_found": consecutive_not_found,
+                        "last_error": f"timeout waiting for /check {current_id}",
+                        "running": False,
+                    })
+                    self._save()
+                    log.warning("Catch /check timeout id=%s", current_id)
+                    break
+
+                response_text = "\n".join(
+                    str(value) for value in (
+                        getattr(response, "text", None),
+                        getattr(response, "caption", None),
+                    ) if isinstance(value, str) and value.strip()
+                )
+                if _is_catch_not_found(response_text):
+                    consecutive_not_found += 1
+                    catch_state.update({
+                        "status": "running",
+                        "pending_id": None,
+                        "last_checked_id": current_id,
+                        "last_result": "not_found",
+                        "next_id": current_id + 1,
+                        "consecutive_not_found": consecutive_not_found,
+                        "running": True,
+                    })
+                    self._state.update({
+                        "next_id": current_id + 1,
+                        "consecutive_not_found": consecutive_not_found,
+                        "running": True,
+                    })
+                    self._save()
+                    log.info(
+                        "Catch /check not found id=%s consecutive=%s/%s",
+                        current_id,
+                        consecutive_not_found,
+                        CATCH_MAX_CONSECUTIVE_NOT_FOUND,
+                    )
+                    if consecutive_not_found >= CATCH_MAX_CONSECUTIVE_NOT_FOUND:
+                        catch_state.update({
+                            "status": "auto_stopped",
+                            "auto_stop_reason": (
+                                f"{CATCH_MAX_CONSECUTIVE_NOT_FOUND} consecutive not-found responses"
+                            ),
+                        })
+                        self._save()
+                        log.info(
+                            "Catch auto-stop after %s consecutive not-found responses at id=%s",
+                            CATCH_MAX_CONSECUTIVE_NOT_FOUND,
+                            current_id,
+                        )
+                        break
+                else:
+                    # Preserve the source bot's original message/media when
+                    # forwarding it to Adding; the existing parser stays intact.
+                    await self.client.forward_messages(
+                        self.runtime.adding_chat_id,
+                        response.chat.id,
+                        response.id,
+                    )
+                    consecutive_not_found = 0
+                    catch_state.update({
+                        "status": "running",
+                        "pending_id": None,
+                        "last_checked_id": current_id,
+                        "last_success_id": current_id,
+                        "last_result": "found",
+                        "next_id": current_id + 1,
+                        "consecutive_not_found": 0,
+                        "running": True,
+                    })
+                    self._state.update({
+                        "next_id": current_id + 1,
+                        "consecutive_not_found": 0,
+                        "running": True,
+                    })
+                    self._save()
+                    log.info(
+                        "Catch /check found id=%s forwarded_response=%s",
+                        current_id,
+                        getattr(response, "id", None),
+                    )
+
+                current_id += 1
+                await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            catch_state.update({"status": "paused", "running": False})
+            self._state["running"] = False
+            self._save()
+            raise
+        except Exception as exc:
+            catch_state.update({
+                "status": "error",
+                "last_error": str(exc),
+                "running": False,
+            })
+            self._state["last_error"] = str(exc)
+            self._state["running"] = False
+            self._save()
+            log.exception("Catch /check helper failed")
+        finally:
+            catch_state["running"] = False
+            # Keep pending_id when a request times out or fails, so resume can
+            # retry the unresolved ID. A completed/not-found response clears it.
             self._state["running"] = False
             self._save()
             self.runners.pop(key, None)
@@ -1308,6 +1531,8 @@ class HelperManager:
         inline = self._state.get("inline_progress") or {}
         if isinstance(inline, dict) and inline:
             for key in SOURCES:
+                if key == "catch":
+                    continue
                 progress = inline.get(key)
                 if not isinstance(progress, dict):
                     continue
@@ -1340,6 +1565,18 @@ class HelperManager:
                 ])
         else:
             lines.append("• <code>No inline checkpoint yet.</code>")
+
+        catch_progress = self._state.get("catch_progress") or {}
+        if isinstance(catch_progress, dict) and catch_progress:
+            lines.extend([
+                "",
+                "<b>CATCH DM /check</b>",
+                f"Status: <code>{catch_progress.get('status', 'idle')}</code>",
+                f"Next ID: <code>{catch_progress.get('next_id', 1)}</code>",
+                f"Not found: <code>{catch_progress.get('consecutive_not_found', 0)}/{CATCH_MAX_CONSECUTIVE_NOT_FOUND}</code>",
+                f"Last checked: <code>{catch_progress.get('last_checked_id', '-')}</code>",
+                f"Last error: <code>{catch_progress.get('last_error') or '-'}</code>",
+            ])
 
         dynamic_configs = all_configs()
         if dynamic_configs:
@@ -1432,16 +1669,52 @@ class HelperManager:
                         start_id = max(1, int(count or 1))
                         await self.start_senpai(start_id, delay)
                         await message.reply(
-                            f"Resumed senpai /see from ID {start_id}.\\n"
-                            f"Delay: {delay}s\\n"
+                            f"Resumed senpai /see from ID {start_id}.\n"
+                            f"Delay: {delay}s\n"
                             "Auto-stop: 3 consecutive not-found responses."
                         )
                     else:
                         await self.start_senpai(1, delay)
                         await message.reply(
-                            "Started Senpai /see from ID 1.\\n"
-                            f"Delay: {delay}s\\n"
+                            "Started Senpai /see from ID 1.\n"
+                            f"Delay: {delay}s\n"
                             "Auto-stop: 3 consecutive not-found responses."
+                        )
+                elif key == "catch":
+                    if kind == "resume":
+                        saved = self._state.get("catch_progress") or {}
+                        pending_id = saved.get("pending_id")
+                        next_id = saved.get("next_id", 1)
+                        start_id = max(
+                            1,
+                            int(count if count is not None else (pending_id or next_id or 1)),
+                        )
+                        # An explicit ID starts a new consecutive-miss streak.
+                        # A manual resume after the auto-stop also starts fresh.
+                        streak = (
+                            int(saved.get("consecutive_not_found", 0) or 0)
+                            if count is None and saved.get("status") != "auto_stopped"
+                            else 0
+                        )
+                        await self.start_catch(
+                            start_id,
+                            delay,
+                            resume=True,
+                            consecutive_not_found=streak,
+                        )
+                        await message.reply(
+                            f"✅ Resumed Catch /check from ID <code>{start_id}</code>.\n"
+                            f"Delay: {delay}s\n"
+                            f"Not found: {streak}/{CATCH_MAX_CONSECUTIVE_NOT_FOUND} consecutive."
+                        )
+                    else:
+                        await self.start_catch(1, delay)
+                        await message.reply(
+                            "✅ Started Catch DM collector from ID <code>1</code>.\n"
+                            f"Bot: <code>{DM_SOURCES['catch'][0]}</code>\n"
+                            f"Command: <code>{DM_SOURCES['catch'][1]} N</code>\n"
+                            f"Delay: {delay}s\n"
+                            f"Auto-stop: {CATCH_MAX_CONSECUTIVE_NOT_FOUND} consecutive not-found responses."
                         )
                 elif kind == "resume":
                     await self.start_inline(
@@ -1538,8 +1811,8 @@ class HelperManager:
             "  commands - /startX,/resumeX,/startfwX,/resumefwX\n"
             "  Parser1 - grab\n"
             "  Parser2 - generic\n\n"
-            "/startcatchbot [delay]\n"
-            "/resumecatchbot [count] [delay]\n"
+            "/startcatchbot [delay]  (DM /check 1, 2, 3, ...; stops after 20 consecutive not-found)\n"
+            "/resumecatchbot [count] [delay]  (DM /check; resumes saved ID)\n"
             "/starthallowbot [delay]\n"
             "/resumehallowbot [count] [delay]\n"
             "/startcapturebot [delay]\n"
