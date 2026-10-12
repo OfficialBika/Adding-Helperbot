@@ -137,6 +137,8 @@ async def ingest_message(
     message: Message,
     trusted_user_ids: set[int] | None = None,
     trusted_source_collection: str | None = None,
+    override_name: str | None = None,
+    override_character_id: str | None = None,
 ) -> dict | bool:
     # The only accepted Adding input is the message itself forwarded from an
     # explicitly configured source channel. A reply-to message is never used
@@ -204,8 +206,12 @@ async def ingest_message(
         ) if isinstance(x, str) and x.strip()
     )
 
-    name = extract_name(text)
-    character_id = extract_character_id(text)
+    name = str(override_name).strip() if override_name is not None else extract_name(text)
+    character_id = (
+        str(override_character_id).strip()
+        if override_character_id is not None
+        else extract_character_id(text)
+    )
     anime = extract_anime(text)
     rarity = extract_rarity(text)
     if not name:
