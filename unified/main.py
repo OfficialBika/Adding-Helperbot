@@ -527,6 +527,60 @@ async def adding_status(message: Message):
     )
 
 
+@router.message(Command("save"))
+async def manual_save(message: Message):
+    """Manually save a Catch media post when an authorized admin replies with /save Name | ID."""
+    if message.chat.id != settings.adding_chat_id:
+        return
+    if not await has_admin_access(message):
+        return
+
+    target = getattr(message, "reply_to_message", None)
+    if not target or not is_media(target):
+        await message.reply("❌ Reply to a Catch bot media post with /save Name | ID.")
+        return
+
+    parts = str(getattr(message, "text", "") or "").partition(" ")
+    payload = parts[2].strip() if len(parts) > 2 else ""
+    if "|" not in payload:
+        await message.reply("Usage: reply to Catch media with <code>/save Name | ID</code>.")
+        return
+    name, separator, raw_id = payload.partition("|")
+    name = name.strip()
+    raw_id = raw_id.strip()
+    if not separator or not name or not raw_id.isdigit():
+        await message.reply("❌ Invalid format. Use <code>/save Yae Miko | 24775</code>.")
+        return
+
+    source_key = resolve_source_collection(target)
+    if source_key not in {"items_character_catcher", "items_character_catcher_fw"}:
+        await message.reply("❌ The replied message is not recognized as a Catch source post.")
+        return
+
+    sender_id = getattr(getattr(target, "from_user", None), "id", None)
+    trusted_ids = {int(sender_id)} if sender_id is not None else set()
+    result = await ingest_message(
+        message.bot,
+        target,
+        trusted_user_ids=trusted_ids,
+        trusted_source_collection=source_key,
+        override_name=name,
+        override_character_id=raw_id,
+    )
+    if not isinstance(result, dict) or not result.get("document"):
+        await message.reply("❌ Could not save this media. Check the bot logs for the reason.")
+        return
+
+    try:
+        remember_document(result["document"])
+    except Exception:
+        log.exception("HASH RAM hot-sync failed during manual save message=%s", target.message_id)
+
+    metrics.record_ingest(result.get("status") or "unknown")
+    notice = format_ingest_notice(result)
+    await message.reply(notice or "✅ Manual save processed.")
+
+
 @router.message(F.chat.id == settings.adding_chat_id, F.func(is_ingest_candidate))
 async def adding_ingest(message: Message):
     # Adding is intentionally restricted to forwarded channel/source posts.
