@@ -772,6 +772,50 @@ async def _download(
     if not file_id:
         return None
 
+    # UID hits return before _hash_fallback. For UID misses, check verified local
+    # mappings BEFORE entering the network-download semaphores so a local hit is
+    # not queued behind unrelated slow getFile/download calls.
+    local_root: Path | None = None
+    if getattr(settings, "bot_api_is_local", False):
+        root_raw = str(getattr(settings, "bot_api_local_files_root", "") or "").strip()
+        local_root = Path(root_raw).expanduser() if root_raw else None
+        if local_root is not None:
+            cache_started = time.perf_counter()
+            cached_path = await _LOCAL_FILE_PATH_CACHE.lookup_path(
+                local_root, file_id, file_unique_id
+            )
+            cache_lookup_ms = (time.perf_counter() - cache_started) * 1000
+            if cached_path is not None:
+                try:
+                    read_started = time.perf_counter()
+                    data = await asyncio.to_thread(cached_path.read_bytes)
+                    read_ms = (time.perf_counter() - read_started) * 1000
+                    record = _LOCAL_FILE_PATH_CACHE.remember(
+                        local_root, file_id, file_unique_id, cached_path
+                    )
+                    if record is not None:
+                        await _LOCAL_FILE_PATH_CACHE.persist(record)
+                    total_ms = (time.perf_counter() - cache_started) * 1000
+                    log.info(
+                        "HASH DOWNLOAD TIMING priority=%s wait_ms=0.0 getfile_ms=0.0 mapping_ms=%.1f local_read_ms=%.1f total_ms=%.1f bytes=%s mode=local_path_cache",
+                        priority,
+                        cache_lookup_ms,
+                        read_ms,
+                        total_ms,
+                        len(data),
+                    )
+                    return data
+                except Exception as exc:
+                    await _LOCAL_FILE_PATH_CACHE.invalidate(
+                        local_root, file_id, file_unique_id, cached_path
+                    )
+                    log.info(
+                        "Local Bot API cached path read failed file_id=%s local_ms=%.1f error=%s; resolving with getFile",
+                        file_id,
+                        (time.perf_counter() - cache_started) * 1000,
+                        exc,
+                    )
+
     if priority == "full":
         semaphore = _FULL_DOWNLOAD_SEM
         chunk_size = _HASH_FULL_CHUNK_SIZE
@@ -784,54 +828,10 @@ async def _download(
         wait_ms = (time.perf_counter() - wait_started) * 1000
         transfer_started = time.perf_counter()
 
-        # On UID misses only, first try a previously verified path mapping.
-        # A UID cache/RAM/SQLite/Mongo hit returns before _hash_fallback and never
-        # reaches this function. Path-cache hits avoid both getFile and download.
+        # Local Bot API returns an absolute path from getFile(). Read it directly
+        # only when the configured safety root contains the resolved path. Learn
+        # mappings only after successfully reading bytes from that path.
         if getattr(settings, "bot_api_is_local", False):
-            root_raw = str(getattr(settings, "bot_api_local_files_root", "") or "").strip()
-            root = Path(root_raw).expanduser() if root_raw else None
-
-            if root is not None:
-                cache_started = time.perf_counter()
-                cached_path = await _LOCAL_FILE_PATH_CACHE.lookup_path(
-                    root, file_id, file_unique_id
-                )
-                cache_lookup_ms = (time.perf_counter() - cache_started) * 1000
-                if cached_path is not None:
-                    try:
-                        read_started = time.perf_counter()
-                        data = await asyncio.to_thread(cached_path.read_bytes)
-                        read_ms = (time.perf_counter() - read_started) * 1000
-                        record = _LOCAL_FILE_PATH_CACHE.remember(
-                            root, file_id, file_unique_id, cached_path
-                        )
-                        if record is not None:
-                            await _LOCAL_FILE_PATH_CACHE.persist(record)
-                        total_ms = (time.perf_counter() - transfer_started) * 1000
-                        log.info(
-                            "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f getfile_ms=0.0 mapping_ms=%.1f local_read_ms=%.1f total_ms=%.1f bytes=%s mode=local_path_cache",
-                            priority,
-                            wait_ms,
-                            cache_lookup_ms,
-                            read_ms,
-                            total_ms,
-                            len(data),
-                        )
-                        return data
-                    except Exception as exc:
-                        await _LOCAL_FILE_PATH_CACHE.invalidate(
-                            root, file_id, file_unique_id, cached_path
-                        )
-                        log.info(
-                            "Local Bot API cached path read failed file_id=%s local_ms=%.1f error=%s; resolving with getFile",
-                            file_id,
-                            (time.perf_counter() - cache_started) * 1000,
-                            exc,
-                        )
-
-            # Local Bot API returns an absolute path. Only read it directly if
-            # the configured safety root is present and the resolved path stays
-            # within it. Learn the mapping only after successfully reading bytes.
             local_started = time.perf_counter()
             try:
                 file = await bot.get_file(file_id)
@@ -841,15 +841,15 @@ async def _download(
                 if (
                     local_path is not None
                     and local_path.is_absolute()
-                    and root is not None
-                    and _path_is_within(local_path, root)
+                    and local_root is not None
+                    and _path_is_within(local_path, local_root)
                 ):
                     read_started = time.perf_counter()
                     data = await asyncio.to_thread(local_path.read_bytes)
                     get_file_ms = (read_started - local_started) * 1000
                     read_ms = (time.perf_counter() - read_started) * 1000
                     record = _LOCAL_FILE_PATH_CACHE.remember(
-                        root, file_id, file_unique_id, local_path
+                        local_root, file_id, file_unique_id, local_path
                     )
                     if record is not None:
                         await _LOCAL_FILE_PATH_CACHE.persist(record)
@@ -869,7 +869,7 @@ async def _download(
                     "Local Bot API file path not used file_id=%s path_absolute=%s root_configured=%s",
                     file_id,
                     bool(local_path and local_path.is_absolute()),
-                    bool(root),
+                    bool(local_root),
                 )
             except Exception as exc:
                 local_ms = (time.perf_counter() - local_started) * 1000
@@ -908,6 +908,8 @@ async def _download(
             priority, wait_ms, transfer_ms, wait_ms + transfer_ms, len(data) if data is not None else 0,
         )
         return data
+
+
 
 async def _hash_fallback(
     bot: Bot,
