@@ -104,6 +104,10 @@ class Settings:
     # Absolute path returned by Local Bot API getFile that the bot process can read.
     # Keep empty/disabled deployments on the normal aiogram download path.
     bot_api_local_files_root: str = os.getenv("BOT_API_LOCAL_FILES_ROOT", "").strip()
+    # Persistent mapping cache for previously verified file_id/file_unique_id -> local path.
+    bot_api_local_path_cache_path: str = os.getenv(
+        "BOT_API_LOCAL_PATH_CACHE_PATH", "data/local_file_path_cache.sqlite3"
+    ).strip() or "data/local_file_path_cache.sqlite3"
     bot_api_session_limit: int = max(32, min(500, _int("BOT_API_SESSION_LIMIT", 100)))
     # VPS/Mongo latency tuning; all values remain environment-configurable.
     mongo_server_selection_timeout_ms: int = _int("MONGO_SERVER_SELECTION_TIMEOUT_MS", 2500)
