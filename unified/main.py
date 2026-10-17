@@ -791,7 +791,7 @@ HELPER_COMMANDS = [
     "startwaifugrabberbot", "resumewaifugrabberbot",
     "startwaifugrabber", "resumewaifugrabber",
     "startzorobot", "resumezorobot",
-    "startzoro", "resumefzoro",
+    "startzoro", "resumezorobot",
     "startpickerbot", "resumepickerbot",
     "startpicker", "resumepicker",
     "startsenpaibot", "resumesenpaibot",
@@ -803,7 +803,7 @@ HELPER_COMMANDS = [
     "startorin", "resumeorin",
     "startorinx", "resumeorinx",
     "startdaobot", "resumedaobot",
-    "startdao", "resumedaobot",
+    "startdao", "resumedao",
     "startdonghua", "resumedonghua",
 
     # Forward-source Adding commands (must stay in sync with HelperManager.FORWARD_SOURCES).
@@ -825,7 +825,7 @@ HELPER_COMMANDS = [
     "startfworinx", "resumefworinx",
     "startfwdaobot", "resumefwdaobot",
     "startfwdao", "resumefwdao",
-    "startfwdonghua", "resumefwdonghua",
+    "startfwdonghua", "resumedonghua",
 
     # Catch FW extras.
     "startfwpickerbot", "resumefwpickerbot",
