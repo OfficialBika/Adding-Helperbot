@@ -17,8 +17,8 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.filters import Command, ExceptionTypeFilter
+from aiogram.types import ErrorEvent, Message
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from unified.config import settings
@@ -242,15 +242,47 @@ def format_ingest_notice(result: dict) -> str:
 
     return ""
 
+
+async def _leave_chat_on_text_permission_error(message: Message, exc: Exception) -> bool:
+    """Leave a group when Telegram explicitly denies text-message sending."""
+    error_text = str(exc).lower()
+    if "not enough rights to send text messages" not in error_text:
+        return False
+
+    chat = getattr(message, "chat", None)
+    chat_type = getattr(chat, "type", None)
+    chat_id = getattr(chat, "id", None)
+    if chat_id is None or chat_type not in {"group", "supergroup", "channel"}:
+        return False
+
+    try:
+        await message.bot.leave_chat(chat_id)
+        log.warning(
+            "AUTO LEAVE text_send_disabled chat=%s type=%s error=%s",
+            chat_id,
+            chat_type,
+            str(exc),
+        )
+    except Exception:
+        log.exception(
+            "AUTO LEAVE failed chat=%s type=%s",
+            chat_id,
+            chat_type,
+        )
+    return True
+
+
 async def _safe_reply(message: Message, text: str, **kwargs):
     """Reply safely when Telegram has revoked text-send permissions."""
     try:
         return await message.reply(text, **kwargs)
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
         error_text = str(exc).lower()
+        if "not enough rights to send text messages" in error_text:
+            await _leave_chat_on_text_permission_error(message, exc)
+            return None
         if (
-            "not enough rights to send text messages" in error_text
-            or "bot was kicked" in error_text
+            "bot was kicked" in error_text
             or "forbidden" in error_text
         ):
             log.warning(
@@ -759,7 +791,7 @@ HELPER_COMMANDS = [
     "startwaifugrabberbot", "resumewaifugrabberbot",
     "startwaifugrabber", "resumewaifugrabber",
     "startzorobot", "resumezorobot",
-    "startzoro", "resumezoro",
+    "startzoro", "resumefzoro",
     "startpickerbot", "resumepickerbot",
     "startpicker", "resumepicker",
     "startsenpaibot", "resumesenpaibot",
@@ -771,7 +803,7 @@ HELPER_COMMANDS = [
     "startorin", "resumeorin",
     "startorinx", "resumeorinx",
     "startdaobot", "resumedaobot",
-    "startdao", "resumedao",
+    "startdao", "resumedaobot",
     "startdonghua", "resumedonghua",
 
     # Forward-source Adding commands (must stay in sync with HelperManager.FORWARD_SOURCES).
@@ -865,6 +897,24 @@ async def run():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
+
+    @dp.errors(ExceptionTypeFilter(TelegramBadRequest))
+    async def handle_text_send_permission_error(event: ErrorEvent) -> None:
+        """Auto-leave group chats where Telegram revoked text-send permission."""
+        exc = event.exception
+        if "not enough rights to send text messages" not in str(exc).lower():
+            return
+
+        update = event.update
+        message = getattr(update, "message", None)
+        if message is None:
+            callback_query = getattr(update, "callback_query", None)
+            message = getattr(callback_query, "message", None)
+        if message is None:
+            return
+
+        await _leave_chat_on_text_permission_error(message, exc)
+
     dp.include_router(force_join_router)
     dp.include_router(router)
 
