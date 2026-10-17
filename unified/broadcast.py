@@ -165,12 +165,16 @@ class ChatRegistryMiddleware(BaseMiddleware):
                     chat_id = int(chat.id)
                     now = time.monotonic()
                     last = self._last_touched.get(chat_id)
-                    self._last_touched[chat_id] = now
+                    if last is None or now - last >= CHAT_REGISTRY_TOUCH_SECONDS:
+                        # Only throttle after a successful write; transient DB errors
+                        # should not make this chat invisible for the full TTL.
+                        await _record_chat(chat)
+                        self._last_touched[chat_id] = now
+                    else:
+                        self._last_touched[chat_id] = last
                     self._last_touched.move_to_end(chat_id)
                     while len(self._last_touched) > CHAT_REGISTRY_MAX_MEMORY_ENTRIES:
                         self._last_touched.popitem(last=False)
-                    if last is None or now - last >= CHAT_REGISTRY_TOUCH_SECONDS:
-                        await _record_chat(chat)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -550,6 +554,43 @@ async def _delivery_worker(bot: Bot, job: dict[str, Any], cancel_event: asyncio.
         await _record_delivery_result(bot, job_id, delivery["_id"], sent=sent, error=error)
 
 
+async def _reconcile_job_counts(job_id: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    async for row in broadcast_deliveries.aggregate([
+        {"$match": {"job_id": job_id}},
+        {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+    ]):
+        counts[str(row.get("_id") or "")] = int(row.get("count") or 0)
+
+    target_count = sum(counts.values())
+    sent_count = counts.get("sent", 0)
+    failed_count = counts.get("failed", 0)
+    skipped_count = counts.get("skipped", 0)
+    completed_count = sent_count + failed_count
+    await broadcast_jobs.update_one(
+        {"job_id": job_id},
+        {
+            "$set": {
+                "target_count": target_count,
+                "sent_count": sent_count,
+                "failed_count": failed_count,
+                "skipped_count": skipped_count,
+                "completed_count": completed_count,
+                "updated_at": _now(),
+            }
+        },
+    )
+    return {
+        "target_count": target_count,
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "skipped_count": skipped_count,
+        "completed_count": completed_count,
+        "pending_count": counts.get("pending", 0),
+        "sending_count": counts.get("sending", 0),
+    }
+
+
 async def _process_job(bot: Bot, job: dict[str, Any]) -> None:
     job_id = str(job["job_id"])
     cancel_event = _cancel_events.setdefault(job_id, asyncio.Event())
@@ -592,23 +633,22 @@ async def _process_job(bot: Bot, job: dict[str, Any]) -> None:
         await asyncio.gather(*workers, return_exceptions=True)
 
     if cancel_event.is_set():
-        result = await broadcast_deliveries.update_many(
-            {"job_id": job_id, "status": "pending"},
+        await broadcast_deliveries.update_many(
+            {"job_id": job_id, "status": {"$in": ["pending", "sending"]}},
             {"$set": {"status": "skipped", "updated_at": _now(), "last_error": "Cancelled by owner"}},
         )
-        skipped = int(result.modified_count)
-        if skipped:
-            await broadcast_jobs.update_one(
-                {"job_id": job_id},
-                {"$inc": {"skipped_count": skipped}, "$set": {"updated_at": _now()}},
-            )
         final_status = "cancelled"
     else:
-        counts = await broadcast_jobs.find_one(
-            {"job_id": job_id},
-            {"_id": 0, "target_count": 1, "sent_count": 1, "failed_count": 1},
-        ) or {}
-        final_status = "completed_with_errors" if int(counts.get("failed_count") or 0) else "completed"
+        counts = await _reconcile_job_counts(job_id)
+        if counts["pending_count"] or counts["sending_count"]:
+            # Never label a job complete while any recipient has no terminal result.
+            await broadcast_jobs.update_one(
+                {"job_id": job_id},
+                {"$set": {"status": "queued", "updated_at": _now()}},
+            )
+            _wakeup.set()
+            return
+        final_status = "completed_with_errors" if counts["failed_count"] else "completed"
 
     await broadcast_jobs.update_one(
         {"job_id": job_id},
@@ -635,12 +675,20 @@ async def _worker_loop(bot: Bot) -> None:
         await _wakeup.wait()
         _wakeup.clear()
         while True:
-            job = await broadcast_jobs.find_one_and_update(
-                {"status": "queued"},
-                {"$set": {"status": "running", "started_at": _now(), "updated_at": _now()}},
-                sort=[("created_at", 1)],
-                return_document=ReturnDocument.AFTER,
-            )
+            try:
+                job = await broadcast_jobs.find_one_and_update(
+                    {"status": "queued"},
+                    {"$set": {"status": "running", "started_at": _now(), "updated_at": _now()}},
+                    sort=[("created_at", 1)],
+                    return_document=ReturnDocument.AFTER,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("BROADCAST worker could not claim a queued job")
+                await asyncio.sleep(5)
+                _wakeup.set()
+                break
             if not job:
                 break
             try:
@@ -649,6 +697,10 @@ async def _worker_loop(bot: Bot) -> None:
                 raise
             except Exception:
                 log.exception("BROADCAST worker failed job=%s; keeping job recoverable", job.get("job_id"))
+                await broadcast_deliveries.update_many(
+                    {"job_id": job.get("job_id"), "status": "sending"},
+                    {"$set": {"status": "pending", "recovered_at": _now()}},
+                )
                 await broadcast_jobs.update_one(
                     {"job_id": job.get("job_id")},
                     {
