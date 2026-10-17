@@ -393,7 +393,12 @@ async def _mark_chat_unreachable(chat_id: int, reason: str) -> None:
         log.exception("BROADCAST could not mark chat inactive chat=%s", chat_id)
 
 
-async def _deliver_to_chat(bot: Bot, job: dict[str, Any], delivery: dict[str, Any]) -> tuple[bool, str]:
+async def _deliver_to_chat(
+    bot: Bot,
+    job: dict[str, Any],
+    delivery: dict[str, Any],
+    cancel_event: asyncio.Event,
+) -> tuple[bool, str]:
     chat_id = int(delivery["chat_id"])
     chat_type = str(delivery.get("chat_type") or "")
     last_error = "Unknown error"
@@ -418,12 +423,26 @@ async def _deliver_to_chat(bot: Bot, job: dict[str, Any], delivery: dict[str, An
             last_error = f"rate limited; retry_after={exc.retry_after}s"
             if attempt >= BROADCAST_MAX_ATTEMPTS:
                 break
-            await asyncio.sleep(max(float(exc.retry_after), 1.0))
+            try:
+                await asyncio.wait_for(
+                    cancel_event.wait(),
+                    timeout=max(float(exc.retry_after), 1.0),
+                )
+                return False, "cancelled"
+            except TimeoutError:
+                pass
         except (TelegramNetworkError, aiohttp.ClientError, TimeoutError, OSError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
             if attempt >= BROADCAST_MAX_ATTEMPTS:
                 break
-            await asyncio.sleep(min(2 ** (attempt - 1), 8))
+            try:
+                await asyncio.wait_for(
+                    cancel_event.wait(),
+                    timeout=min(2 ** (attempt - 1), 8),
+                )
+                return False, "cancelled"
+            except TimeoutError:
+                pass
         except (TelegramBadRequest, TelegramForbiddenError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
             if is_send_permission_error(exc) and chat_type in GROUP_CHAT_TYPES:
@@ -550,7 +569,13 @@ async def _delivery_worker(bot: Bot, job: dict[str, Any], cancel_event: asyncio.
         )
         if not delivery:
             return
-        sent, error = await _deliver_to_chat(bot, job, delivery)
+        sent, error = await _deliver_to_chat(bot, job, delivery, cancel_event)
+        if error == "cancelled" and cancel_event.is_set():
+            await broadcast_deliveries.update_one(
+                {"_id": delivery["_id"], "job_id": job_id, "status": "sending"},
+                {"$set": {"status": "pending", "updated_at": _now()}},
+            )
+            return
         await _record_delivery_result(bot, job_id, delivery["_id"], sent=sent, error=error)
 
 

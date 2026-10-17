@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-from unified.broadcast import is_broadcast_chat_type, is_send_permission_error
+from unified.broadcast import (
+    auto_leave_restricted_group,
+    is_broadcast_chat_type,
+    is_send_permission_error,
+)
 
 
 class BroadcastSafetyTests(unittest.TestCase):
@@ -31,6 +37,43 @@ class BroadcastSafetyTests(unittest.TestCase):
         for chat_type in ("channel", "unknown", None):
             with self.subTest(chat_type=chat_type):
                 self.assertFalse(is_broadcast_chat_type(chat_type))
+
+
+class AutoLeaveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_send_permission_error_makes_bot_leave_a_group(self):
+        bot = SimpleNamespace(leave_chat=AsyncMock(return_value=True))
+        chat = SimpleNamespace(id=-100123, type="supergroup", title="Test group", username=None)
+        with patch("unified.broadcast.bot_chats.update_one", new=AsyncMock()) as update_one:
+            result = await auto_leave_restricted_group(
+                bot,
+                chat,
+                "Bad Request: not enough rights to send text messages to the chat",
+            )
+        self.assertTrue(result)
+        bot.leave_chat.assert_awaited_once_with(chat_id=-100123)
+        update_one.assert_awaited_once()
+
+    async def test_private_chat_is_never_left(self):
+        bot = SimpleNamespace(leave_chat=AsyncMock(return_value=True))
+        chat = SimpleNamespace(id=123, type="private", title=None, username=None)
+        result = await auto_leave_restricted_group(
+            bot,
+            chat,
+            "Bad Request: not enough rights to send text messages to the chat",
+        )
+        self.assertFalse(result)
+        bot.leave_chat.assert_not_awaited()
+
+    async def test_unrelated_group_error_does_not_trigger_leave(self):
+        bot = SimpleNamespace(leave_chat=AsyncMock(return_value=True))
+        chat = SimpleNamespace(id=-100123, type="supergroup", title="Test group", username=None)
+        result = await auto_leave_restricted_group(
+            bot,
+            chat,
+            "Bad Request: can't parse entities",
+        )
+        self.assertFalse(result)
+        bot.leave_chat.assert_not_awaited()
 
 
 if __name__ == "__main__":
