@@ -825,7 +825,7 @@ HELPER_COMMANDS = [
     "startfworinx", "resumefworinx",
     "startfwdaobot", "resumefwdaobot",
     "startfwdao", "resumefwdao",
-    "startfwdonghua", "resumedonghua",
+    "startfwdonghua", "resumefwdonghua",
 
     # Catch FW extras.
     "startfwpickerbot", "resumefwpickerbot",
