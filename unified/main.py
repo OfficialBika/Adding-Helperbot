@@ -36,6 +36,14 @@ from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
 from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
 from unified.miniapp import register_miniapp
+from unified.broadcast import (
+    auto_leave_restricted_group,
+    initialize_broadcast,
+    install_broadcast,
+    is_send_permission_error,
+    start_broadcast_worker,
+    stop_broadcast_worker,
+)
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -267,6 +275,8 @@ async def _safe_reply(message: Message, text: str, **kwargs):
         return await message.reply(text, **kwargs)
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
         error_text = str(exc).lower()
+        if is_send_permission_error(exc):
+            await auto_leave_restricted_group(message.bot, message.chat, exc)
         if (
             "not enough rights to send text messages" in error_text
             or "bot was kicked" in error_text
@@ -915,6 +925,7 @@ async def run():
 
     await ensure_indexes()
     await ensure_uid_index()
+    await initialize_broadcast()
     await _start_uid_index_backfill()
     await _start_hash_index_warm()
     await ensure_auth_indexes()
@@ -944,6 +955,8 @@ async def run():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
+    install_broadcast(dp, router)
+    start_broadcast_worker(bot)
     dp.include_router(force_join_router)
     dp.include_router(router)
 
@@ -980,6 +993,7 @@ async def run():
         try:
             await asyncio.Event().wait()
         finally:
+            await stop_broadcast_worker()
             await helper_userbot.stop()
             await cleanup(bot)
             await runner.cleanup()
@@ -1003,6 +1017,7 @@ async def run():
         try:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         finally:
+            await stop_broadcast_worker()
             await helper_userbot.stop()
             await cleanup(bot)
             await runner.cleanup()
