@@ -404,7 +404,11 @@ async def _deliver_to_chat(
     last_error = "Unknown error"
 
     for attempt in range(1, BROADCAST_MAX_ATTEMPTS + 1):
+        if cancel_event.is_set():
+            return False, "cancelled"
         await _rate_limiter.wait()
+        if cancel_event.is_set():
+            return False, "cancelled"
         try:
             if job.get("payload_type") == "copy":
                 await bot.copy_message(
@@ -662,6 +666,7 @@ async def _process_job(bot: Bot, job: dict[str, Any]) -> None:
             {"job_id": job_id, "status": {"$in": ["pending", "sending"]}},
             {"$set": {"status": "skipped", "updated_at": _now(), "last_error": "Cancelled by owner"}},
         )
+        await _reconcile_job_counts(job_id)
         final_status = "cancelled"
     else:
         counts = await _reconcile_job_counts(job_id)
@@ -988,10 +993,13 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
         return
 
     if action == "cancel":
-        await broadcast_jobs.update_one(
+        cancelled = await broadcast_jobs.update_one(
             {"job_id": job_id, "status": "pending_confirmation"},
             {"$set": {"status": "cancelled", "completed_at": _now(), "updated_at": _now()}},
         )
+        if not cancelled.modified_count:
+            await query.answer("This broadcast was already handled.", show_alert=True)
+            return
         await query.answer("Broadcast cancelled.")
         try:
             if query.message:
@@ -1016,9 +1024,8 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
     if not updated:
         await query.answer("This broadcast was already handled.", show_alert=True)
         return
-    _wakeup.set()
-    await query.answer("Broadcast queued.")
     try:
+        await query.answer("Broadcast queued.")
         if query.message:
             await query.message.edit_text(
                 "📣 <b>Broadcast queued</b>\n\n"
@@ -1028,6 +1035,9 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
             )
     except Exception:
         log.exception("BROADCAST queue message edit failed job=%s", job_id)
+    finally:
+        # Update the confirmation message before the worker can edit progress.
+        _wakeup.set()
 
 
 @broadcast_router.my_chat_member()
