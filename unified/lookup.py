@@ -4,6 +4,7 @@ import asyncio
 import io
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
@@ -43,6 +44,14 @@ _PHASH_THRESHOLD = 8
 _PHASH_MIN_SCORE = 0.84
 _PHASH_MIN_MARGIN = 0.035
 _UID_CACHE = positive_uid_cache
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return True when path resolves under the configured Local Bot API root."""
+    try:
+        return root.resolve() == path.resolve() or root.resolve() in path.resolve().parents
+    except OSError:
+        return False
 
 
 def _coerce_match_score(value: Any) -> tuple[float, str]:
@@ -640,6 +649,54 @@ async def _download(
     async with semaphore:
         wait_ms = (time.perf_counter() - wait_started) * 1000
         transfer_started = time.perf_counter()
+
+        # Telegram's Local Bot API can return an absolute filesystem path from
+        # getFile(). When the bot and Local Bot API share that filesystem path,
+        # reading it directly avoids a second HTTP download through the Bot API.
+        # This is the critical low-latency path for cold hash lookups.
+        if bool(getattr(settings, "bot_api_is_local", False)):
+            try:
+                file = await bot.get_file(file_id)
+                raw_path = str(getattr(file, "file_path", "") or "").strip()
+                if raw_path:
+                    local_path = Path(raw_path)
+                    root = str(getattr(settings, "bot_api_local_files_root", "") or "").strip()
+                    if local_path.is_absolute() and (not root or _path_is_within(local_path, Path(root))):
+                        data = await asyncio.to_thread(local_path.read_bytes)
+                        local_ms = (time.perf_counter() - transfer_started) * 1000
+                        log.info(
+                            "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f local_read_ms=%.1f total_ms=%.1f bytes=%s mode=local_file path=%s",
+                            priority,
+                            wait_ms,
+                            local_ms,
+                            wait_ms + local_ms,
+                            len(data),
+                            raw_path,
+                        )
+                        return data
+                    log.info(
+                        "LOCAL BOT API FILE PATH NOT USED priority=%s path=%s root=%s reason=path_not_allowed_or_relative",
+                        priority,
+                        raw_path,
+                        root or "<unset>",
+                    )
+            except (FileNotFoundError, PermissionError, OSError) as exc:
+                local_ms = (time.perf_counter() - transfer_started) * 1000
+                log.info(
+                    "LOCAL BOT API FILE READ FALLBACK priority=%s local_ms=%.1f error=%s",
+                    priority,
+                    local_ms,
+                    exc,
+                )
+            except Exception as exc:
+                local_ms = (time.perf_counter() - transfer_started) * 1000
+                log.warning(
+                    "LOCAL BOT API GETFILE FALLBACK priority=%s local_ms=%.1f error=%s",
+                    priority,
+                    local_ms,
+                    exc,
+                )
+
         try:
             result = await bot.download(
                 file_id,
@@ -664,7 +721,7 @@ async def _download(
             data = None
 
         log.info(
-            "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f bytes=%s",
+            "HASH DOWNLOAD TIMING priority=%s wait_ms=%.1f transfer_ms=%.1f total_ms=%.1f bytes=%s mode=http",
             priority, wait_ms, transfer_ms, wait_ms + transfer_ms, len(data) if data is not None else 0,
         )
         return data

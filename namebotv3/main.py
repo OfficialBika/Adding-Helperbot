@@ -10,6 +10,8 @@ from typing import Any, Awaitable, Callable
 from aiohttp import web
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 from aiogram.types import CallbackQuery, Message, TelegramObject
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -52,6 +54,33 @@ def setup_logging() -> None:
     logging.basicConfig(
         level=getattr(logging, settings.log_level, logging.INFO),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+
+def _build_bot() -> Bot:
+    """Build the bot against Telegram cloud or the configured self-hosted API."""
+    if not settings.bot_api_base_url:
+        if settings.bot_api_is_local:
+            raise RuntimeError("BOT_API_IS_LOCAL=true requires BOT_API_BASE_URL")
+        return Bot(
+            settings.bot_token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+
+    api = TelegramAPIServer.from_base(
+        settings.bot_api_base_url,
+        is_local=settings.bot_api_is_local,
+    )
+    session = AiohttpSession(api=api)
+    log.info(
+        "Telegram Bot API endpoint: %s | local=%s",
+        settings.bot_api_base_url,
+        settings.bot_api_is_local,
+    )
+    return Bot(
+        settings.bot_token,
+        session=session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
 
@@ -121,7 +150,7 @@ async def shutdown_core(background: list[asyncio.Task]) -> None:
 
 
 async def run_polling() -> None:
-    bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = _build_bot()
     dp = build_dispatcher()
     background: list[asyncio.Task] = []
     try:
