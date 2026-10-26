@@ -16,7 +16,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from unified.config import Settings
-from unified.lookup import _chunks, _coerce_match_score, _learn_verified_uids, _ordered_uid_sources, _schedule_uid_learning
+from unified.lookup import _chunks, _coerce_match_score, _exact_find, _learn_verified_uids, _ordered_uid_sources, _schedule_uid_learning
+import unified.auth as auth
+import unified.hash_index as hash_index
+import unified.services.force_join as force_join
 import unified.uid_index as uid_index
 
 
@@ -65,6 +68,139 @@ class LookupOrderingTests(unittest.TestCase):
     def test_uid_learning_scheduler_is_defined(self):
         self.assertTrue(callable(_schedule_uid_learning))
 
+
+class LookupFastPathTests(unittest.TestCase):
+    def test_exact_lookup_checks_canonical_uid_before_legacy_fields(self):
+        primary = {
+            "_id": "doc-primary",
+            "name": "Primary",
+            "command": "/name",
+            "source_key": "items_character_catcher",
+            "media_type": "photo",
+        }
+
+        async def fake_find_one(query, projection=None):
+            if "file_unique_ids" in query and query.get("source_key") == "items_character_catcher":
+                return primary
+            return None
+
+        with patch("unified.lookup.characters.find_one", new=AsyncMock(side_effect=fake_find_one)) as find_one:
+            result = asyncio.run(
+                _exact_find(
+                    ["items_character_catcher", "items_character_catcher_fw"],
+                    ["UID-FAST"],
+                )
+            )
+
+        self.assertEqual(result, primary)
+        self.assertEqual(find_one.await_count, 2)
+        for call in find_one.await_args_list:
+            query = call.args[0]
+            self.assertNotIn("telegram_file_unique_id", query)
+            self.assertNotIn("photo_file_unique_id", query)
+            self.assertNotIn("video_file_unique_id", query)
+
+
+class HashIndexFastPathTests(unittest.TestCase):
+    def test_photo_candidates_use_bucket_keys_when_available(self):
+        target_hash = "0123456789abcdef"
+        target = {
+            "_id": "target",
+            "name": "Target",
+            "command": "/name",
+            "source_key": "items_character_catcher",
+            "media_type": "photo",
+            "phash": target_hash,
+            "phash_chunks": hash_index._chunks(target_hash),
+            "dhash_chunks": [],
+            "_phash_int": int(target_hash, 16),
+            "_dhash_int": None,
+        }
+        legacy = dict(target)
+        legacy["_id"] = "legacy"
+        legacy["name"] = "Legacy"
+        legacy["phash"] = "ffffffffffffffff"
+        legacy["phash_chunks"] = []
+        legacy["_phash_int"] = int(legacy["phash"], 16)
+
+        with hash_index._LOCK:
+            old_ready = hash_index._READY
+            old_records = dict(hash_index._RECORDS)
+            old_buckets = {key: set(value) for key, value in hash_index._BUCKETS.items()}
+            old_sources = set(hash_index._SOURCES)
+            old_source_keys = {key: set(value) for key, value in hash_index._SOURCE_KEYS.items()}
+            hash_index._READY = True
+            hash_index._RECORDS.clear()
+            hash_index._BUCKETS.clear()
+            hash_index._SOURCES.clear()
+            hash_index._SOURCE_KEYS.clear()
+            hash_index._RECORDS.update({"target": target, "legacy": legacy})
+            hash_index._SOURCES.add("items_character_catcher")
+            hash_index._SOURCE_KEYS["items_character_catcher"] = {"target", "legacy"}
+            for chunk in target["phash_chunks"]:
+                hash_index._BUCKETS.setdefault(("items_character_catcher", "p", chunk), set()).add("target")
+
+        try:
+            results = hash_index.lookup_photo_candidates(
+                ["items_character_catcher"], target_hash, None, limit=10
+            )
+            result_ids = {doc["_id"] for doc in results}
+            self.assertIn("target", result_ids)
+            self.assertNotIn("legacy", result_ids)
+        finally:
+            with hash_index._LOCK:
+                hash_index._READY = old_ready
+                hash_index._RECORDS.clear()
+                hash_index._RECORDS.update(old_records)
+                hash_index._BUCKETS.clear()
+                hash_index._BUCKETS.update(old_buckets)
+                hash_index._SOURCES.clear()
+                hash_index._SOURCES.update(old_sources)
+                hash_index._SOURCE_KEYS.clear()
+                hash_index._SOURCE_KEYS.update(old_source_keys)
+
+
+class LookupGateCacheTests(unittest.TestCase):
+    def test_global_lookup_gate_is_cached(self):
+        auth._global_lookup_cache = None
+        find_one = AsyncMock(return_value={"key": "global_lookup", "enabled": True})
+        fake_db = SimpleNamespace(settings=SimpleNamespace(find_one=find_one))
+
+        async def exercise():
+            with patch.object(auth, "db", fake_db):
+                first = await auth.get_global_lookup_enabled()
+                second = await auth.get_global_lookup_enabled()
+                return first, second
+
+        first, second = asyncio.run(exercise())
+        self.assertTrue(first)
+        self.assertTrue(second)
+        find_one.assert_awaited_once()
+
+    def test_force_join_gate_is_cached(self):
+        force_join._enabled_cache = None
+        find_one = AsyncMock(return_value={"key": "force_join:enabled", "enabled": True})
+        fake_db = SimpleNamespace(settings=SimpleNamespace(find_one=find_one))
+
+        async def exercise():
+            with patch(
+                "unified.services.force_join._channels",
+                return_value=((1, "https://t.me/a", "A"),),
+            ):
+                with patch.object(
+                    force_join,
+                    "settings",
+                    SimpleNamespace(force_join_enabled=True),
+                ):
+                    with patch.object(force_join, "db", fake_db):
+                        first = await force_join._enabled()
+                        second = await force_join._enabled()
+                        return first, second
+
+        first, second = asyncio.run(exercise())
+        self.assertTrue(first)
+        self.assertTrue(second)
+        find_one.assert_awaited_once()
 
 class ForceJoinConfigTests(unittest.TestCase):
     def test_matching_multi_channel_configuration_is_valid(self):
