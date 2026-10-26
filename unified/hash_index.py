@@ -287,9 +287,23 @@ def lookup_photo_candidates(
         take = max(1, int(limit))
         selected: dict[str, dict[str, Any]] = {}
         for source in sources:
+            candidate_keys: set[str] = set()
+            if query_p is not None:
+                for chunk in _chunks(phash):
+                    candidate_keys.update(_BUCKETS.get((source, "p", chunk), ()))
+            if query_d is not None:
+                for chunk in _chunks(dhash):
+                    candidate_keys.update(_BUCKETS.get((source, "d", chunk), ()))
+
+            # Legacy/imported records may not have chunk fields. Keep a bounded
+            # source-level fallback only when the bucket index has no candidates.
+            # This preserves correctness while making the normal path bucket-driven.
+            if not candidate_keys:
+                candidate_keys.update(_SOURCE_KEYS.get(source, ()))
+
             records = [
                 _RECORDS[key]
-                for key in _SOURCE_KEYS.get(source, ())
+                for key in candidate_keys
                 if key in _RECORDS
             ]
             if query_p is not None:
