@@ -147,9 +147,10 @@ async def has_admin_access(message: Message) -> bool:
 
 
 async def global_lookup_allowed(message: Message) -> bool:
-    # Private-chat auto/manual lookup is independent of public-group Global mode.
-    # Global OFF only restricts public groups; Force Join is still checked by
-    # the lookup handlers themselves.
+    # Manual lookup keeps the existing Global mode semantics.
+    # Private chats are always allowed; public groups are allowed when Global
+    # mode is on, the owner is using the bot, or that specific group is
+    # explicitly approved with /gapprove.
     if message.chat.type == "private":
         return True
     if await get_global_lookup_enabled():
@@ -157,6 +158,24 @@ async def global_lookup_allowed(message: Message) -> bool:
     if owner(message):
         return True
     doc = await db.settings.find_one({"key": f"gapprove:{int(message.chat.id)}"})
+    return bool(doc and doc.get("enabled", True))
+
+
+async def auto_lookup_allowed(message: Message) -> bool:
+    """Auto lookup is restricted to DM and explicitly approved groups.
+
+    The owner/global switch must never turn auto lookup on across every public
+    group. Only /gapprove records grant the group-specific auto-lookup access.
+    """
+    chat_type = str(getattr(getattr(message, "chat", None), "type", "") or "")
+    if chat_type == "private":
+        return True
+    if chat_type not in {"group", "supergroup"}:
+        return False
+    doc = await db.settings.find_one(
+        {"key": f"gapprove:{int(message.chat.id)}"},
+        {"enabled": 1},
+    )
     return bool(doc and doc.get("enabled", True))
 
 
@@ -540,6 +559,60 @@ async def adding_status(message: Message):
     )
 
 
+@router.message(Command("save"))
+async def manual_save(message: Message):
+    """Manually save a Catch media post when an authorized admin replies with /save Name | ID."""
+    if message.chat.id != settings.adding_chat_id:
+        return
+    if not await has_admin_access(message):
+        return
+
+    target = getattr(message, "reply_to_message", None)
+    if not target or not is_media(target):
+        await message.reply("❌ Reply to a Catch bot media post with /save Name | ID.")
+        return
+
+    parts = str(getattr(message, "text", "") or "").partition(" ")
+    payload = parts[2].strip() if len(parts) > 2 else ""
+    if "|" not in payload:
+        await message.reply("Usage: reply to Catch media with <code>/save Name | ID</code>.")
+        return
+    name, separator, raw_id = payload.partition("|")
+    name = name.strip()
+    raw_id = raw_id.strip()
+    if not separator or not name or not raw_id.isdigit():
+        await message.reply("❌ Invalid format. Use <code>/save Yae Miko | 24775</code>.")
+        return
+
+    source_key = resolve_source_collection(target)
+    if source_key not in {"items_character_catcher", "items_character_catcher_fw"}:
+        await message.reply("❌ The replied message is not recognized as a Catch source post.")
+        return
+
+    sender_id = getattr(getattr(target, "from_user", None), "id", None)
+    trusted_ids = {int(sender_id)} if sender_id is not None else set()
+    result = await ingest_message(
+        message.bot,
+        target,
+        trusted_user_ids=trusted_ids,
+        trusted_source_collection=source_key,
+        override_name=name,
+        override_character_id=raw_id,
+    )
+    if not isinstance(result, dict) or not result.get("document"):
+        await message.reply("❌ Could not save this media. Check the bot logs for the reason.")
+        return
+
+    try:
+        remember_document(result["document"])
+    except Exception:
+        log.exception("HASH RAM hot-sync failed during manual save message=%s", target.message_id)
+
+    metrics.record_ingest(result.get("status") or "unknown")
+    notice = format_ingest_notice(result)
+    await message.reply(notice or "✅ Manual save processed.")
+
+
 @router.message(F.chat.id == settings.adding_chat_id, F.func(is_ingest_candidate))
 async def adding_ingest(message: Message):
     # Adding is intentionally restricted to forwarded channel/source posts.
@@ -622,8 +695,14 @@ async def adding_ingest(message: Message):
     F.func(is_media),
 )
 async def lookup_media(message: Message):
-    if not await global_lookup_allowed(message):
-        await message.reply(GLOBAL_OFF_TEXT)
+    # Auto lookup is intentionally narrower than manual lookup: only DMs and
+    # groups explicitly approved through /gapprove may trigger on media.
+    if not await auto_lookup_allowed(message):
+        log.info(
+            "AUTO LOOKUP SKIP chat=%s type=%s reason=not_dm_or_approved_group",
+            getattr(message.chat, "id", None),
+            getattr(message.chat, "type", None),
+        )
         return
     if not await require_join(message):
         return
