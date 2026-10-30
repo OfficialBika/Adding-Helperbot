@@ -109,6 +109,8 @@ class Settings:
         "BOT_API_LOCAL_PATH_CACHE_PATH", "data/local_file_path_cache.sqlite3"
     ).strip() or "data/local_file_path_cache.sqlite3"
     bot_api_session_limit: int = max(32, min(500, _int("BOT_API_SESSION_LIMIT", 100)))
+    # Retain terminal broadcast jobs and delivery history for this many days.
+    broadcast_data_retention_days: int = max(1, min(365, _int("BROADCAST_DATA_RETENTION_DAYS", 30)))
     # VPS/Mongo latency tuning; all values remain environment-configurable.
     mongo_server_selection_timeout_ms: int = _int("MONGO_SERVER_SELECTION_TIMEOUT_MS", 2500)
     mongo_connect_timeout_ms: int = _int("MONGO_CONNECT_TIMEOUT_MS", 2500)
