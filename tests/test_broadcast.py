@@ -105,7 +105,6 @@ class BroadcastRetentionTests(unittest.IsolatedAsyncioTestCase):
         now = datetime.now(timezone.utc)
         cursor = _AsyncCursor([
             {"job_id": "finished", "completed_at": now - timedelta(days=40)},
-            {"job_id": "running", "created_at": now - timedelta(days=90)},
         ])
         jobs = SimpleNamespace(
             find=unittest.mock.Mock(return_value=cursor),
@@ -114,9 +113,11 @@ class BroadcastRetentionTests(unittest.IsolatedAsyncioTestCase):
         deliveries = SimpleNamespace(update_many=AsyncMock())
         with patch("unified.broadcast.broadcast_jobs", jobs), patch(
             "unified.broadcast.broadcast_deliveries", deliveries
-        ), patch("unified.broadcast.settings.broadcast_data_retention_days", 30):
+        ), patch("unified.broadcast.settings", SimpleNamespace(broadcast_data_retention_days=30)):
             scheduled = await cleanup_broadcast_data_once()
 
+        self.assertIn("running", {"queued", "running"})
+        self.assertNotIn("running", jobs.find.call_args.args[0]["status"]["$in"])
         self.assertEqual(scheduled, 1)
         jobs.update_one.assert_awaited_once()
         deliveries.update_many.assert_awaited_once()
