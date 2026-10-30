@@ -116,7 +116,6 @@ class BroadcastRetentionTests(unittest.IsolatedAsyncioTestCase):
         ), patch("unified.broadcast.settings", SimpleNamespace(broadcast_data_retention_days=30)):
             scheduled = await cleanup_broadcast_data_once()
 
-        self.assertIn("running", {"queued", "running"})
         self.assertNotIn("running", jobs.find.call_args.args[0]["status"]["$in"])
         self.assertEqual(scheduled, 1)
         jobs.update_one.assert_awaited_once()
