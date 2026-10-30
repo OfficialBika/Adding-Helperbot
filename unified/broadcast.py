@@ -200,6 +200,9 @@ async def initialize_broadcast() -> None:
         [("job_id", 1), ("status", 1), ("_id", 1)],
         name="idx_broadcast_delivery_pending",
     )
+    # TTL deletion is enabled only after terminal jobs receive purge_at.
+    await broadcast_jobs.create_index("purge_at", expireAfterSeconds=0, name="ttl_broadcast_jobs_purge_at")
+    await broadcast_deliveries.create_index("purge_at", expireAfterSeconds=0, name="ttl_broadcast_deliveries_purge_at")
 
     now = _now()
     await broadcast_jobs.update_many(
@@ -223,6 +226,58 @@ async def initialize_broadcast() -> None:
         {"status": "running"},
         {"$set": {"status": "queued", "resumed_at": now, "updated_at": now}},
     )
+
+
+TERMINAL_BROADCAST_STATUSES = frozenset({
+    "completed", "completed_with_errors", "cancelled", "expired", "failed_preview"
+})
+
+
+async def cleanup_broadcast_data_once() -> int:
+    """Stamp TTL deadlines for terminal jobs and their delivery history only."""
+    now = _now()
+    retention = timedelta(days=settings.broadcast_data_retention_days)
+    query = {
+        "status": {"$in": sorted(TERMINAL_BROADCAST_STATUSES)},
+        "purge_at": {"$exists": False},
+    }
+    scheduled = 0
+    cursor = broadcast_jobs.find(
+        query,
+        {"_id": 0, "job_id": 1, "completed_at": 1, "updated_at": 1, "created_at": 1},
+    ).sort("created_at", 1).batch_size(200)
+    async for job in cursor:
+        job_id = str(job.get("job_id") or "")
+        if not job_id:
+            continue
+        terminal_at = job.get("completed_at") or job.get("updated_at") or job.get("created_at") or now
+        if not isinstance(terminal_at, datetime):
+            terminal_at = now
+        purge_at = terminal_at + retention
+        result = await broadcast_jobs.update_one(
+            {"job_id": job_id, "status": {"$in": sorted(TERMINAL_BROADCAST_STATUSES)}, "purge_at": {"$exists": False}},
+            {"$set": {"purge_at": purge_at}},
+        )
+        if result.modified_count:
+            await broadcast_deliveries.update_many(
+                {"job_id": job_id, "purge_at": {"$exists": False}},
+                {"$set": {"purge_at": purge_at}},
+            )
+            scheduled += 1
+    if scheduled:
+        log.info("BROADCAST retention scheduled jobs=%s retention_days=%s", scheduled, settings.broadcast_data_retention_days)
+    return scheduled
+
+
+async def _broadcast_retention_loop() -> None:
+    while True:
+        try:
+            await cleanup_broadcast_data_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("BROADCAST retention cleanup failed; will retry")
+        await asyncio.sleep(3600)
 
 
 async def auto_leave_restricted_group(bot: Bot, chat: Chat, exc: BaseException | str) -> bool:
@@ -747,24 +802,23 @@ async def _worker_loop(bot: Bot) -> None:
 
 
 def start_broadcast_worker(bot: Bot) -> None:
-    global _worker_task
-    if _worker_task is not None and not _worker_task.done():
-        return
-    _worker_task = asyncio.create_task(_worker_loop(bot), name="broadcast-worker")
+    global _worker_task, _retention_task
+    if _worker_task is None or _worker_task.done():
+        _worker_task = asyncio.create_task(_worker_loop(bot), name="broadcast-worker")
+    if _retention_task is None or _retention_task.done():
+        _retention_task = asyncio.create_task(_broadcast_retention_loop(), name="broadcast-retention")
     _wakeup.set()
 
 
 async def stop_broadcast_worker() -> None:
-    global _worker_task
-    task = _worker_task
+    global _worker_task, _retention_task
+    tasks = [task for task in (_worker_task, _retention_task) if task is not None]
     _worker_task = None
-    if task is None:
-        return
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    _retention_task = None
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _stage_broadcast(message: Message, command: CommandObject) -> None:
