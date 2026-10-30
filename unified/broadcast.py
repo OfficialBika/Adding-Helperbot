@@ -53,6 +53,7 @@ broadcast_deliveries = db.broadcast_deliveries
 
 _wakeup = asyncio.Event()
 _worker_task: asyncio.Task | None = None
+_retention_task: asyncio.Task | None = None
 _cancel_events: dict[str, asyncio.Event] = {}
 _progress_locks: dict[str, asyncio.Lock] = {}
 
