@@ -76,5 +76,71 @@ class AutoLeaveTests(unittest.IsolatedAsyncioTestCase):
         bot.leave_chat.assert_not_awaited()
 
 
+class _AsyncCursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def sort(self, *args, **kwargs):
+        return self
+
+    def batch_size(self, *args, **kwargs):
+        return self
+
+    def __aiter__(self):
+        self._iterator = iter(self.rows)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iterator)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+class BroadcastRetentionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cleanup_schedules_only_terminal_jobs_and_their_deliveries(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.broadcast import cleanup_broadcast_data_once
+
+        now = datetime.now(timezone.utc)
+        cursor = _AsyncCursor([
+            {"job_id": "finished", "completed_at": now - timedelta(days=40)},
+            {"job_id": "running", "created_at": now - timedelta(days=90)},
+        ])
+        jobs = SimpleNamespace(
+            find=unittest.mock.Mock(return_value=cursor),
+            update_one=AsyncMock(return_value=SimpleNamespace(modified_count=1)),
+        )
+        deliveries = SimpleNamespace(update_many=AsyncMock())
+        with patch("unified.broadcast.broadcast_jobs", jobs), patch(
+            "unified.broadcast.broadcast_deliveries", deliveries
+        ), patch("unified.broadcast.settings.broadcast_data_retention_days", 30):
+            scheduled = await cleanup_broadcast_data_once()
+
+        self.assertEqual(scheduled, 1)
+        jobs.update_one.assert_awaited_once()
+        deliveries.update_many.assert_awaited_once()
+        self.assertEqual(jobs.update_one.await_args.args[0]["job_id"], "finished")
+        self.assertEqual(deliveries.update_many.await_args.args[0]["job_id"], "finished")
+
+    async def test_cleanup_does_not_schedule_delivery_if_job_was_not_claimed(self):
+        from datetime import datetime, timezone
+        from unified.broadcast import cleanup_broadcast_data_once
+
+        cursor = _AsyncCursor([{"job_id": "already-updated", "updated_at": datetime.now(timezone.utc)}])
+        jobs = SimpleNamespace(
+            find=unittest.mock.Mock(return_value=cursor),
+            update_one=AsyncMock(return_value=SimpleNamespace(modified_count=0)),
+        )
+        deliveries = SimpleNamespace(update_many=AsyncMock())
+        with patch("unified.broadcast.broadcast_jobs", jobs), patch(
+            "unified.broadcast.broadcast_deliveries", deliveries
+        ):
+            scheduled = await cleanup_broadcast_data_once()
+
+        self.assertEqual(scheduled, 0)
+        deliveries.update_many.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()
