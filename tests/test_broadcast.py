@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from unified.broadcast import (
     auto_leave_restricted_group,
@@ -107,7 +107,7 @@ class BroadcastRetentionTests(unittest.IsolatedAsyncioTestCase):
             {"job_id": "finished", "completed_at": now - timedelta(days=40)},
         ])
         jobs = SimpleNamespace(
-            find=unittest.mock.Mock(return_value=cursor),
+            find=Mock(return_value=cursor),
             update_one=AsyncMock(return_value=SimpleNamespace(modified_count=1)),
         )
         deliveries = SimpleNamespace(update_many=AsyncMock())
