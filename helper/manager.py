@@ -616,7 +616,7 @@ class HelperManager:
                 )
                 if (
                     response_uid == "8532697507"
-                    and re.search(r"\bSuccessfully\s+Caught\s*!?\b", response_text, re.I)
+                    and re.search(r"\bSuccessfully\s+Caught\b\s*!?", response_text, re.I)
                 ):
                     self._state.update({
                         "source": key,
