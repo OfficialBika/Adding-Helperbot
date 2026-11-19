@@ -603,12 +603,38 @@ class HelperManager:
                     log.warning("Senpai /see timeout id=%s", current_id)
                     break
 
+                # Senpai confirms a successful catch with this terminal reply.
+                # Match the configured bot ID and stop before forwarding or
+                # requesting another ID; other sources and Catch are untouched.
+                response_user = getattr(response, "from_user", None)
+                response_uid = str(getattr(response_user, "id", "") or "")
                 response_text = "\n".join(
                     str(v) for v in (
                         getattr(response, "text", None),
                         getattr(response, "caption", None),
                     ) if isinstance(v, str) and v.strip()
                 )
+                if (
+                    response_uid == "8532697507"
+                    and re.search(r"\bSuccessfully\s+Caught\s*!?\b", response_text, re.I)
+                ):
+                    self._state.update({
+                        "source": key,
+                        "mode": "senpai_see",
+                        "last_checked_id": current_id,
+                        "next_id": current_id,
+                        "last_result": "successfully_caught",
+                        "consecutive_not_found": 0,
+                        "running": False,
+                        "last_error": "",
+                    })
+                    self._save()
+                    log.info(
+                        "Senpai successful catch detected; stopping current run at id=%s",
+                        current_id,
+                    )
+                    break
+
                 if re.search(r"character\s+with\s+id\s+\d+\s+not\s+found", response_text, re.I):
                     consecutive_not_found += 1
                     self._state.update({
