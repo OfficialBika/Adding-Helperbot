@@ -142,7 +142,12 @@ class HelperManager:
                     await q.put(message)
 
     def _bot_id_for(self, key):
-        return str(self._state.get("dm_bot_ids", {}).get(key, ""))
+        configured = self._state.get("dm_bot_ids", {}).get(key)
+        if configured:
+            return str(configured)
+        # Stable sender ID for SenpaiCatcherBot; username can be absent on
+        # some Telegram message representations.
+        return {"senpai": "8532697507"}.get(key, "")
 
     def _start_delay(self, text: str) -> int:
         parts = (text or "").strip().split()
