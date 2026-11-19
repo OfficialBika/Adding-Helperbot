@@ -217,6 +217,40 @@ class CatchDmCollectorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(progress["consecutive_not_found"], 20)
             self.assertEqual(progress["status"], "auto_stopped")
 
+    async def test_senpai_successfully_caught_stops_immediately(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("helper.manager.STATE_PATH", Path(tmp) / "state.json"),
+            patch("helper.manager.asyncio.sleep", new=AsyncMock()),
+        ):
+            client = SimpleNamespace(
+                send_message=AsyncMock(),
+                forward_messages=AsyncMock(),
+            )
+            manager = HelperManager(SimpleNamespace(client=client, adding_chat_id=-100123))
+
+            async def respond(_bot, command):
+                response = SimpleNamespace(
+                    from_user=SimpleNamespace(id=8532697507, username="SenpaiCatcherBot", is_bot=True),
+                    text="Successfully Caught!",
+                    caption=None,
+                    chat=SimpleNamespace(id=8532697507),
+                    id=9001,
+                )
+                await manager.responses.setdefault("senpai", asyncio.Queue()).put(response)
+
+            client.send_message.side_effect = respond
+            await manager.start_senpai(42, delay=1)
+            await manager.runners["senpai"].task
+
+            self.assertEqual(client.send_message.await_count, 1)
+            self.assertEqual(client.send_message.await_args.args, ("@SenpaiCatcherBot", "/see 42"))
+            client.forward_messages.assert_not_awaited()
+            self.assertEqual(manager._state["last_checked_id"], 42)
+            self.assertEqual(manager._state["next_id"], 42)
+            self.assertEqual(manager._state["last_result"], "successfully_caught")
+            self.assertFalse(manager._state["running"])
+
     async def test_timeout_does_not_count_as_not_found_and_preserves_id(self):
         with (
             tempfile.TemporaryDirectory() as tmp,
