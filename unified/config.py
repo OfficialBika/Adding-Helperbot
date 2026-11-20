@@ -111,6 +111,12 @@ class Settings:
     bot_api_session_limit: int = max(32, min(500, _int("BOT_API_SESSION_LIMIT", 100)))
     # Retain terminal broadcast jobs and delivery history for this many days.
     broadcast_data_retention_days: int = max(1, min(365, _int("BROADCAST_DATA_RETENTION_DAYS", 30)))
+    # Broadcast tuning. Workers are bounded to 15; global and per-chat
+    # pacing remain independent of worker count and respect Telegram 429 waits.
+    broadcast_workers: int = max(1, min(15, _int("BROADCAST_WORKERS", 15)))
+    broadcast_rate_per_second: float = max(1.0, min(25.0, float(os.getenv("BROADCAST_RATE_PER_SECOND", "18.0") or 18.0)))
+    broadcast_delivery_batch_size: int = max(50, min(1000, _int("BROADCAST_DELIVERY_BATCH_SIZE", 400)))
+    broadcast_chat_interval_ms: int = max(1000, min(10000, _int("BROADCAST_CHAT_INTERVAL_MS", 1000)))
     # VPS/Mongo latency tuning; all values remain environment-configurable.
     mongo_server_selection_timeout_ms: int = _int("MONGO_SERVER_SELECTION_TIMEOUT_MS", 2500)
     mongo_connect_timeout_ms: int = _int("MONGO_CONNECT_TIMEOUT_MS", 2500)
