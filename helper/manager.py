@@ -1416,6 +1416,8 @@ class HelperManager:
                     continue
                 if mode in {"inline", "both"} and username:
                     SOURCES[key] = (username, (str(item.get("helper_start_command") or ""),), (str(item.get("helper_resume_command") or ""),))
+                else:
+                    SOURCES.pop(key, None)
                 if mode in {"forward", "both"} and item.get("forward_source"):
                     FORWARD_SOURCES[key] = str(item["forward_source"])
                 if mode == "dm" and username and item.get("dm_command"):
@@ -1490,7 +1492,7 @@ class HelperManager:
                 start_id = 1 if kind == "start" else int(progress.get("pending_id") or progress.get("next_id") or 1)
                 await self._start_dynamic_dm(item, start_id, self._start_delay(text))
                 action = "Started" if kind == "start" else "Resumed"
-                await message.reply(f"✅ {action} dynamic DM source {item.get(chr(115)+chr(111)+chr(117)+chr(114)+chr(99)+chr(101)+chr(95)+chr(107)+chr(101)+chr(121))} from ID {start_id}.")
+                await message.reply(f"✅ {action} dynamic DM source {item.get('source_key')} from ID {start_id}.")
             except Exception as exc:
                 await message.reply(f"Dynamic DM helper error: {exc}")
             return True
