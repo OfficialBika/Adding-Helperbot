@@ -42,12 +42,12 @@ BROADCAST_CONFIRM_TTL = timedelta(minutes=15)
 BROADCAST_MAX_ATTEMPTS = 4
 # Telegram's global limits vary by chat type/method. Keep a conservative
 # process-wide pace and bound worker parallelism separately via environment.
-BROADCAST_CONCURRENCY = max(1, min(15, int(getattr(settings, "broadcast_workers", 15))))
-BROADCAST_RATE_PER_SECOND = float(getattr(settings, "broadcast_rate_per_second", 18.0))
-BROADCAST_DELIVERY_BATCH_SIZE = max(50, min(1000, int(getattr(settings, "broadcast_delivery_batch_size", 400))))
+BROADCAST_CONCURRENCY = max(1, min(24, int(getattr(settings, "broadcast_workers", 20))))
+BROADCAST_RATE_PER_SECOND = float(getattr(settings, "broadcast_rate_per_second", 25.0))
+BROADCAST_DELIVERY_BATCH_SIZE = max(100, min(1000, int(getattr(settings, "broadcast_delivery_batch_size", 800))))
 CHAT_REGISTRY_TOUCH_SECONDS = 600.0
 CHAT_REGISTRY_MAX_MEMORY_ENTRIES = 50_000
-PROGRESS_UPDATE_EVERY = 25
+PROGRESS_UPDATE_EVERY = max(50, min(500, int(getattr(settings, "broadcast_progress_update_every", 100))))
 
 bot_chats = db.bot_chats
 broadcast_jobs = db.broadcast_jobs
