@@ -934,3 +934,40 @@ class DynamicHelperCommandIsolationTests(unittest.TestCase):
         source = Path("unified/source_registry.py").read_text(encoding="utf-8")
         self.assertIn("builtin_commands", source)
         self.assertIn("A helper command conflicts with an existing built-in Helper command.", source)
+
+
+class ExistingDynamicSourceHelperEditTests(unittest.TestCase):
+    def test_editbot_is_owner_dm_only_and_targets_stable_registration(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        handler = source.split('@router.message(Command("editbot"))', 1)[1].split('def _helper_edit_preview', 1)[0]
+        self.assertIn("_owner_dm(message)", handler)
+        self.assertIn('"registration_id"', handler)
+        self.assertIn('"edit_helper_start"', handler)
+
+    def test_edit_update_is_limited_to_four_helper_command_fields(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        updater = source.split("async def _save_helper_command_edit", 1)[1].split('@router.message(Command("listbots"))', 1)[0]
+        self.assertIn('f"sources.$.{field}"', updater)
+        self.assertIn('"sources.registration_id": registration_id', updater)
+        self.assertIn('"sources.version": original_version', updater)
+        self.assertIn('"$inc": {"sources.$.version": 1}', updater)
+        self.assertNotIn('"$unset"', updater)
+        self.assertNotIn('"sources.$.bot_username"', updater)
+
+    def test_helper_edit_uses_preview_confirm_and_cancel(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn("HELPER COMMAND EDIT PREVIEW", source)
+        self.assertIn('"edit_confirm"', source)
+        self.assertIn('Save: /confirm', source)
+        self.assertIn('Command("cancel")', source)
+
+    def test_helper_edit_validates_required_commands_by_mode(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        updater = source.split("async def _save_helper_command_edit", 1)[1].split('@router.message(Command("listbots"))', 1)[0]
+        self.assertIn('needs_helper = mode in {"inline", "dm", "both"}', updater)
+        self.assertIn('needs_forward = mode in {"forward", "both"}', updater)
+
