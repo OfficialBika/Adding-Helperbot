@@ -971,3 +971,24 @@ class ExistingDynamicSourceHelperEditTests(unittest.TestCase):
         self.assertIn('needs_helper = mode in {"inline", "dm", "both"}', updater)
         self.assertIn('needs_forward = mode in {"forward", "both"}', updater)
 
+
+
+class ExactSourceEmojiSequenceTests(unittest.TestCase):
+    def test_preserves_cook_emoji_inside_character_name_suffix(self):
+        from unified.parser import clean_name, extract_name
+        original = "Roronoa Zoro [👨‍🍳]"
+        caption = "Name 🔥 : " + original + "\nID 🆔 : 1"
+        self.assertEqual(clean_name(original), original)
+        self.assertEqual(extract_name(caption), original)
+
+    def test_preserves_skin_tone_zwj_variation_and_keycap_sequences(self):
+        from unified.parser import norm, clean_name
+        samples = ["Name [👨‍🍳]", "Name [👨🏽‍🍳]", "Name [❤️]", "Name [1️⃣]", "Name [🏳️‍🌈]"]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(norm(sample), sample)
+                self.assertEqual(clean_name(sample), sample)
+
+    def test_still_removes_field_label_without_changing_suffix(self):
+        from unified.parser import extract_name
+        self.assertEqual(extract_name("Name 📛 : Character [👨‍🍳]\nID 🆔 : 123"), "Character [👨‍🍳]")
