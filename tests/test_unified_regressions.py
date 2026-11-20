@@ -591,23 +591,28 @@ class DynamicSourceRegistryHelpersTests(unittest.TestCase):
         self.assertNotIn("BOT_SOURCE_USER_ID.clear()", resolver_source)
 
 class BroadcastConcurrencyTests(unittest.TestCase):
-    def test_broadcast_worker_count_is_bounded_by_fifteen(self):
+    def test_broadcast_worker_count_is_bounded_for_vps(self):
         from unified.config import Settings
         self.assertGreaterEqual(Settings.broadcast_workers, 1)
-        self.assertLessEqual(Settings.broadcast_workers, 15)
+        self.assertLessEqual(Settings.broadcast_workers, 24)
 
     def test_broadcast_rate_and_chat_interval_are_bounded(self):
         from unified.config import Settings
         self.assertGreaterEqual(Settings.broadcast_rate_per_second, 1.0)
-        self.assertLessEqual(Settings.broadcast_rate_per_second, 25.0)
+        self.assertLessEqual(Settings.broadcast_rate_per_second, 27.0)
         self.assertGreaterEqual(Settings.broadcast_chat_interval_ms, 1000)
         self.assertLessEqual(Settings.broadcast_chat_interval_ms, 10000)
+
+    def test_broadcast_progress_updates_are_throttled(self):
+        from unified.config import Settings
+        self.assertGreaterEqual(Settings.broadcast_progress_update_every, 50)
+        self.assertLessEqual(Settings.broadcast_progress_update_every, 500)
 
     def test_broadcast_worker_pool_uses_configured_limit(self):
         from pathlib import Path
         source = Path("unified/broadcast.py").read_text(encoding="utf-8")
         self.assertIn('range(BROADCAST_CONCURRENCY)', source)
-        self.assertIn('getattr(settings, "broadcast_workers", 15)', source)
+        self.assertIn('getattr(settings, "broadcast_workers", 20)', source)
 
     def test_broadcast_429_updates_global_and_chat_pacing(self):
         from pathlib import Path
