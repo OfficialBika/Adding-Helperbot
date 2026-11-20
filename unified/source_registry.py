@@ -204,6 +204,9 @@ async def _ask(message: Message, step: str) -> None:
         "mode": "Mode: inline / forward / both / dm / manual",
         "forward_source": "Forward source username သို့မဟုတ် -100... ID ထည့်ပါ။ မရှိလျှင် -",
         "dm_command": "DM command template ထည့်ပါ။ ဥပမာ /check {id} (မရှိလျှင် -)",
+        "dm_max_id": "ဒီ bot အတွက် စစ်ဆေးမယ့် အများဆုံး ID ထည့်ပါ။ ဥပမာ 10000 (အကန့်အသတ်မဲ့ မစစ်ပါ)",
+        "dm_timeout": "Response timeout ကို စက္ကန့်ဖြင့် ထည့်ပါ (5-120)။ ဥပမာ 30",
+        "dm_max_misses": "Auto-stop မတိုင်မီ ဆက်တိုက် no-response အများဆုံးအကြိမ် (1-100) ထည့်ပါ။ ဥပမာ 10",
         "parser": "Parser type: builtin / generic",
         "name_label": "Generic parser Name label ထည့်ပါ။ ဥပမာ Name",
         "id_label": "ID label ထည့်ပါ။ မရှိလျှင် -",
@@ -448,10 +451,26 @@ async def source_registration_wizard(message: Message) -> None:
             if value == "-":
                 draft["dm_command"] = ""
                 draft["mode"] = "manual"
+                nxt = "parser"
             elif "{id}" in value and re.fullmatch(r"/[A-Za-z0-9_ ]*\{id\}[A-Za-z0-9_ ]*", value):
                 draft["dm_command"] = value
+                nxt = "dm_max_id"
             else:
                 raise ValueError("Use a safe ID template such as /check {id}, or - for manual only.")
+        elif step == "dm_max_id":
+            if not value.isdigit() or not (1 <= int(value) <= 10000000):
+                raise ValueError("Set a finite maximum ID from 1 to 10,000,000.")
+            draft["max_id"] = int(value)
+            nxt = "dm_timeout"
+        elif step == "dm_timeout":
+            if not value.isdigit() or not (5 <= int(value) <= 120):
+                raise ValueError("Response timeout must be 5-120 seconds.")
+            draft["response_timeout"] = int(value)
+            nxt = "dm_max_misses"
+        elif step == "dm_max_misses":
+            if not value.isdigit() or not (1 <= int(value) <= 100):
+                raise ValueError("Maximum consecutive misses must be 1-100.")
+            draft["max_no_response"] = int(value)
             nxt = "parser"
         elif step == "parser":
             parser = value.lower()
