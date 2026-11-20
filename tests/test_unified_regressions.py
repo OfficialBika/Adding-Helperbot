@@ -979,7 +979,7 @@ class ExactSourceEmojiSequenceTests(unittest.TestCase):
         original = "Roronoa Zoro [👨‍🍳]"
         caption = "Name 🔥 : " + original + "\nID 🆔 : 1"
         self.assertEqual(clean_name(original), original)
-        self.assertEqual(extract_name("Name : " + original + "\\nID : 1"), original)
+        self.assertEqual(extract_name("Name : " + original + "\nID : 1"), original)
         self.assertEqual(extract_name(caption), original)
 
     def test_preserves_skin_tone_zwj_variation_and_keycap_sequences(self):
