@@ -1092,9 +1092,16 @@ async def startbroadcast_command(message: Message) -> None:
 
 @broadcast_router.callback_query(F.data.startswith("bc:"))
 async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
+    # Acknowledge immediately so Telegram clients do not leave the
+    # inline button spinner running while MongoDB is queried.
     if not query.from_user or query.from_user.id not in settings.owner_ids:
         await query.answer("Not authorized.", show_alert=True)
         return
+
+    try:
+        await query.answer("Processing…")
+    except Exception:
+        log.exception("BROADCAST callback acknowledgement failed")
 
     parts = str(query.data or "").split(":")
     if len(parts) != 3 or parts[1] not in {"confirm", "cancel"}:
@@ -1130,9 +1137,11 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
             {"$set": {"status": "cancelled", "completed_at": _now(), "updated_at": _now()}},
         )
         if not cancelled.modified_count:
-            await query.answer("This broadcast was already handled.", show_alert=True)
+            try:
+                await query.message.edit_reply_markup(reply_markup=None) if query.message else None
+            except Exception:
+                log.exception("BROADCAST stale cancel keyboard removal failed job=%s", job_id)
             return
-        await query.answer("Broadcast cancelled.")
         try:
             if query.message:
                 await query.message.edit_text("✖ Broadcast cancelled.")
@@ -1154,10 +1163,12 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
         return_document=ReturnDocument.AFTER,
     )
     if not updated:
-        await query.answer("This broadcast was already handled.", show_alert=True)
+        try:
+            await query.message.edit_reply_markup(reply_markup=None) if query.message else None
+        except Exception:
+            log.exception("BROADCAST stale confirm keyboard removal failed job=%s", job_id)
         return
     try:
-        await query.answer("Broadcast queued.")
         if query.message:
             await query.message.edit_text(
                 "📣 <b>Broadcast queued</b>\n\n"
