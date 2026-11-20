@@ -1033,6 +1033,8 @@ async def _cancel_latest_broadcast(message: Message) -> None:
         await message.reply("No active broadcast job to cancel.")
         return
 
+    # Immediate-start jobs can be cancelled only while still queued/running;
+    # they no longer have a confirmation step.
     job_id = str(job["job_id"])
     if job.get("status") == "running":
         await broadcast_jobs.update_one(
@@ -1042,11 +1044,19 @@ async def _cancel_latest_broadcast(message: Message) -> None:
         _cancel_events.setdefault(job_id, asyncio.Event()).set()
         await message.reply(f"Cancellation requested for <code>{job_id[:8]}</code>.")
     else:
-        await broadcast_jobs.update_one(
+        cancelled = await broadcast_jobs.update_one(
             {"job_id": job_id, "status": {"$in": ["pending_confirmation", "queued"]}},
             {"$set": {"status": "cancelled", "completed_at": _now(), "updated_at": _now()}},
         )
-        await message.reply(f"Broadcast <code>{job_id[:8]}</code> cancelled.")
+        if cancelled.modified_count:
+            await broadcast_deliveries.update_many(
+                {"job_id": job_id, "status": "pending"},
+                {"$set": {"status": "skipped", "last_error": "Cancelled before delivery", "updated_at": _now()}},
+            )
+            await _reconcile_job_counts(job_id)
+            await message.reply(f"Broadcast <code>{job_id[:8]}</code> cancelled.")
+        else:
+            await message.reply("Broadcast has already started or finished; check /broadcast status.")
 
 
 @broadcast_router.message(Command("broadcast"))
