@@ -442,7 +442,7 @@ class _RateLimiter:
 
 
 class _ChatRateLimiter:
-    """Serialize sends to one chat and enforce a minimum per-chat interval."""
+    """Serialize sends to a chat and respect a chat-specific RetryAfter pause."""
 
     def __init__(self, interval_seconds: float) -> None:
         self.interval = max(1.0, float(interval_seconds))
@@ -453,20 +453,19 @@ class _ChatRateLimiter:
         lock = self._locks.setdefault(int(chat_id), asyncio.Lock())
         await lock.acquire()
         try:
-            now = time.monotonic()
-            wait = self._next_at.get(int(chat_id), 0.0) - now
+            wait = self._next_at.get(int(chat_id), 0.0) - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
             self._next_at[int(chat_id)] = time.monotonic() + self.interval
             return lock
+        except BaseException:
+            lock.release()
+            raise
 
     async def defer(self, chat_id: int, seconds: float) -> None:
         pause_until = time.monotonic() + max(1.0, min(float(seconds), 3600.0))
         async with self._locks.setdefault(int(chat_id), asyncio.Lock()):
             self._next_at[int(chat_id)] = max(self._next_at.get(int(chat_id), 0.0), pause_until)
-        except BaseException:
-            lock.release()
-            raise
 
 
 _rate_limiter = _RateLimiter(BROADCAST_RATE_PER_SECOND)
