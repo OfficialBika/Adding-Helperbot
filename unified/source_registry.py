@@ -37,6 +37,7 @@ VALID_COLLECTIONS = frozenset({
     "items_grabber_fw",
 })
 _REGISTRY: list[dict[str, Any]] = []
+_REGISTRY_WRITE_LOCK = asyncio.Lock()
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -263,29 +264,30 @@ async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
         "enabled": True, "created_by": int(owner_id), "created_at": now,
         "updated_at": now, "version": 1, "registration_id": secrets.token_hex(8),
     })
-    # Guard duplicate registration identity with a single atomic update against
-    # the registry document. The document is created only when it is absent.
-    registry = await db.settings.find_one({"key": REGISTRY_KEY}, {"_id": 1})
-    if registry:
-        query = {"_id": registry["_id"], "key": REGISTRY_KEY, "$nor": [
-            {"sources.source_key": item["source_key"]},
-            *([{"sources.bot_username": item["bot_username"]}] if item["bot_username"] else []),
-            *([{"sources.forward_source": item.get("forward_source")}] if item.get("forward_source") else []),
-        ]}
-        result = await db.settings.update_one(
-            query,
-            {"$push": {"sources": item}, "$set": {"updated_at": now}},
-        )
-        if not result.modified_count:
-            raise ValueError("Duplicate source key or bot identity; no registration was saved.")
-    else:
-        try:
-            await db.settings.insert_one({
-                "key": REGISTRY_KEY, "schema_version": 1,
-                "sources": [item], "created_at": now, "updated_at": now,
-            })
-        except Exception as exc:
-            raise ValueError("Registry was created concurrently; retry /confirm.") from exc
+    # Serialize updates within this process and use atomic array guards at
+    # MongoDB. A failed/duplicate write never changes the existing registry.
+    async with _REGISTRY_WRITE_LOCK:
+        registry = await db.settings.find_one({"key": REGISTRY_KEY}, {"_id": 1})
+        if registry:
+            query = {"_id": registry["_id"], "key": REGISTRY_KEY, "$nor": [
+                {"sources.source_key": item["source_key"]},
+                *([{"sources.bot_username": item["bot_username"]}] if item["bot_username"] else []),
+                *([{"sources.forward_source": item.get("forward_source")}] if item.get("forward_source") else []),
+            ]}
+            result = await db.settings.update_one(
+                query,
+                {"$push": {"sources": item}, "$set": {"updated_at": now}},
+            )
+            if not result.modified_count:
+                raise ValueError("Duplicate source key or bot identity; no registration was saved.")
+        else:
+            try:
+                await db.settings.insert_one({
+                    "key": REGISTRY_KEY, "schema_version": 1,
+                    "sources": [item], "created_at": now, "updated_at": now,
+                })
+            except Exception as exc:
+                raise ValueError("Registry was created concurrently; retry /confirm.") from exc
     await refresh_dynamic_source_registry()
 
 @router.message(Command("addnewbot"))
