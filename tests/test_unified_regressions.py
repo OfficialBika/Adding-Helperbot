@@ -625,13 +625,11 @@ class BroadcastRegistryStatsTests(unittest.TestCase):
         self.assertIn("Registered Users", source)
         self.assertIn("Registered Groups", source)
 
-    def test_broadcast_callbacks_are_dispatched_before_generic_router_fallback(self):
+    def test_broadcast_callback_is_registered_with_prefixed_callback_filter(self):
         from pathlib import Path
         source = Path("unified/broadcast.py").read_text(encoding="utf-8")
-        self.assertIn("class BroadcastCallbackRouter(Router):", source)
-        self.assertIn('update_type == "callback_query"', source)
-        self.assertIn('startswith("bc:")', source)
-        self.assertIn("broadcast_confirmation_callback(event)", source)
+        self.assertIn('@broadcast_router.callback_query(F.data.startswith("bc:"))', source)
+        self.assertIn("async def broadcast_confirmation_callback(query: CallbackQuery)", source)
 
     def test_broadcast_callback_is_acknowledged_before_database_lookup(self):
         from pathlib import Path
