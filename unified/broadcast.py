@@ -465,6 +465,7 @@ class _ChatRateLimiter:
     async def acquire(self, chat_id: int) -> asyncio.Lock:
         lock = self._lock_for(chat_id)
         await lock.acquire()
+        self._prune()
         try:
             wait = self._next_at.get(int(chat_id), 0.0) - time.monotonic()
             if wait > 0:
