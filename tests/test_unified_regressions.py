@@ -590,6 +590,64 @@ class DynamicSourceRegistryHelpersTests(unittest.TestCase):
         self.assertIn("Replace module maps only after the complete next generation is built.", resolver_source)
         self.assertNotIn("BOT_SOURCE_USER_ID.clear()", resolver_source)
 
+class SourceRegistryWizardExpiryTests(unittest.TestCase):
+    def test_pending_wizard_accepts_future_naive_bson_datetime(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.source_registry import _pending
+
+        doc = {
+            "_id": "pending-1",
+            "expires_at": datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10),
+            "step": "username",
+            "draft": {"name": "Character Guess Bot"},
+        }
+        with (
+            patch("unified.source_registry.db.settings.find_one", new=AsyncMock(return_value=doc)),
+            patch("unified.source_registry.db.settings.delete_one", new=AsyncMock()) as delete_one,
+        ):
+            result = asyncio.run(_pending(12345))
+
+        self.assertEqual(result["step"], "username")
+        self.assertEqual(result["draft"]["name"], "Character Guess Bot")
+        delete_one.assert_not_awaited()
+
+    def test_pending_wizard_deletes_expired_naive_bson_datetime(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.source_registry import _pending
+
+        doc = {
+            "_id": "pending-expired",
+            "expires_at": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1),
+            "step": "username",
+        }
+        with (
+            patch("unified.source_registry.db.settings.find_one", new=AsyncMock(return_value=doc)),
+            patch("unified.source_registry.db.settings.delete_one", new=AsyncMock()) as delete_one,
+        ):
+            result = asyncio.run(_pending(12345))
+
+        self.assertIsNone(result)
+        delete_one.assert_awaited_once_with({"_id": "pending-expired"})
+
+    def test_pending_wizard_accepts_future_aware_datetime(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.source_registry import _pending
+
+        doc = {
+            "_id": "pending-aware",
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
+            "step": "username",
+        }
+        with (
+            patch("unified.source_registry.db.settings.find_one", new=AsyncMock(return_value=doc)),
+            patch("unified.source_registry.db.settings.delete_one", new=AsyncMock()) as delete_one,
+        ):
+            result = asyncio.run(_pending(12345))
+
+        self.assertEqual(result["step"], "username")
+        delete_one.assert_not_awaited()
+
+
 class BroadcastConcurrencyTests(unittest.TestCase):
     def test_broadcast_worker_count_is_bounded_for_vps(self):
         from unified.config import Settings
