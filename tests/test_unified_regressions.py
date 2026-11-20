@@ -890,7 +890,7 @@ class OwnerSuppliedHelperCommandWizardTests(unittest.TestCase):
     def test_inline_dm_only_need_two_owner_commands(self):
         from pathlib import Path
         source = Path("unified/source_registry.py").read_text(encoding="utf-8")
-        self.assertIn('needs_helper = item.get("mode") in {"inline", "dm", "both", "forward"}', source)
+        self.assertIn('needs_helper = item.get("mode") in {"inline", "dm", "both"}', source)
         self.assertIn('needs_forward_helper = item.get("mode") in {"forward", "both"}', source)
 
     def test_forward_modes_require_two_separate_forward_commands(self):
