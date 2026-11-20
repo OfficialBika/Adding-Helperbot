@@ -172,6 +172,14 @@ class HelperManager:
         misses = int(progress.get("consecutive_no_response", 0) or 0)
         try:
             while current_id <= max_id:
+                active_item = await self._dynamic_registry_snapshot()
+                if not any(
+                    str(source.get("registration_id") or "") == registration_id
+                    and source.get("enabled", True)
+                    for source in active_item
+                ):
+                    progress["last_error"] = "registration disabled or removed; worker stopped"
+                    break
                 progress.update({"source_key": key, "pending_id": current_id, "next_id": current_id, "running": True})
                 self._save()
                 command = template.replace("{id}", str(current_id))
