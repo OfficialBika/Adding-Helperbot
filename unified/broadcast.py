@@ -36,6 +36,18 @@ log = logging.getLogger("unified.broadcast")
 
 broadcast_router = Router(name="production-broadcast")
 
+class BroadcastCallbackRouter(Router):
+    """Keep callback confirmation ahead of the broad update handlers."""
+
+    async def propagate_event(self, observer, update_type: str, event, **kwargs):
+        if update_type == "callback_query" and str(getattr(event, "data", "") or "").startswith("bc:"):
+            handler = broadcast_confirmation_callback
+            await handler(event)
+            return True
+        return await super().propagate_event(observer, update_type, event, **kwargs)
+
+
+
 ACTIVE_CHAT_TYPES = frozenset({"private", "group", "supergroup"})
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
 BROADCAST_CONFIRM_TTL = timedelta(minutes=15)
