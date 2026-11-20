@@ -834,3 +834,49 @@ class WaifuCheatBuiltinParserTests(unittest.TestCase):
         card = "New Character Added\n🎭 Name: Furina\n🆔 ID: 2101"
         self.assertEqual(extract_name(card), "Furina")
         self.assertEqual(extract_character_id(card), "2101")
+
+
+class OrinXBuiltinParserTests(unittest.TestCase):
+    def test_parses_orinx_forwarded_database_caption(self):
+        from unified.parser import extract_name, extract_character_id
+
+        caption = (
+            "Name 📛 : L Lawliet [⛩]\n"
+            "ID 🆔 : 209\n"
+            "2026-11-20 17:42:27"
+        )
+        self.assertEqual(extract_name(caption), "L Lawliet [⛩]")
+        self.assertEqual(extract_character_id(caption), "209")
+
+    def test_parses_orinx_plain_ascii_character_name(self):
+        from unified.parser import extract_name, extract_character_id
+
+        caption = "Name 📛 : Ai Hoshino\nID 🆔 : 208\n2026-11-20 17:42:21"
+        self.assertEqual(extract_name(caption), "Ai Hoshino")
+        self.assertEqual(extract_character_id(caption), "208")
+
+    def test_preserves_bracketed_emoji_name_suffix(self):
+        from unified.parser import extract_name
+
+        caption = "Name 📛 : L Lawliet [⛩]\nID 🆔 : 209"
+        self.assertEqual(extract_name(caption), "L Lawliet [⛩]")
+
+    def test_rejects_id_without_corresponding_orinx_name_row(self):
+        from unified.parser import extract_character_id
+
+        self.assertIsNone(extract_character_id("ID 🆔 : 209\n2026-11-20 17:42:27"))
+
+    def test_rejects_non_numeric_orinx_id(self):
+        from unified.parser import extract_name, extract_character_id
+
+        caption = "Name 📛 : Test Character\nID 🆔 : unknown"
+        self.assertIsNone(extract_name(caption))
+        self.assertIsNone(extract_character_id(caption))
+
+    def test_existing_waifu_cheat_parser_still_works(self):
+        from unified.parser import extract_name, extract_character_id
+
+        caption = "🌸 Furina [🍰]\n📺 Genshin Impact\n🆔 2101"
+        self.assertEqual(extract_name(caption), "Furina [🍰]")
+        self.assertEqual(extract_character_id(caption), "2101")
+
