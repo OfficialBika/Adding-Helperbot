@@ -69,16 +69,6 @@ async def get_registered_sources(*, active_only: bool = True) -> list[dict[str, 
     sources = list((doc or {}).get("sources") or [])
     return [dict(x) for x in sources if x.get("enabled", True)] if active_only else [dict(x) for x in sources]
 
-async def ensure_registry_indexes() -> None:
-    # Separate collection-level index for owner wizard sessions; does not
-    # touch the character collection or its identity indexes.
-    await db.settings.create_index(
-        [("key", 1)],
-        name="uq_settings_dynamic_source_key",
-        unique=True,
-        partialFilterExpression={"key": {"$in": [REGISTRY_KEY]}},
-        background=True,
-    )
 
 def get_registered_sources_cached(*, active_only: bool = True) -> list[dict[str, Any]]:
     return [dict(x) for x in _REGISTRY if (x.get("enabled", True) or not active_only)]
