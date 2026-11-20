@@ -242,19 +242,29 @@ async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
         "enabled": True, "created_by": int(owner_id), "created_at": now,
         "updated_at": now, "version": 1, "registration_id": secrets.token_hex(8),
     })
-    # Atomic server-side guard: prevents concurrent duplicate registrations.
-    query = {"key": REGISTRY_KEY, "$nor": [
-        {"sources.source_key": item["source_key"]},
-        *([{"sources.bot_username": item["bot_username"]}] if item["bot_username"] else []),
-        *([{"sources.forward_source": item.get("forward_source")}] if item.get("forward_source") else []),
-    ]}
-    result = await db.settings.update_one(
-        query,
-        {"$push": {"sources": item}, "$setOnInsert": {"key": REGISTRY_KEY, "schema_version": 1}, "$set": {"updated_at": now}},
-        upsert=True,
-    )
-    if not result.matched_count and not result.upserted_id:
-        raise ValueError("Duplicate source key or bot identity; no registration was saved.")
+    # Guard duplicate registration identity with a single atomic update against
+    # the registry document. The document is created only when it is absent.
+    registry = await db.settings.find_one({"key": REGISTRY_KEY}, {"_id": 1})
+    if registry:
+        query = {"_id": registry["_id"], "key": REGISTRY_KEY, "$nor": [
+            {"sources.source_key": item["source_key"]},
+            *([{"sources.bot_username": item["bot_username"]}] if item["bot_username"] else []),
+            *([{"sources.forward_source": item.get("forward_source")}] if item.get("forward_source") else []),
+        ]}
+        result = await db.settings.update_one(
+            query,
+            {"$push": {"sources": item}, "$set": {"updated_at": now}},
+        )
+        if not result.modified_count:
+            raise ValueError("Duplicate source key or bot identity; no registration was saved.")
+    else:
+        try:
+            await db.settings.insert_one({
+                "key": REGISTRY_KEY, "schema_version": 1,
+                "sources": [item], "created_at": now, "updated_at": now,
+            })
+        except Exception as exc:
+            raise ValueError("Registry was created concurrently; retry /confirm.") from exc
     await refresh_dynamic_source_registry()
 
 @router.message(Command("addnewbot"))
