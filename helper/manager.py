@@ -585,12 +585,13 @@ class HelperManager:
         resume=False,
         resume_count=None,
         prefer_checkpoint=True,
+        bot_override=None,
     ):
         """Run an inline source with per-source, restart-safe pagination checkpoints."""
         if key in self.runners and not self.runners[key].task.done():
             raise RuntimeError(f"{key} is already running")
 
-        bot, _, _ = SOURCES[key]
+        bot = bot_override or SOURCES[key][0]
         delay = max(1, min(int(delay), MAX_DELAY))
         progress = self._inline_progress(key)
 
@@ -1109,8 +1110,9 @@ class HelperManager:
         delay=DEFAULT_DELAY,
         resume_count=None,
         media_filter=None,
+        source_override=None,
     ):
-        source = FORWARD_SOURCES.get(key)
+        source = source_override or FORWARD_SOURCES.get(key)
         if not source:
             raise RuntimeError(f"No forward source configured for {key}")
         if key in self.runners and not self.runners[key].task.done():
@@ -1414,23 +1416,16 @@ class HelperManager:
                 mode = str(item.get("mode") or "")
                 if not key:
                     continue
-                if mode in {"inline", "both"} and username:
-                    SOURCES[key] = (username, (str(item.get("helper_start_command") or ""),), (str(item.get("helper_resume_command") or ""),))
-                else:
-                    SOURCES.pop(key, None)
-                if mode in {"forward", "both"} and item.get("forward_source"):
-                    FORWARD_SOURCES[key] = str(item["forward_source"])
                 if mode == "dm" and username and item.get("dm_command"):
-                    DM_SOURCES[key] = (username, str(item["dm_command"]))
                     if item.get("helper_start_command"):
                         DYNAMIC_DM_COMMANDS[str(item["helper_start_command"]).lower()] = (item, "start")
                     if item.get("helper_resume_command"):
                         DYNAMIC_DM_COMMANDS[str(item["helper_resume_command"]).lower()] = (item, "resume")
                 if mode in {"forward", "both"}:
                     if item.get("helper_forward_start_command"):
-                        DYNAMIC_FORWARD_COMMANDS[str(item["helper_forward_start_command"]).lower()] = (key, "start")
+                        DYNAMIC_FORWARD_COMMANDS[str(item["helper_forward_start_command"]).lower()] = (key, "start", str(item["forward_source"]))
                     if item.get("helper_forward_resume_command"):
-                        DYNAMIC_FORWARD_COMMANDS[str(item["helper_forward_resume_command"]).lower()] = (key, "resume")
+                        DYNAMIC_FORWARD_COMMANDS[str(item["helper_forward_resume_command"]).lower()] = (key, "resume", str(item["forward_source"]))
                 if mode in {"inline", "both"}:
                     if item.get("helper_start_command"):
                         DYNAMIC_INLINE_COMMANDS[str(item["helper_start_command"]).lower()] = (key, "start")
@@ -1507,11 +1502,13 @@ class HelperManager:
             key, kind = DYNAMIC_INLINE_COMMANDS[cmd]
             try:
                 delay = self._start_delay(text)
+                source_item = next((x for x in await self._dynamic_registry_snapshot() if x.get("source_key") == key), None)
+                bot_override = (source_item or {}).get("bot_username")
                 if kind == "resume":
-                    await self.start_inline(key, delay, resume=True, prefer_checkpoint=True)
+                    await self.start_inline(key, delay, resume=True, prefer_checkpoint=True, bot_override=bot_override)
                     detail = "saved checkpoint"
                 else:
-                    await self.start_inline(key, delay, resume=False)
+                    await self.start_inline(key, delay, resume=False, bot_override=bot_override)
                     detail = "from start"
                 await message.reply(f"✅ {kind.title()} dynamic inline source {key} ({detail}), delay={delay}s.")
             except Exception as exc:
@@ -1519,14 +1516,14 @@ class HelperManager:
             return True
 
         if cmd in DYNAMIC_FORWARD_COMMANDS:
-            key, kind = DYNAMIC_FORWARD_COMMANDS[cmd]
+            key, kind, source = DYNAMIC_FORWARD_COMMANDS[cmd]
             try:
                 delay = self._start_delay(text)
                 saved = (self._state.get("forward_progress") or {}).get(key) or {}
                 count = None if kind == "start" else max(0, int(saved.get("current_index", 0) or 0))
                 if kind == "resume":
                     delay = max(1, min(int(saved.get("delay", delay) or delay), MAX_DELAY))
-                await self.start_forward(key, delay, count)
+                await self.start_forward(key, delay, count, source_override=source)
                 await message.reply(f"✅ {kind.title()} dynamic forward source {key}, delay={delay}s.")
             except Exception as exc:
                 await message.reply(f"Dynamic forward helper error: {exc}")
