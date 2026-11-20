@@ -836,47 +836,43 @@ class WaifuCheatBuiltinParserTests(unittest.TestCase):
         self.assertEqual(extract_character_id(card), "2101")
 
 
-class OrinXBuiltinParserTests(unittest.TestCase):
-    def test_parses_orinx_forwarded_database_caption(self):
-        from unified.parser import extract_name, extract_character_id
+
+class OrinXExistingSourceMappingTests(unittest.TestCase):
+    def test_new_orinx_username_keeps_existing_collection_and_command(self):
+        from config import BOT_SOURCE_COLLECTION, BOT_SOURCE_OUTPUT_COMMAND, BOT_SOURCE_USER_ID
+
+        username = "@orinx_character_bot"
+        self.assertEqual(BOT_SOURCE_COLLECTION[username], "items_orinx_waifu")
+        self.assertEqual(BOT_SOURCE_OUTPUT_COMMAND[username], "/orin")
+        # Telegram username changes do not change the bot's numeric user ID.
+        self.assertEqual(BOT_SOURCE_USER_ID[8685992652], "items_orinx_waifu")
+        self.assertNotIn("@orinx_catcher_waifu_bot", BOT_SOURCE_COLLECTION)
+
+    def test_orinx_database_caption_routes_to_existing_orin_collection(self):
+        from types import SimpleNamespace
+        from services.source_resolver import _content_source
 
         caption = (
-            "Name 📛 : L Lawliet [⛩]\n"
-            "ID 🆔 : 209\n"
+            "Name 📛 : L Lawliet [⛩]\\n"
+            "ID 🆔 : 209\\n"
             "2026-11-20 17:42:27"
         )
+        message = SimpleNamespace(text=caption, caption=None)
+        self.assertEqual(
+            _content_source(message),
+            ("items_orinx_waifu", "/orin"),
+        )
+
+    def test_existing_parser_extracts_current_orinx_caption_without_special_parser(self):
+        from unified.parser import extract_name, extract_character_id
+
+        caption = "Name 📛 : L Lawliet [⛩]\\nID 🆔 : 209\\n2026-11-20 17:42:27"
         self.assertEqual(extract_name(caption), "L Lawliet [⛩]")
         self.assertEqual(extract_character_id(caption), "209")
 
-    def test_parses_orinx_plain_ascii_character_name(self):
+    def test_existing_waifu_cheat_builtin_parser_is_preserved(self):
         from unified.parser import extract_name, extract_character_id
 
-        caption = "Name 📛 : Ai Hoshino\nID 🆔 : 208\n2026-11-20 17:42:21"
-        self.assertEqual(extract_name(caption), "Ai Hoshino")
-        self.assertEqual(extract_character_id(caption), "208")
-
-    def test_preserves_bracketed_emoji_name_suffix(self):
-        from unified.parser import extract_name
-
-        caption = "Name 📛 : L Lawliet [⛩]\nID 🆔 : 209"
-        self.assertEqual(extract_name(caption), "L Lawliet [⛩]")
-
-    def test_rejects_id_without_corresponding_orinx_name_row(self):
-        from unified.parser import extract_character_id
-
-        self.assertIsNone(extract_character_id("ID 🆔 : 209\n2026-11-20 17:42:27"))
-
-    def test_rejects_non_numeric_orinx_id(self):
-        from unified.parser import extract_name, extract_character_id
-
-        caption = "Name 📛 : Test Character\nID 🆔 : unknown"
-        self.assertIsNone(extract_name(caption))
-        self.assertIsNone(extract_character_id(caption))
-
-    def test_existing_waifu_cheat_parser_still_works(self):
-        from unified.parser import extract_name, extract_character_id
-
-        caption = "🌸 Furina [🍰]\n📺 Genshin Impact\n🆔 2101"
+        caption = "🌸 Furina [🍰]\\n📺 Genshin Impact\\n🆔 2101"
         self.assertEqual(extract_name(caption), "Furina [🍰]")
         self.assertEqual(extract_character_id(caption), "2101")
-
