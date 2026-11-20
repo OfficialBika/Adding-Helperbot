@@ -519,6 +519,20 @@ class UIDIndexTests(unittest.TestCase):
                 self.assertEqual(sqlite_doc["name"], "Rin Xi")
 
 
+def _ensure_test_import_paths() -> None:
+    """Expose the same import roots used by CI for direct VPS unittest runs."""
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for candidate in (str(root), str(root / "namebotv3")):
+        if candidate not in sys.path:
+            sys.path.insert(0, candidate)
+
+
+_ensure_test_import_paths()
+
+
 if __name__ == "__main__":
     unittest.main()
 
