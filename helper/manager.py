@@ -13,6 +13,9 @@ log = logging.getLogger("helper-manager")
 STATE_PATH = Path("addhelper_state.json")
 DEFAULT_DELAY = 5
 MAX_DELAY = 30
+DYNAMIC_INLINE_COMMANDS: dict[str, tuple[str, str]] = {}
+DYNAMIC_DM_COMMANDS: dict[str, tuple[dict, str]] = {}
+DYNAMIC_FORWARD_COMMANDS: dict[str, tuple[str, str]] = {}
 CATCH_YOUR_WAIFU_RESPONSE_TIMEOUT = 10
 CATCH_YOUR_WAIFU_MAX_MISSES = 20
 
@@ -1402,6 +1405,9 @@ class HelperManager:
         cmd = text.split()[0].split("@", 1)[0].lower() if text else ""
         try:
             from unified.source_registry import get_registered_sources
+            DYNAMIC_INLINE_COMMANDS.clear()
+            DYNAMIC_DM_COMMANDS.clear()
+            DYNAMIC_FORWARD_COMMANDS.clear()
             for item in await get_registered_sources(active_only=True):
                 key = str(item.get("source_key") or "").strip().lower()
                 username = str(item.get("bot_username") or "").strip()
@@ -1409,11 +1415,19 @@ class HelperManager:
                 if not key:
                     continue
                 if mode in {"inline", "both"} and username:
-                    SOURCES[key] = (username, (f"/start{key}",), (f"/resume{key}",))
+                    SOURCES[key] = (username, (str(item.get("helper_start_command") or ""),), (str(item.get("helper_resume_command") or ""),))
                 if mode in {"forward", "both"} and item.get("forward_source"):
                     FORWARD_SOURCES[key] = str(item["forward_source"])
                 if mode == "dm" and username and item.get("dm_command"):
                     DM_SOURCES[key] = (username, str(item["dm_command"]))
+                    DYNAMIC_DM_COMMANDS[str(item.get("helper_start_command") or "")] = (item, "start")
+                    DYNAMIC_DM_COMMANDS[str(item.get("helper_resume_command") or "")] = (item, "resume")
+                if mode in {"forward", "both"}:
+                    DYNAMIC_FORWARD_COMMANDS[str(item.get("helper_forward_start_command") or "")] = (key, "start")
+                    DYNAMIC_FORWARD_COMMANDS[str(item.get("helper_forward_resume_command") or "")] = (key, "resume")
+                if mode in {"inline", "both"}:
+                    DYNAMIC_INLINE_COMMANDS[str(item.get("helper_start_command") or "")] = (key, "start")
+                    DYNAMIC_INLINE_COMMANDS[str(item.get("helper_resume_command") or "")] = (key, "resume")
                 # Keep the DM worker's exact registration metadata available.
                 if mode == "dm":
                     self._state.setdefault("dynamic_dm_sources", {})[str(item.get("registration_id") or "")] = dict(item)
@@ -1466,6 +1480,48 @@ class HelperManager:
                 )
             except Exception as exc:
                 await message.reply(f"Catch Your Waifu helper error: {exc}")
+            return True
+
+        if cmd in DYNAMIC_DM_COMMANDS:
+            item, kind = DYNAMIC_DM_COMMANDS[cmd]
+            try:
+                registration_id = str(item.get("registration_id") or "")
+                progress = (self._state.get("dynamic_dm_progress") or {}).get(registration_id) or {}
+                start_id = 1 if kind == "start" else int(progress.get("pending_id") or progress.get("next_id") or 1)
+                await self._start_dynamic_dm(item, start_id, self._start_delay(text))
+                action = "Started" if kind == "start" else "Resumed"
+                await message.reply(f"✅ {action} dynamic DM source {item.get(chr(115)+chr(111)+chr(117)+chr(114)+chr(99)+chr(101)+chr(95)+chr(107)+chr(101)+chr(121))} from ID {start_id}.")
+            except Exception as exc:
+                await message.reply(f"Dynamic DM helper error: {exc}")
+            return True
+
+        if cmd in DYNAMIC_INLINE_COMMANDS:
+            key, kind = DYNAMIC_INLINE_COMMANDS[cmd]
+            try:
+                delay = self._start_delay(text)
+                if kind == "resume":
+                    await self.start_inline(key, delay, resume=True, prefer_checkpoint=True)
+                    detail = "saved checkpoint"
+                else:
+                    await self.start_inline(key, delay, resume=False)
+                    detail = "from start"
+                await message.reply(f"✅ {kind.title()} dynamic inline source {key} ({detail}), delay={delay}s.")
+            except Exception as exc:
+                await message.reply(f"Dynamic inline helper error: {exc}")
+            return True
+
+        if cmd in DYNAMIC_FORWARD_COMMANDS:
+            key, kind = DYNAMIC_FORWARD_COMMANDS[cmd]
+            try:
+                delay = self._start_delay(text)
+                saved = (self._state.get("forward_progress") or {}).get(key) or {}
+                count = None if kind == "start" else max(0, int(saved.get("current_index", 0) or 0))
+                if kind == "resume":
+                    delay = max(1, min(int(saved.get("delay", delay) or delay), MAX_DELAY))
+                await self.start_forward(key, delay, count)
+                await message.reply(f"✅ {kind.title()} dynamic forward source {key}, delay={delay}s.")
+            except Exception as exc:
+                await message.reply(f"Dynamic forward helper error: {exc}")
             return True
 
         key, kind = self._source_for_command(cmd)
