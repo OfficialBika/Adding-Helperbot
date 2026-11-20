@@ -7,7 +7,7 @@ from typing import Any
 from aiogram.types import Message
 
 from unified.config import settings
-from unified.store import characters, db
+from unified.store import characters
 from unified.uid_index import get_stats as get_uid_index_stats
 
 PROCESS_STARTED_AT = time.time()
@@ -205,14 +205,14 @@ async def build_status_text(message: Message) -> str:
 
 
 async def _broadcast_registry_stats() -> dict[str, int | bool]:
-    """Read audience totals from the same Mongo collection/query used by broadcast."""
+    """Read audience totals from the exact Mongo recipient query used by broadcast."""
     try:
-        from unified.broadcast import _target_query, bot_chats
+        from unified.broadcast import _target_query_for_type, bot_chats
 
         users, groups, eligible, all_users, all_groups = await asyncio.gather(
-            bot_chats.count_documents({**_target_query(), "chat_type": "private"}),
-            bot_chats.count_documents({**_target_query(), "chat_type": {"$in": ["group", "supergroup"]}}),
-            bot_chats.count_documents(_target_query()),
+            bot_chats.count_documents(_target_query_for_type("private")),
+            bot_chats.count_documents(_target_query_for_type("group")),
+            bot_chats.count_documents(_target_query_for_type()),
             bot_chats.count_documents({"chat_type": "private"}),
             bot_chats.count_documents({"chat_type": {"$in": ["group", "supergroup"]}}),
         )
