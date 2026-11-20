@@ -25,9 +25,16 @@ NOISE_RE = re.compile(
 
 
 def norm(text: str | None) -> str:
-    text = unicodedata.normalize("NFKC", text or "")
-    text = text.replace("\r", "\n")
-    text = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", text)
+    """Normalize spacing without rewriting source-provided Unicode/emoji.
+
+    Emoji may be multi-codepoint grapheme clusters (ZWJ sequences,
+    variation selectors, skin-tone modifiers and keycaps). Avoid
+    compatibility normalization so those exact sequences are retained.
+    """
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    # Remove formatting controls only; retain ZWJ U+200D, variation
+    # selectors U+FE0E/U+FE0F, and keycap U+20E3.
+    text = re.sub(r"[\u200b\u200e\u200f\u2060\ufeff]", "", text)
     return re.sub(r"[ \t]+", " ", text).strip()
 
 
@@ -40,9 +47,9 @@ def strip_symbols(value: str) -> str:
 
 
 def clean_name(value: str) -> str:
+    """Remove field wrappers while preserving source name and emoji content."""
     value = norm(value)
-    # Telegram source bots may wrap field values in Markdown code ticks.
-    # The ticks are formatting only and must never become part of the stored name.
+    # Source bots may wrap the value in Markdown code ticks.
     value = re.sub(r"^\s*`+(.*?)`+\s*$", r"\1", value, flags=re.S).strip()
     value = re.sub(r"^(?:📛|👤|🆔|⭐|💠|🎬|🎭|📤)+\s*", "", value)
     value = re.sub(r"^(?:name|character\s*name|char\s*name)\s*[:：•\-=]\s*", "", value, flags=re.I)
@@ -54,7 +61,8 @@ def clean_name(value: str) -> str:
     )[0]
     value = re.sub(r"\s*[-–—|]+\s*(?:rarity|anime|id|role)\b.*$", "", value, flags=re.I)
     value = strip_symbols(value)
-    return re.sub(r"\s+", " ", value).strip() or None
+    # Collapse ordinary whitespace only; do not normalize emoji sequences.
+    return re.sub(r"[ \t]+", " ", value).strip() or None
 
 
 def _label_value(text: str, label: str) -> str | None:
