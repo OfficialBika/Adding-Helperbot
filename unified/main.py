@@ -1035,6 +1035,9 @@ async def run():
         try:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         finally:
+            registry_task.cancel()
+            await asyncio.gather(registry_task, return_exceptions=True)
+            await helper_manager.stop_all()
             await stop_broadcast_worker()
             await helper_userbot.stop()
             await cleanup(bot)
