@@ -912,6 +912,12 @@ async def dynamic_helper_commands(message: Message):
         return
     await helper_manager.handle_command(message)
 
+@router.message(Command("startdm", "resumedm", "stopdm"))
+async def dynamic_dm_commands(message: Message):
+    if not await has_admin_access(message):
+        return
+    await helper_manager.handle_command(message)
+
 
 async def cleanup(bot: Bot):
     await close()
