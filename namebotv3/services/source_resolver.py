@@ -167,6 +167,9 @@ CONTENT_SOURCE_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
     (re.compile(r"media\s*\+\s*.*?name\s*:.*(?:\n|$).*rarity\s*:.*(?:\n|$).*anime\s*:.*(?:\n|$).*id\s*:", re.I | re.S), "items_grab_your_waifu", "/grab"),
     (re.compile(r"new\s+waifu\s+added|item\s*id\s*[:：].*\bname\b\s*[:：].*\brarity\b\s*[:：]|waifuxgrab", re.I | re.S), "items_waifux_grab", "/grab"),
     (re.compile(r"new\s+character\s+added\s+to\s+the\s+bot|char\s*id\s*[:：].*\bname\b\s*[:：].*\banime\b\s*[:：].*\brarity\b\s*[:：]", re.I | re.S), "items_senpai_catcher", "/pick"),
+    # OrinX Character Database: current forwarded Name/ID caption format.
+    (re.compile(r"(?:^|\n)\s*Name\s+📛(?:\ufe0f)?\s*[:：]\s*.+?(?:\n|$).*?(?:^|\n)\s*ID\s+🆔(?:\ufe0f)?\s*[:：]\s*\d+(?:\n|$)", re.I | re.S | re.M), "items_orinx_waifu", "/orin"),
+    # Keep recognition of older OrinX database cards during transition.
     (re.compile(r"character\s+database.*\bid\b\s*[:：].*\bname\b\s*[:：].*\bseries\b\s*[:：].*\brarity\b", re.I | re.S), "items_orinx_waifu", "/orin"),
     (re.compile(r"card\s+drop|myanmar\s+character|/ziceko|တင်ပြီးပြီ|uploaded\s*\(/?li\)|📛.*name|⭐.*rarity", re.I | re.S), "items_super_zeko", "/ziceko"),
     (re.compile(r"(?:saved|updated).*\bname\b\s*[:：].*\bid\b\s*[:：].*\brarity\b\s*[:：].*\banime\b\s*[:：]", re.I | re.S), "items_immortal_donghua", "/dao"),
