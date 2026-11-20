@@ -1130,6 +1130,7 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
         await query.answer("Processing…")
     except Exception:
         log.exception("BROADCAST callback acknowledgement failed")
+        return
 
     parts = str(query.data or "").split(":")
     if len(parts) != 3 or parts[1] not in {"confirm", "cancel"}:
