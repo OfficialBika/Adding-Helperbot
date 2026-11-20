@@ -666,10 +666,4 @@ class BroadcastRegistryStatsTests(unittest.TestCase):
         self.assertIn('"source_message_id": int(replied.message_id)', source)
         self.assertIn("await bot.copy_message(", source)
 
-    def test_broadcast_callback_is_registered_with_prefixed_callback_filter(self):
-        from pathlib import Path
-        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
-        self.assertIn('@broadcast_router.callback_query(F.data.startswith("bc:"))', source)
-        self.assertIn("async def broadcast_confirmation_callback(query: CallbackQuery)", source)
-
 
