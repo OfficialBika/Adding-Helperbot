@@ -34,8 +34,6 @@ from unified.store import db
 
 log = logging.getLogger("unified.broadcast")
 
-broadcast_router = BroadcastCallbackRouter(name="production-broadcast")
-
 class BroadcastCallbackRouter(Router):
     """Keep callback confirmation ahead of the broad update handlers."""
 
@@ -51,6 +49,9 @@ class BroadcastCallbackRouter(Router):
                     log.exception("BROADCAST callback error acknowledgement failed")
             return True
         return await super().propagate_event(observer, update_type, event, **kwargs)
+
+
+broadcast_router = BroadcastCallbackRouter(name="production-broadcast")
 
 
 ACTIVE_CHAT_TYPES = frozenset({"private", "group", "supergroup"})
