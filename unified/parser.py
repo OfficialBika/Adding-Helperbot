@@ -76,7 +76,11 @@ def _label_value(text: str, label: str) -> str | None:
 
 
 def _line_label_value(line: str, label: str) -> str | None:
-    m = re.search(rf"(?:[^\w\n\r:：•\-=]{{0,8}}){label}\s*[:：•\-=]\s*(.+?)\s*$", line, re.I)
+    # Match the label independently so emoji in the value are not consumed
+    # as decorative prefix characters. Fall back to known source label markers.
+    m = re.search(rf"^\\s*{label}\\s*[:：•\\-=]\\s*(.*?)\\s*$", line, re.I)
+    if not m:
+        m = re.search(rf"^[^\\w\\s]{{1,3}}\\s*{label}\\s*[:：•\\-=]\\s*(.*?)\\s*$", line, re.I)
     return clean_name(m.group(1)) if m else None
 
 
