@@ -928,6 +928,7 @@ async def stop_broadcast_worker() -> None:
 
 
 async def _stage_broadcast(message: Message, command: CommandObject) -> None:
+    """Start an owner broadcast immediately; reply payloads are copied, never re-uploaded."""
     if not message.from_user or message.from_user.id not in settings.owner_ids:
         return
     if _enum_value(message.chat.type) != "private":
@@ -935,11 +936,11 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
         return
 
     args = str(command.args or "").strip()
-    if args.lower() in {"status", "cancel"}:
-        if args.lower() == "status":
-            await _send_broadcast_status(message)
-        else:
-            await _cancel_latest_broadcast(message)
+    if args.lower() == "status":
+        await _send_broadcast_status(message)
+        return
+    if args.lower() == "cancel":
+        await _cancel_latest_broadcast(message)
         return
 
     replied = getattr(message, "reply_to_message", None)
@@ -956,7 +957,7 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
         await message.reply(
             "Usage:\n"
             "• Send <code>/broadcast Your announcement</code> for plain text.\n"
-            "• Reply to a message with <code>/broadcast</code> to copy text or media.\n"
+            "• Reply to a message with <code>/broadcast</code> to copy text or media immediately.\n"
             "• <code>/broadcast status</code> to view recent jobs.\n"
             "• <code>/broadcast cancel</code> to cancel the latest active job."
         )
@@ -972,12 +973,12 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
     job = {
         "job_id": job_id,
         "creator_id": int(message.from_user.id),
-        "status": "pending_confirmation",
+        "status": "queued",
         "payload_type": payload_type,
         **payload,
         "created_at": now,
         "updated_at": now,
-        "expires_at": now + BROADCAST_CONFIRM_TTL,
+        "queued_at": now,
         "target_count": 0,
         "sent_count": 0,
         "failed_count": 0,
@@ -985,43 +986,18 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
         "skipped_count": 0,
         "targets_initialized": False,
         "cancel_requested": False,
+        "immediate_start": True,
     }
     await broadcast_jobs.insert_one(job)
-
-    preview_text = (
-        "⚠️ <b>Confirm broadcast</b>\n\n"
-        f"Current eligible destinations: <code>{recipients}</code>\n"
+    await message.reply(
+        "🚀 <b>Broadcast started</b>\n\n"
+        f"Job: <code>{job_id}</code>\n"
+        f"Eligible destinations: <code>{recipients:,}</code>\n"
         f"Payload: <code>{'text' if payload_type == 'text' else 'copied message/media'}</code>\n"
-        "Recipients are active chats the bot has seen or groups where it is a member. "
-        "Private chats opted out of broadcasts are excluded.\n\n"
-        "This action sends to every eligible destination. Confirm within 15 minutes."
+        "The message is being copied to eligible chats.\n"
+        "Use <code>/broadcast status</code> to monitor or <code>/broadcast cancel</code> to stop."
     )
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Confirm", callback_data=f"bc:confirm:{job_id}"),
-                InlineKeyboardButton(text="✖ Cancel", callback_data=f"bc:cancel:{job_id}"),
-            ]
-        ]
-    )
-    try:
-        preview = await message.reply(preview_text, reply_markup=keyboard)
-        await broadcast_jobs.update_one(
-            {"job_id": job_id},
-            {
-                "$set": {
-                    "control_chat_id": int(preview.chat.id),
-                    "control_message_id": int(preview.message_id),
-                    "updated_at": _now(),
-                }
-            },
-        )
-    except Exception:
-        await broadcast_jobs.update_one(
-            {"job_id": job_id},
-            {"$set": {"status": "failed_preview", "updated_at": _now()}},
-        )
-        raise
+    _wakeup.set()
 
 
 async def _send_broadcast_status(message: Message) -> None:
