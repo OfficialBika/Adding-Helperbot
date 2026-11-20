@@ -959,7 +959,7 @@ class ExistingDynamicSourceHelperEditTests(unittest.TestCase):
     def test_helper_edit_steps_share_the_same_wizard_dispatch_chain(self):
         from pathlib import Path
         source = Path("unified/source_registry.py").read_text(encoding="utf-8")
-        handler = source.split("async def _handle_pending", 1)[1]
+        handler = source.split("async def source_registration_wizard", 1)[1]
         self.assertIn('        elif step == "name":', handler)
         self.assertNotIn('        if step == "name":', handler)
 
