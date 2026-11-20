@@ -132,12 +132,13 @@ class HelperManager:
                 for item in sources:
                     if item.get("mode") != "dm":
                         continue
-                    bot_username = str(item.get("bot_username") or "").lstrip("@").lower()
-                    bot_user_id = str(item.get("bot_user_id") or "")
-                    if (bot_username and username == bot_username) or (bot_user_id and uid == bot_user_id):
-                        registration_id = str(item.get("registration_id") or "")
-                        if registration_id:
-                            await self.responses.setdefault(f"dynamic:{registration_id}", asyncio.Queue()).put(message)
+                    expected_username = str(item.get("bot_username") or "").lstrip("@").lower()
+                    expected_uid = str(item.get("bot_user_id") or "")
+                    if not ((expected_username and username == expected_username) or (expected_uid and uid == expected_uid)):
+                        continue
+                    registration_id = str(item.get("registration_id") or "")
+                    if registration_id:
+                        await self.responses.setdefault(f"dynamic:{registration_id}", asyncio.Queue()).put(message)
             except Exception:
                 log.exception("Dynamic DM response dispatch failed")
 
