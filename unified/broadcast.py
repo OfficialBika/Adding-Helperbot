@@ -476,6 +476,17 @@ _rate_limiter = _RateLimiter(BROADCAST_RATE_PER_SECOND)
 _chat_rate_limiter = _ChatRateLimiter(settings.broadcast_chat_interval_ms / 1000.0)
 
 
+def _broadcast_metrics_snapshot() -> dict[str, int | float]:
+    """Small in-process operational snapshot for logs and staging tests."""
+    return {
+        "workers": BROADCAST_CONCURRENCY,
+        "rate_per_second": BROADCAST_RATE_PER_SECOND,
+        "delivery_batch_size": BROADCAST_DELIVERY_BATCH_SIZE,
+        "chat_interval_ms": settings.broadcast_chat_interval_ms,
+        "active_jobs": sum(1 for task in (_worker_task,) if task is not None and not task.done()),
+    }
+
+
 async def _deliver_with_retry(
     send_operation,
     *,
