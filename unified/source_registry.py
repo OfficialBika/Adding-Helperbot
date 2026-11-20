@@ -373,12 +373,25 @@ async def source_registration_wizard(message: Message) -> None:
             if username and not USERNAME_RE.fullmatch(username):
                 raise ValueError("Invalid bot username.")
             draft["bot_username"] = username
+            if username:
+                duplicate = await db.settings.find_one(
+                    {"key": REGISTRY_KEY, "sources.bot_username": username},
+                    {"_id": 1},
+                )
+                if duplicate:
+                    raise ValueError("This bot username is already registered. Use /listbots.")
             nxt = "source_key"
         elif step == "source_key":
             key = _source_key(value)
             if not key:
                 raise ValueError("Use lowercase letters, digits and underscores; 2-48 characters.")
             draft["source_key"] = key
+            if draft.get("bot_username"):
+                # A bot identity cannot silently be rebound to another source
+                # key, including when it already belongs to a built-in source.
+                builtin_key = BOT_SOURCE_COLLECTION.get(draft["bot_username"])
+                if builtin_key and builtin_key != key:
+                    raise ValueError(f"This bot already belongs to built-in key {builtin_key}.")
             exists = await db.settings.find_one({"key": REGISTRY_KEY, "sources.source_key": key}, {"_id": 1})
             existing_record = await characters.find_one({"source_key": key}, {"_id": 1})
             if exists or existing_record or key in VALID_COLLECTIONS:
