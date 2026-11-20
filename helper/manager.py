@@ -1509,7 +1509,7 @@ class HelperManager:
             except Exception as exc:
                 await message.reply(f"Helper error: {exc}")
             return True
-        if cmd.startswith("/startdm") or cmd.startswith("/resumedm") or cmd.startswith("/stopdm"):
+        if cmd in {"/startdm", "/resumedm", "/stopdm"}:
             parts = text.split()
             if len(parts) < 2:
                 await message.reply("Usage: /startdm|/resumedm|/stopdm source_key [start_id] [delay]")
@@ -1522,21 +1522,23 @@ class HelperManager:
                 return True
             registration_id = str(item.get("registration_id") or "")
             runner_key = f"dynamic:{registration_id}"
-            if cmd.startswith("/stopdm"):
+            if cmd == "/stopdm":
                 runner = self.runners.get(runner_key)
                 if runner and not runner.task.done():
                     runner.task.cancel()
                     await asyncio.gather(runner.task, return_exceptions=True)
-                    await message.reply(f"Stopped dynamic DM source {key}; its in-flight ID was checkpointed.")
+                    await message.reply(f"Stopped dynamic DM source {key}; in-flight ID checkpoint retained.")
                 else:
                     await message.reply(f"Dynamic DM source {key} is not running.")
                 return True
             try:
                 start_id = int(parts[2]) if len(parts) >= 3 else None
+                if start_id is not None and start_id < 1:
+                    raise ValueError("start_id must be >= 1")
                 delay = max(1, min(int(parts[3]), MAX_DELAY)) if len(parts) >= 4 else DEFAULT_DELAY
                 await self._start_dynamic_dm(item, start_id, delay)
-                action = "Started" if cmd.startswith("/startdm") else "Resumed"
-                await message.reply(f"✅ {action} dynamic DM source {key}; delay={delay}s; max_id={item.get('max_id') or 'not configured'}.")
+                action = "Started" if cmd == "/startdm" else "Resumed"
+                await message.reply(f"✅ {action} dynamic DM source {key}; delay={delay}s; max_id={item.get('max_id')}.")
             except Exception as exc:
                 await message.reply(f"Dynamic DM helper error: {exc}")
             return True
