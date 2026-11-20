@@ -1422,14 +1422,20 @@ class HelperManager:
                     FORWARD_SOURCES[key] = str(item["forward_source"])
                 if mode == "dm" and username and item.get("dm_command"):
                     DM_SOURCES[key] = (username, str(item["dm_command"]))
-                    DYNAMIC_DM_COMMANDS[str(item.get("helper_start_command") or "")] = (item, "start")
-                    DYNAMIC_DM_COMMANDS[str(item.get("helper_resume_command") or "")] = (item, "resume")
+                    if item.get("helper_start_command"):
+                        DYNAMIC_DM_COMMANDS[str(item["helper_start_command"]).lower()] = (item, "start")
+                    if item.get("helper_resume_command"):
+                        DYNAMIC_DM_COMMANDS[str(item["helper_resume_command"]).lower()] = (item, "resume")
                 if mode in {"forward", "both"}:
-                    DYNAMIC_FORWARD_COMMANDS[str(item.get("helper_forward_start_command") or "")] = (key, "start")
-                    DYNAMIC_FORWARD_COMMANDS[str(item.get("helper_forward_resume_command") or "")] = (key, "resume")
+                    if item.get("helper_forward_start_command"):
+                        DYNAMIC_FORWARD_COMMANDS[str(item["helper_forward_start_command"]).lower()] = (key, "start")
+                    if item.get("helper_forward_resume_command"):
+                        DYNAMIC_FORWARD_COMMANDS[str(item["helper_forward_resume_command"]).lower()] = (key, "resume")
                 if mode in {"inline", "both"}:
-                    DYNAMIC_INLINE_COMMANDS[str(item.get("helper_start_command") or "")] = (key, "start")
-                    DYNAMIC_INLINE_COMMANDS[str(item.get("helper_resume_command") or "")] = (key, "resume")
+                    if item.get("helper_start_command"):
+                        DYNAMIC_INLINE_COMMANDS[str(item["helper_start_command"]).lower()] = (key, "start")
+                    if item.get("helper_resume_command"):
+                        DYNAMIC_INLINE_COMMANDS[str(item["helper_resume_command"]).lower()] = (key, "resume")
                 # Keep the DM worker's exact registration metadata available.
                 if mode == "dm":
                     self._state.setdefault("dynamic_dm_sources", {})[str(item.get("registration_id") or "")] = dict(item)
