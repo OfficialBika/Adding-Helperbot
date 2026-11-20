@@ -76,13 +76,15 @@ def _label_value(text: str, label: str) -> str | None:
 
 
 def _line_label_value(line: str, label: str) -> str | None:
-    # Match the label independently so emoji in the value are not consumed
-    # as decorative prefix characters. Fall back to known source label markers.
-    m = re.search(rf"^\\s*{label}\\s*[:：•\\-=]\\s*(.*?)\\s*$", line, re.I)
+    # Accept decorative emoji between the source label and delimiter, e.g.
+    # `Name 🔥 : value` or `Name 📛 : value`, without consuming value emoji.
+    separator = r"[:：•=-]"
+    decoration = r"(?:\\s+[^\\w\\s]{1,4})?\\s*"
+    m = re.search(rf"^\\s*{label}{decoration}{separator}\\s*(.*?)\\s*$", line, re.I)
     if not m:
-        m = re.search(rf"^[^\\w\\s]{{1,3}}\\s*{label}\\s*[:：•\\-=]\\s*(.*?)\\s*$", line, re.I)
+        # Some sources prefix the whole field label with decorative symbols.
+        m = re.search(rf"^\\s*[^\\w\\s]{{1,3}}\\s*{label}{decoration}{separator}\\s*(.*?)\\s*$", line, re.I)
     return clean_name(m.group(1)) if m else None
-
 
 def _myanmar_name(text: str) -> str | None:
     for line in norm(text).splitlines():
