@@ -226,7 +226,7 @@ async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
         raise ValueError("DM mode requires a DM command template.")
     if item.get("dm_command") and (
         "{id}" not in item["dm_command"]
-        or not re.fullmatch(r"/[A-Za-z0-9_ ]*\\{id\\}[A-Za-z0-9_ ]*", item["dm_command"])
+        or not re.fullmatch(r"/[A-Za-z0-9_ ]*\{id\}[A-Za-z0-9_ ]*", item["dm_command"])
     ):
         raise ValueError("Invalid DM command template.")
     if item.get("parser_type") == "generic":
