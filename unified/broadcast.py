@@ -1118,11 +1118,6 @@ async def startbroadcast_command(message: Message) -> None:
     await message.reply("✅ You have opted in to bot broadcasts again.")
 
 
-@broadcast_router.callback_query(F.data.startswith("bc:"))
-async def _broadcast_confirmation_callback_entry(query: CallbackQuery) -> None:
-    await broadcast_confirmation_callback(query)
-
-
 async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
     # Acknowledge immediately so Telegram clients do not leave the
     # inline button spinner running while MongoDB is queried.
@@ -1215,6 +1210,13 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
         _wakeup.set()
 
 
+@broadcast_router.callback_query(F.data.startswith("bc:"))
+async def _broadcast_confirmation_callback_entry(query: CallbackQuery) -> None:
+    await broadcast_confirmation_callback(query)
+
+
+# Keep this as the final broadcast-router handler: callback updates must be
+# routed before the catch-all chat/member update fallback.
 @broadcast_router.my_chat_member()
 async def bot_membership_updated(event: ChatMemberUpdated) -> None:
     # ChatRegistryMiddleware records membership state; this handler enables
