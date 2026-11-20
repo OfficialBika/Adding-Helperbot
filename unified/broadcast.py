@@ -34,25 +34,7 @@ from unified.store import db
 
 log = logging.getLogger("unified.broadcast")
 
-class BroadcastCallbackRouter(Router):
-    """Keep callback confirmation ahead of the broad update handlers."""
-
-    async def propagate_event(self, observer, update_type: str, event, **kwargs):
-        if update_type == "callback_query" and str(getattr(event, "data", "") or "").startswith("bc:"):
-            try:
-                await broadcast_confirmation_callback(event)
-            except Exception:
-                log.exception("BROADCAST callback handler failed")
-                try:
-                    await event.answer("Broadcast action failed. Check bot logs.", show_alert=True)
-                except Exception:
-                    log.exception("BROADCAST callback error acknowledgement failed")
-            return True
-        return await super().propagate_event(observer, update_type, event, **kwargs)
-
-
-broadcast_router = BroadcastCallbackRouter(name="production-broadcast")
-
+broadcast_router = Router(name="production-broadcast")
 
 ACTIVE_CHAT_TYPES = frozenset({"private", "group", "supergroup"})
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
