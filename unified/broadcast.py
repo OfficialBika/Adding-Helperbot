@@ -500,6 +500,9 @@ async def _deliver_with_retry(
         except TelegramRetryAfter as exc:
             last_error = f"rate limited; retry_after={exc.retry_after}s"
             await _rate_limiter.defer(float(exc.retry_after))
+            if lock and lock.locked():
+                lock.release()
+                lock = None
             await _chat_rate_limiter.defer(chat_id, float(exc.retry_after))
             if attempt >= BROADCAST_MAX_ATTEMPTS:
                 break
