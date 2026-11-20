@@ -136,6 +136,18 @@ def install_dynamic_source_registry(sources: list[dict[str, Any]]) -> None:
         raise
     _REGISTRY = next_registry
 
+async def ensure_registry_indexes() -> None:
+    """Ensure efficient lookups for the single dynamic registry settings key.
+
+    This is a non-unique index so existing settings documents are never
+    rejected or modified as a side effect of startup.
+    """
+    await db.settings.create_index(
+        [("key", 1)],
+        name="idx_dynamic_source_registry_key",
+    )
+
+
 async def refresh_dynamic_source_registry() -> int:
     await ensure_registry_indexes()
     sources = await get_registered_sources(active_only=True)
