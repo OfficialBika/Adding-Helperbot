@@ -459,6 +459,11 @@ class _ChatRateLimiter:
                 await asyncio.sleep(wait)
             self._next_at[int(chat_id)] = time.monotonic() + self.interval
             return lock
+
+    async def defer(self, chat_id: int, seconds: float) -> None:
+        pause_until = time.monotonic() + max(1.0, min(float(seconds), 3600.0))
+        async with self._locks.setdefault(int(chat_id), asyncio.Lock()):
+            self._next_at[int(chat_id)] = max(self._next_at.get(int(chat_id), 0.0), pause_until)
         except BaseException:
             lock.release()
             raise
@@ -466,6 +471,53 @@ class _ChatRateLimiter:
 
 _rate_limiter = _RateLimiter(BROADCAST_RATE_PER_SECOND)
 _chat_rate_limiter = _ChatRateLimiter(settings.broadcast_chat_interval_ms / 1000.0)
+
+
+async def _deliver_with_retry(
+    send_operation,
+    *,
+    chat_id: int,
+    cancel_event: asyncio.Event,
+) -> tuple[bool, str]:
+    """Send once at a time; retry only classified transient Telegram failures."""
+    last_error = "Unknown error"
+    for attempt in range(1, BROADCAST_MAX_ATTEMPTS + 1):
+        if cancel_event.is_set():
+            return False, "cancelled"
+        await _rate_limiter.wait()
+        if cancel_event.is_set():
+            return False, "cancelled"
+        lock: asyncio.Lock | None = None
+        try:
+            lock = await _chat_rate_limiter.acquire(chat_id)
+            if cancel_event.is_set():
+                return False, "cancelled"
+            await send_operation()
+            return True, ""
+        except TelegramRetryAfter as exc:
+            last_error = f"rate limited; retry_after={exc.retry_after}s"
+            await _rate_limiter.defer(float(exc.retry_after))
+            await _chat_rate_limiter.defer(chat_id, float(exc.retry_after))
+            if attempt >= BROADCAST_MAX_ATTEMPTS:
+                break
+            try:
+                await asyncio.wait_for(cancel_event.wait(), timeout=max(float(exc.retry_after), 1.0))
+                return False, "cancelled"
+            except TimeoutError:
+                pass
+        except (TelegramNetworkError, aiohttp.ClientError, TimeoutError, OSError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if attempt >= BROADCAST_MAX_ATTEMPTS:
+                break
+            try:
+                await asyncio.wait_for(cancel_event.wait(), timeout=min(2 ** (attempt - 1), 8))
+                return False, "cancelled"
+            except TimeoutError:
+                pass
+        finally:
+            if lock and lock.locked():
+                lock.release()
+    return False, last_error
 
 
 async def _mark_chat_unreachable(chat_id: int, reason: str) -> None:
