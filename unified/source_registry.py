@@ -338,9 +338,18 @@ async def removebot(message: Message) -> None:
     if not key:
         await message.answer("Invalid source key.")
         return
-    result = await db.settings.update_one({"key": REGISTRY_KEY}, {"$pull": {"sources": {"source_key": key}}})
+    # Keep the settings document and existing character records intact. Pull
+    # exactly one registration; callers can re-add it later if required.
+    result = await db.settings.update_one(
+        {"key": REGISTRY_KEY, "sources.source_key": key},
+        {"$pull": {"sources": {"source_key": key}}, "$set": {"updated_at": _now()}},
+    )
     await refresh_dynamic_source_registry()
-    await message.answer("✅ Registration removed. Character records remain untouched." if result.modified_count else "Source key not found.")
+    await message.answer(
+        "✅ Registration removed. Character records remain untouched."
+        if result.modified_count else "Source key not found."
+    )
+
 
 @router.message()
 async def source_registration_wizard(message: Message) -> None:
