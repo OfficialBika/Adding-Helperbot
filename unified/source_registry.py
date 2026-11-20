@@ -133,13 +133,18 @@ def parse_dynamic_text(source: dict[str, Any] | None, text: str) -> dict[str, st
 
 def install_dynamic_source_registry(sources: list[dict[str, Any]]) -> None:
     global _REGISTRY
-    _REGISTRY = [dict(x) for x in sources if x.get("enabled", True)]
+    next_registry = [dict(x) for x in sources if x.get("enabled", True)]
+    # Resolve a full next mapping first. Preserve the last good snapshot if the
+    # resolver cannot install it, so registry data and source authorization do
+    # not drift into a partially refreshed state.
     try:
         from services.source_resolver import install_dynamic_source_registry as install
-        install(_REGISTRY)
+        install(next_registry)
     except Exception:
         import logging
-        logging.getLogger(__name__).exception("Dynamic source resolver refresh failed")
+        logging.getLogger(__name__).exception("Dynamic source resolver refresh failed; retaining previous registry snapshot")
+        raise
+    _REGISTRY = next_registry
 
 async def refresh_dynamic_source_registry() -> int:
     await ensure_registry_indexes()
