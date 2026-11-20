@@ -1127,10 +1127,11 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
         return
 
     try:
-        await query.answer("Processing…")
+        await query.answer()
     except Exception:
-        log.exception("BROADCAST callback acknowledgement failed")
-        return
+        # A stale callback can no longer be answered by Telegram. Continue
+        # checking durable job state so the owner still gets a clear result.
+        log.warning("BROADCAST callback acknowledgement failed; continuing state check job_data=%s", bool(query.data))
 
     parts = str(query.data or "").split(":")
     if len(parts) != 3 or parts[1] not in {"confirm", "cancel"}:
