@@ -607,3 +607,35 @@ class BroadcastConcurrencyTests(unittest.TestCase):
         self.assertIn('lock = await _chat_rate_limiter.acquire(chat_id)', source)
         self.assertIn('if lock and lock.locked():', source)
 
+class BroadcastRegistryStatsTests(unittest.TestCase):
+    def test_broadcast_audience_counts_use_shared_eligibility_query(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn("async def get_broadcast_audience_counts()", source)
+        self.assertIn('bot_chats.count_documents(_target_query_for_type("private"))', source)
+        self.assertIn('bot_chats.count_documents(_target_query_for_type("group"))', source)
+        self.assertIn('bot_chats.count_documents(_target_query())', source)
+
+    def test_stats_displays_eligible_and_registered_user_group_counts(self):
+        from pathlib import Path
+        source = Path("unified/status.py").read_text(encoding="utf-8")
+        self.assertIn("get_broadcast_audience_counts", source)
+        self.assertIn("Eligible Users", source)
+        self.assertIn("Eligible Groups", source)
+        self.assertIn("Registered Users", source)
+        self.assertIn("Registered Groups", source)
+
+    def test_broadcast_callbacks_are_dispatched_before_generic_router_fallback(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn("class BroadcastCallbackRouter(Router):", source)
+        self.assertIn('update_type == "callback_query"', source)
+        self.assertIn('startswith("bc:")', source)
+        self.assertIn("broadcast_confirmation_callback(event)", source)
+
+    def test_broadcast_callback_is_acknowledged_before_database_lookup(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        handler = source.split("async def broadcast_confirmation_callback", 1)[1]
+        self.assertLess(handler.index('query.answer("Processing…")'), handler.index("broadcast_jobs.find_one("))
+
