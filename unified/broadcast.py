@@ -53,7 +53,6 @@ class BroadcastCallbackRouter(Router):
         return await super().propagate_event(observer, update_type, event, **kwargs)
 
 
-
 ACTIVE_CHAT_TYPES = frozenset({"private", "group", "supergroup"})
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
 BROADCAST_CONFIRM_TTL = timedelta(minutes=15)
@@ -1226,11 +1225,6 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
     finally:
         # Update the confirmation message before the worker can edit progress.
         _wakeup.set()
-
-
-@broadcast_router.callback_query(F.data.startswith("bc:"))
-async def _broadcast_confirmation_callback_entry(query: CallbackQuery) -> None:
-    await broadcast_confirmation_callback(query)
 
 
 # Keep this as the final broadcast-router handler: callback updates must be
