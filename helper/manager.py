@@ -213,7 +213,7 @@ class HelperManager:
                     # The current numeric ID must occur as a standalone number.
                     # Do not accept unrelated/late replies or IDs embedded in a
                     # larger identifier; retain the checkpoint for a safe retry.
-                    if not re.search(rf"(?<!\\d){current_id}(?!\\d)", candidate_text):
+                    if not re.search(rf"(?<!\d){current_id}(?!\d)", candidate_text):
                         continue
                     response = candidate
                     break
