@@ -1484,6 +1484,38 @@ class HelperManager:
             except Exception as exc:
                 await message.reply(f"Helper error: {exc}")
             return True
+        if cmd.startswith("/startdm") or cmd.startswith("/resumedm") or cmd.startswith("/stopdm"):
+            parts = text.split()
+            if len(parts) < 2:
+                await message.reply("Usage: /startdm|/resumedm|/stopdm source_key [start_id] [delay]")
+                return True
+            key = parts[1].strip().lower()
+            items = await self._dynamic_registry_snapshot()
+            item = next((x for x in items if str(x.get("source_key") or "").lower() == key and x.get("mode") == "dm"), None)
+            if item is None:
+                await message.reply("Enabled dynamic DM source not found.")
+                return True
+            registration_id = str(item.get("registration_id") or "")
+            runner_key = f"dynamic:{registration_id}"
+            if cmd.startswith("/stopdm"):
+                runner = self.runners.get(runner_key)
+                if runner and not runner.task.done():
+                    runner.task.cancel()
+                    await asyncio.gather(runner.task, return_exceptions=True)
+                    await message.reply(f"Stopped dynamic DM source {key}; its in-flight ID was checkpointed.")
+                else:
+                    await message.reply(f"Dynamic DM source {key} is not running.")
+                return True
+            try:
+                start_id = int(parts[2]) if len(parts) >= 3 else None
+                delay = max(1, min(int(parts[3]), MAX_DELAY)) if len(parts) >= 4 else DEFAULT_DELAY
+                await self._start_dynamic_dm(item, start_id, delay)
+                action = "Started" if cmd.startswith("/startdm") else "Resumed"
+                await message.reply(f"✅ {action} dynamic DM source {key}; delay={delay}s; max_id={item.get('max_id') or 'not configured'}.")
+            except Exception as exc:
+                await message.reply(f"Dynamic DM helper error: {exc}")
+            return True
+
         # Catch FW video-only backfill. This is deliberately separate from
         # the normal Catch FW command so /startfwcatchbot keeps its exact behavior.
         if cmd == "/startfwcatchbotvd":
