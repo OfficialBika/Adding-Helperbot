@@ -853,8 +853,8 @@ class OrinXExistingSourceMappingTests(unittest.TestCase):
         from services.source_resolver import _content_source
 
         caption = (
-            "Name 📛 : L Lawliet [⛩]\\n"
-            "ID 🆔 : 209\\n"
+            "Name 📛 : L Lawliet [⛩]\n"
+            "ID 🆔 : 209\n"
             "2026-11-20 17:42:27"
         )
         message = SimpleNamespace(text=caption, caption=None)
@@ -866,13 +866,13 @@ class OrinXExistingSourceMappingTests(unittest.TestCase):
     def test_existing_parser_extracts_current_orinx_caption_without_special_parser(self):
         from unified.parser import extract_name, extract_character_id
 
-        caption = "Name 📛 : L Lawliet [⛩]\\nID 🆔 : 209\\n2026-11-20 17:42:27"
+        caption = "Name 📛 : L Lawliet [⛩]\nID 🆔 : 209\n2026-11-20 17:42:27"
         self.assertEqual(extract_name(caption), "L Lawliet [⛩]")
         self.assertEqual(extract_character_id(caption), "209")
 
     def test_existing_waifu_cheat_builtin_parser_is_preserved(self):
         from unified.parser import extract_name, extract_character_id
 
-        caption = "🌸 Furina [🍰]\\n📺 Genshin Impact\\n🆔 2101"
+        caption = "🌸 Furina [🍰]\n📺 Genshin Impact\n🆔 2101"
         self.assertEqual(extract_name(caption), "Furina [🍰]")
         self.assertEqual(extract_character_id(caption), "2101")
