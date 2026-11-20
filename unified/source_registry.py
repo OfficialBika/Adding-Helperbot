@@ -285,7 +285,7 @@ async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
     helper_resume = _helper_command(item.get("helper_resume_command"))
     helper_fw_start = _helper_command(item.get("helper_forward_start_command"))
     helper_fw_resume = _helper_command(item.get("helper_forward_resume_command"))
-    needs_helper = item.get("mode") in {"inline", "dm", "both", "forward"}
+    needs_helper = item.get("mode") in {"inline", "dm", "both"}
     needs_forward_helper = item.get("mode") in {"forward", "both"}
     if needs_helper and (not helper_start or not helper_resume):
         raise ValueError("Helper start and resume commands are required for inline/DM collection.")
@@ -320,6 +320,32 @@ async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
             "name_label": str(rules["name_label"])[:40],
             "id_label": str(rules.get("id_label") or "ID")[:40],
         }
+    configured_commands = set(command_values)
+    existing_sources = await get_registered_sources(active_only=False)
+    for existing in existing_sources:
+        existing_commands = {
+            str(existing.get(field) or "").strip().lower()
+            for field in ("helper_start_command", "helper_resume_command", "helper_forward_start_command", "helper_forward_resume_command")
+        } - {""}
+        if configured_commands & existing_commands:
+            raise ValueError("A helper command is already assigned to another registered source.")
+    try:
+        from helper.manager import SOURCES, FORWARD_SOURCES
+        builtin_commands = {
+            command.lower()
+            for _, starts, resumes in SOURCES.values()
+            for command in (*starts, *resumes)
+        }
+        builtin_commands.update(
+            command.lower()
+            for key in FORWARD_SOURCES
+            for command in (f"/startfw{key}bot", f"/startfw{key}", f"/resumefw{key}bot", f"/resumefw{key}")
+        )
+        if configured_commands & builtin_commands:
+            raise ValueError("A helper command conflicts with an existing built-in Helper command.")
+    except ImportError:
+        log.exception("Could not validate built-in Helper command names")
+        raise ValueError("Could not validate Helper command names; try again.")
     now = _now()
     item.update({
         "enabled": True, "created_by": int(owner_id), "created_at": now,
@@ -608,7 +634,7 @@ async def source_registration_wizard(message: Message) -> None:
             if parser not in VALID_PARSERS:
                 raise ValueError("Choose builtin or generic.")
             draft["parser_type"] = parser
-            nxt = "name_label" if parser == "generic" else "helper_start_command"
+            nxt = "name_label" if parser == "generic" else ("helper_forward_start_command" if draft.get("mode") == "forward" else ("finish" if draft.get("mode") == "manual" else "helper_start_command"))
         elif step == "name_label":
             if not re.fullmatch(r"[A-Za-z0-9 _-]{1,40}", value):
                 raise ValueError("Name label must be simple text such as Name.")
@@ -619,7 +645,7 @@ async def source_registration_wizard(message: Message) -> None:
                 if not re.fullmatch(r"[A-Za-z0-9 _-]{1,40}", value):
                     raise ValueError("ID label must be simple text or -.")
                 draft.setdefault("parser_rules", {})["id_label"] = value
-            nxt = "helper_start_command"
+            nxt = "helper_forward_start_command" if draft.get("mode") == "forward" else ("finish" if draft.get("mode") == "manual" else "helper_start_command")
         elif step == "helper_start_command":
             command = _helper_command(value)
             if not command:
