@@ -545,7 +545,7 @@ class DynamicSourceRegistryHelpersTests(unittest.TestCase):
         import re
         good = "/check {id}"
         bad = "/check 123"
-        pattern = r"/[A-Za-z0-9_ ]*\\{id\\}[A-Za-z0-9_ ]*"
+        pattern = r"/[A-Za-z0-9_ ]*\{id\}[A-Za-z0-9_ ]*"
         self.assertRegex(good, pattern)
         self.assertNotRegex(bad, pattern)
 
