@@ -607,6 +607,20 @@ class BroadcastConcurrencyTests(unittest.TestCase):
         self.assertIn('lock = await _chat_rate_limiter.acquire(chat_id)', source)
         self.assertIn('if lock and lock.locked():', source)
 
+class TestImportPathRegressionTests(unittest.TestCase):
+    def test_capture_grabber_fw_imports_with_repository_pythonpath(self):
+        from pathlib import Path
+        import sys
+        root = str(Path(__file__).resolve().parents[1])
+        expected = [str(Path(root) / "namebotv3"), root]
+        self.assertEqual(sys.path[:2], expected)
+        import services.source_resolver  # noqa: F401
+
+    def test_local_file_cache_imports_with_repository_pythonpath(self):
+        import services.source_resolver  # noqa: F401
+        import unified.local_file_cache  # noqa: F401
+
+
 class BroadcastRegistryStatsTests(unittest.TestCase):
     def test_broadcast_audience_counts_use_shared_eligibility_query(self):
         from pathlib import Path
