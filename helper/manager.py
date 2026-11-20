@@ -150,7 +150,7 @@ class HelperManager:
             return []
 
     async def _run_dynamic_dm(self, item, start_id, delay):
-        """Bounded, checkpointed collector. Any uncertain reply is retried, not forwarded."""
+        """Bounded collector; sender and request correlation are fail-closed."""
         from pyrogram.errors import FloodWait
         registration_id = str(item.get("registration_id") or "")
         key = str(item.get("source_key") or "").strip().lower()
@@ -159,8 +159,8 @@ class HelperManager:
         if not registration_id or not key or not bot or "{id}" not in template:
             raise ValueError("Invalid dynamic DM registration")
         max_id = int(item.get("max_id") or 0)
-        if max_id < start_id:
-            raise ValueError("This source has no valid max_id configured.")
+        if not (1 <= start_id <= max_id <= 10000000):
+            raise ValueError("Invalid dynamic DM ID range.")
         max_misses = max(1, min(int(item.get("max_no_response", 10)), 100))
         timeout = max(5, min(int(item.get("response_timeout", 30)), 120))
         delay = max(1, min(int(delay), MAX_DELAY))
@@ -171,23 +171,24 @@ class HelperManager:
         misses = int(progress.get("consecutive_no_response", 0) or 0)
         try:
             while current_id <= max_id:
-                # Do not drain replies at the next iteration: the queue is
-                # consumed only for the in-flight ID and all replies are checked.
                 progress.update({"source_key": key, "pending_id": current_id, "next_id": current_id, "running": True})
                 self._save()
                 command = template.replace("{id}", str(current_id))
                 try:
-                    await self.client.send_message(bot, command)
+                    sent = await self.client.send_message(bot, command)
                 except FloodWait as exc:
                     pause = max(1, min(int(getattr(exc, "value", 1) or 1), 3600))
                     progress.update({"pending_id": current_id, "next_id": current_id, "last_error": f"FloodWait {pause}s"})
                     self._save()
                     await asyncio.sleep(pause)
                     continue
+                # Telegram source bots typically reply to the command message.
+                # Require the reply's reply_to_message_id to point to the exact
+                # command. No ID-in-text heuristic is considered safe enough.
+                sent_id = int(getattr(sent, "id", 0) or 0)
                 deadline = asyncio.get_running_loop().time() + timeout
                 response = None
-                sender_mismatch = False
-                while True:
+                while sent_id:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
                         break
@@ -204,25 +205,19 @@ class HelperManager:
                         (expected_username and candidate_username == expected_username)
                         or (expected_uid and candidate_uid == expected_uid)
                     )
-                    if not sender_ok:
-                        sender_mismatch = True
-                        continue
-                    candidate_text = "\n".join(str(v) for v in (
-                        getattr(candidate, "text", None), getattr(candidate, "caption", None)
-                    ) if isinstance(v, str) and v.strip())
-                    # The current numeric ID must occur as a standalone number.
-                    # Do not accept unrelated/late replies or IDs embedded in a
-                    # larger identifier; retain the checkpoint for a safe retry.
-                    if not re.search(rf"(?<!\d){current_id}(?!\d)", candidate_text):
-                        continue
-                    response = candidate
-                    break
+                    reply_id = (
+                        getattr(candidate, "reply_to_message_id", None)
+                        or getattr(getattr(candidate, "reply_to_message", None), "id", None)
+                    )
+                    if sender_ok and int(reply_id or 0) == sent_id:
+                        response = candidate
+                        break
                 if response is None:
                     misses += 1
                     progress.update({
                         "pending_id": None, "last_checked_id": current_id,
                         "next_id": current_id + 1, "consecutive_no_response": misses,
-                        "last_error": "sender mismatch or response timeout" if sender_mismatch else "response timeout",
+                        "last_error": "no reply correlated to the exact command",
                     })
                     self._save()
                     if misses >= max_misses:
@@ -239,6 +234,7 @@ class HelperManager:
                 progress.update({
                     "pending_id": None, "last_checked_id": current_id,
                     "next_id": current_id + 1, "consecutive_no_response": 0,
+                    "last_error": None,
                 })
                 self._save()
                 current_id += 1
@@ -263,6 +259,9 @@ class HelperManager:
             raise RuntimeError("Dynamic source is already running")
         progress = (self._state.get("dynamic_dm_progress") or {}).get(registration_id) or {}
         initial = int(start_id or progress.get("pending_id") or progress.get("next_id") or 1)
+        max_id = int(item.get("max_id") or 0)
+        if not 1 <= initial <= max_id:
+            raise ValueError(f"start_id must be between 1 and configured max_id ({max_id}).")
         task = asyncio.create_task(self._run_dynamic_dm(item, initial, delay), name=runner_key)
         self.runners[runner_key] = Runner(task, str(item.get("source_key") or runner_key), "dynamic_dm")
 
