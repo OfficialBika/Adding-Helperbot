@@ -207,23 +207,10 @@ async def build_status_text(message: Message) -> str:
 async def _broadcast_registry_stats() -> dict[str, int | bool]:
     """Read audience totals from the exact Mongo recipient query used by broadcast."""
     try:
-        from unified.broadcast import _target_query_for_type, bot_chats
+        from unified.broadcast import get_broadcast_audience_counts
 
-        users, groups, eligible, all_users, all_groups = await asyncio.gather(
-            bot_chats.count_documents(_target_query_for_type("private")),
-            bot_chats.count_documents(_target_query_for_type("group")),
-            bot_chats.count_documents(_target_query_for_type()),
-            bot_chats.count_documents({"chat_type": "private"}),
-            bot_chats.count_documents({"chat_type": {"$in": ["group", "supergroup"]}}),
-        )
-        return {
-            "ok": True,
-            "eligible_users": users,
-            "eligible_groups": groups,
-            "eligible_total": eligible,
-            "registered_users": all_users,
-            "registered_groups": all_groups,
-        }
+        counts = await get_broadcast_audience_counts()
+        return {"ok": True, **counts}
     except Exception:
         return {
             "ok": False,
