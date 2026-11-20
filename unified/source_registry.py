@@ -375,6 +375,24 @@ async def removebot(message: Message) -> None:
         {"key": REGISTRY_KEY, "sources.source_key": key},
         {"$pull": {"sources": {"source_key": key}}, "$set": {"updated_at": _now()}},
     )
+    if result.modified_count:
+        try:
+            from helper.manager import helper_manager
+            for item in await get_registered_sources(active_only=False):
+                # A removed registration no longer appears in the registry;
+                # cancel its task by the stable source_key runner label.
+                runner_keys = [
+                    runner_key for runner_key, runner in helper_manager.runners.items()
+                    if runner.mode == "dynamic_dm" and runner.source == key
+                ]
+                for runner_key in runner_keys:
+                    runner = helper_manager.runners.get(runner_key)
+                    if runner and not runner.task.done():
+                        runner.task.cancel()
+                        await asyncio.gather(runner.task, return_exceptions=True)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to stop removed dynamic source worker")
     await refresh_dynamic_source_registry()
     await message.answer(
         "✅ Registration removed. Character records remain untouched."
