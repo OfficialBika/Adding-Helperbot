@@ -410,7 +410,7 @@ async def confirm_registration(message: Message) -> None:
         await message.answer("✅ Helper commands updated. Registration identity, source settings and existing records were retained.")
         return
     if not pending or pending.get("step") != "confirm":
-        await message.answer("No valid preview. Use /addnewbot.")
+        await message.answer("No valid preview. Use /addnewbot or /editbot source_key.")
         return
     draft = dict(pending.get("draft") or {})
     if draft.get("source_status") == "EXISTS" and not draft.get("reuse_existing"):
@@ -463,7 +463,7 @@ async def editbot(message: Message) -> None:
 
 
 def _helper_edit_preview(draft: dict[str, Any]) -> str:
-    return "\\n".join([
+    return "\n".join([
         "🛠 <b>HELPER COMMAND EDIT PREVIEW</b>",
         f"Source: <code>{_escape(draft.get('source_key'))}</code>",
         f"Registration ID: <code>{_escape(draft.get('registration_id'))}</code>",
