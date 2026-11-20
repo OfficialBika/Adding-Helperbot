@@ -342,10 +342,32 @@ async def _set_enabled(message: Message, enabled: bool) -> None:
     if len(parts) != 2:
         await message.answer("Usage: /enablebot source_key" if enabled else "Usage: /disablebot source_key")
         return
-    result = await db.settings.update_one({"key": REGISTRY_KEY, "sources.source_key": parts[1].strip().lower()}, {"$set": {"sources.$.enabled": enabled, "sources.$.updated_at": _now()}, "$inc": {"sources.$.version": 1}})
+    key = _source_key(parts[1])
+    if not key:
+        await message.answer("Invalid source key.")
+        return
+    result = await db.settings.update_one(
+        {"key": REGISTRY_KEY, "sources.source_key": key},
+        {"$set": {"sources.$.enabled": enabled, "sources.$.updated_at": _now()}, "$inc": {"sources.$.version": 1}},
+    )
     if not result.matched_count:
         await message.answer("Source key not found.")
         return
+    if not enabled:
+        try:
+            from helper.manager import helper_manager
+            runner_keys = [
+                runner_key for runner_key, runner in helper_manager.runners.items()
+                if runner.mode == "dynamic_dm" and runner.source == key
+            ]
+            for runner_key in runner_keys:
+                runner = helper_manager.runners.get(runner_key)
+                if runner and not runner.task.done():
+                    runner.task.cancel()
+                    await asyncio.gather(runner.task, return_exceptions=True)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to stop disabled dynamic source worker")
     await refresh_dynamic_source_registry()
     await message.answer("✅ Enabled." if enabled else "✅ Disabled. Existing character records were retained.")
 
