@@ -710,7 +710,7 @@ async def source_registration_wizard(message: Message) -> None:
             await _save_pending(message.from_user.id, draft, "edit_confirm")
             await message.answer(_helper_edit_preview(draft))
             return
-        if step == "name":
+        elif step == "name":
             draft["name"] = value[:80]
             nxt = "username"
         elif step == "username":
