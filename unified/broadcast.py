@@ -453,6 +453,15 @@ class _ChatRateLimiter:
     def _lock_for(self, chat_id: int) -> asyncio.Lock:
         return self._locks.setdefault(int(chat_id), asyncio.Lock())
 
+    def _prune(self) -> None:
+        # Keep memory bounded for bots that have seen very large chat counts.
+        if len(self._locks) <= 50000:
+            return
+        removable = [chat_id for chat_id, lock in self._locks.items() if not lock.locked()]
+        for chat_id in removable[: len(self._locks) - 40000]:
+            self._locks.pop(chat_id, None)
+            self._next_at.pop(chat_id, None)
+
     async def acquire(self, chat_id: int) -> asyncio.Lock:
         lock = self._lock_for(chat_id)
         await lock.acquire()
