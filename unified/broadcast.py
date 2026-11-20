@@ -448,9 +448,13 @@ class _ChatRateLimiter:
         self.interval = max(1.0, float(interval_seconds))
         self._next_at: dict[int, float] = {}
         self._locks: dict[int, asyncio.Lock] = {}
+        self._guard = asyncio.Lock()
+
+    def _lock_for(self, chat_id: int) -> asyncio.Lock:
+        return self._locks.setdefault(int(chat_id), asyncio.Lock())
 
     async def acquire(self, chat_id: int) -> asyncio.Lock:
-        lock = self._locks.setdefault(int(chat_id), asyncio.Lock())
+        lock = self._lock_for(chat_id)
         await lock.acquire()
         try:
             wait = self._next_at.get(int(chat_id), 0.0) - time.monotonic()
@@ -464,7 +468,7 @@ class _ChatRateLimiter:
 
     async def defer(self, chat_id: int, seconds: float) -> None:
         pause_until = time.monotonic() + max(1.0, min(float(seconds), 3600.0))
-        async with self._locks.setdefault(int(chat_id), asyncio.Lock()):
+        async with self._lock_for(chat_id):
             self._next_at[int(chat_id)] = max(self._next_at.get(int(chat_id), 0.0), pause_until)
 
 
