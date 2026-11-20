@@ -601,11 +601,13 @@ class SourceRegistryWizardExpiryTests(unittest.TestCase):
             "step": "username",
             "draft": {"name": "Character Guess Bot"},
         }
-        with (
-            patch("unified.source_registry.db.settings.find_one", new=AsyncMock(return_value=doc)),
-            patch("unified.source_registry.db.settings.delete_one", new=AsyncMock()) as delete_one,
-        ):
+        fake_settings = SimpleNamespace(
+            find_one=AsyncMock(return_value=doc),
+            delete_one=AsyncMock(),
+        )
+        with patch("unified.source_registry.db", SimpleNamespace(settings=fake_settings)):
             result = asyncio.run(_pending(12345))
+        delete_one = fake_settings.delete_one
 
         self.assertEqual(result["step"], "username")
         self.assertEqual(result["draft"]["name"], "Character Guess Bot")
@@ -620,11 +622,13 @@ class SourceRegistryWizardExpiryTests(unittest.TestCase):
             "expires_at": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1),
             "step": "username",
         }
-        with (
-            patch("unified.source_registry.db.settings.find_one", new=AsyncMock(return_value=doc)),
-            patch("unified.source_registry.db.settings.delete_one", new=AsyncMock()) as delete_one,
-        ):
+        fake_settings = SimpleNamespace(
+            find_one=AsyncMock(return_value=doc),
+            delete_one=AsyncMock(),
+        )
+        with patch("unified.source_registry.db", SimpleNamespace(settings=fake_settings)):
             result = asyncio.run(_pending(12345))
+        delete_one = fake_settings.delete_one
 
         self.assertIsNone(result)
         delete_one.assert_awaited_once_with({"_id": "pending-expired"})
@@ -638,11 +642,13 @@ class SourceRegistryWizardExpiryTests(unittest.TestCase):
             "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
             "step": "username",
         }
-        with (
-            patch("unified.source_registry.db.settings.find_one", new=AsyncMock(return_value=doc)),
-            patch("unified.source_registry.db.settings.delete_one", new=AsyncMock()) as delete_one,
-        ):
+        fake_settings = SimpleNamespace(
+            find_one=AsyncMock(return_value=doc),
+            delete_one=AsyncMock(),
+        )
+        with patch("unified.source_registry.db", SimpleNamespace(settings=fake_settings)):
             result = asyncio.run(_pending(12345))
+        delete_one = fake_settings.delete_one
 
         self.assertEqual(result["step"], "username")
         delete_one.assert_not_awaited()
@@ -666,10 +672,14 @@ class SourceRegistryWizardExpiryTests(unittest.TestCase):
             text="Character Guess Bot",
             answer=AsyncMock(),
         )
+        fake_settings = SimpleNamespace(
+            find_one=settings_find,
+            update_one=settings_update,
+            delete_one=AsyncMock(),
+        )
         with (
             patch("unified.source_registry._owner_dm", return_value=True),
-            patch("unified.source_registry.db.settings.find_one", new=settings_find),
-            patch("unified.source_registry.db.settings.update_one", new=settings_update),
+            patch("unified.source_registry.db", SimpleNamespace(settings=fake_settings)),
         ):
             asyncio.run(source_registration_wizard(message))
 
