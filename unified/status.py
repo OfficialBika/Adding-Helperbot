@@ -7,7 +7,7 @@ from typing import Any
 from aiogram.types import Message
 
 from unified.config import settings
-from unified.store import characters
+from unified.store import characters, db
 from unified.uid_index import get_stats as get_uid_index_stats
 
 PROCESS_STARTED_AT = time.time()
@@ -204,6 +204,37 @@ async def build_status_text(message: Message) -> str:
     )
 
 
+async def _broadcast_registry_stats() -> dict[str, int | bool]:
+    """Read audience totals from the same Mongo collection/query used by broadcast."""
+    try:
+        from unified.broadcast import _target_query, bot_chats
+
+        users, groups, eligible, all_users, all_groups = await asyncio.gather(
+            bot_chats.count_documents({**_target_query(), "chat_type": "private"}),
+            bot_chats.count_documents({**_target_query(), "chat_type": {"$in": ["group", "supergroup"]}}),
+            bot_chats.count_documents(_target_query()),
+            bot_chats.count_documents({"chat_type": "private"}),
+            bot_chats.count_documents({"chat_type": {"$in": ["group", "supergroup"]}}),
+        )
+        return {
+            "ok": True,
+            "eligible_users": users,
+            "eligible_groups": groups,
+            "eligible_total": eligible,
+            "registered_users": all_users,
+            "registered_groups": all_groups,
+        }
+    except Exception:
+        return {
+            "ok": False,
+            "eligible_users": 0,
+            "eligible_groups": 0,
+            "eligible_total": 0,
+            "registered_users": 0,
+            "registered_groups": 0,
+        }
+
+
 async def build_stats_text(message: Message, *, helper_state: str) -> str:
     async def safe_count() -> int:
         try:
@@ -211,10 +242,11 @@ async def build_stats_text(message: Message, *, helper_state: str) -> str:
         except Exception:
             return 0
 
-    db_ping, bot_ping, count = await asyncio.gather(
+    db_ping, bot_ping, count, audience = await asyncio.gather(
         _ping_db(),
         _ping_bot(message),
         safe_count(),
+        _broadcast_registry_stats(),
     )
     used, available, total = _ram_info()
     snap = metrics.snapshot()
@@ -245,6 +277,13 @@ async def build_stats_text(message: Message, *, helper_state: str) -> str:
         f"‣ Total Ingests : <code>{_fmt_int(snap['ingest_total'])}</code>\n"
         f"‣ New Records : <code>{_fmt_int(snap['ingest_saved'])}</code>\n"
         f"‣ Updated Records : <code>{_fmt_int(snap['ingest_updated'])}</code>\n\n"
+        "👥 <b>USER & GROUP REGISTRY (MongoDB)</b>\n"
+        f"‣ Eligible Users : <code>{_fmt_int(audience['eligible_users'])}</code>\n"
+        f"‣ Eligible Groups : <code>{_fmt_int(audience['eligible_groups'])}</code>\n"
+        f"‣ Eligible Broadcast Total : <code>{_fmt_int(audience['eligible_total'])}</code>\n"
+        f"‣ Registered Users : <code>{_fmt_int(audience['registered_users'])}</code>\n"
+        f"‣ Registered Groups : <code>{_fmt_int(audience['registered_groups'])}</code>\n"
+        f"‣ Registry : <code>{'READY' if audience['ok'] else 'DEGRADED'}</code>\n\n"
         "🗄 <b>DATABASE</b>\n"
         f"‣ Characters : <code>{_fmt_int(count)}</code>\n"
         f"‣ DB : <code>{settings.db_name}</code>\n"
