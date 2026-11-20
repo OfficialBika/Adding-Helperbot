@@ -544,91 +544,41 @@ async def _deliver_to_chat(
 ) -> tuple[bool, str]:
     chat_id = int(delivery["chat_id"])
     chat_type = str(delivery.get("chat_type") or "")
-    last_error = "Unknown error"
-    chat_lock: asyncio.Lock | None = None
 
-    try:
-        for attempt in range(1, BROADCAST_MAX_ATTEMPTS + 1):
-            if cancel_event.is_set():
-                return False, "cancelled"
-            await _rate_limiter.wait()
-            if cancel_event.is_set():
-                return False, "cancelled"
-            try:
-                chat_lock = await _chat_rate_limiter.acquire(chat_id)
-                if cancel_event.is_set():
-                    return False, "cancelled"
-                if job.get("payload_type") == "copy":
-                    await bot.copy_message(
-                        chat_id=chat_id,
-                        from_chat_id=int(job["source_chat_id"]),
-                        message_id=int(job["source_message_id"]),
-                    )
-                else:
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=str(job.get("text") or ""),
-                        parse_mode=None,
-                    )
-                return True, ""
-            except TelegramRetryAfter as exc:
-                last_error = f"rate limited; retry_after={exc.retry_after}s"
-                await _rate_limiter.defer(float(exc.retry_after))
-                if attempt >= BROADCAST_MAX_ATTEMPTS:
-                    break
-                try:
-                    await asyncio.wait_for(
-                        cancel_event.wait(),
-                        timeout=max(float(exc.retry_after), 1.0),
-                    )
-                    return False, "cancelled"
-                except TimeoutError:
-                    pass
-            except (TelegramNetworkError, aiohttp.ClientError, TimeoutError, OSError) as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                if attempt >= BROADCAST_MAX_ATTEMPTS:
-                    break
-                try:
-                    await asyncio.wait_for(
-                        cancel_event.wait(),
-                        timeout=min(2 ** (attempt - 1), 8),
-                    )
-                    return False, "cancelled"
-                except TimeoutError:
-                    pass
-            except (TelegramBadRequest, TelegramForbiddenError) as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                if is_send_permission_error(exc) and chat_type in GROUP_CHAT_TYPES:
-                    record = await bot_chats.find_one({"chat_id": chat_id}, {"title": 1, "username": 1})
-                    chat = Chat(
-                        id=chat_id,
-                        type=chat_type,
-                        title=str((record or {}).get("title") or "") or None,
-                        username=str((record or {}).get("username") or "") or None,
-                    )
-                    await auto_leave_restricted_group(bot, chat, exc)
-                elif any(
-                    marker in str(exc).lower()
-                    for marker in ("bot was blocked by the user", "user is deactivated", "chat not found")
-                ):
-                    await _mark_chat_unreachable(chat_id, str(exc))
-                elif "bot was kicked" in str(exc).lower() and chat_type in GROUP_CHAT_TYPES:
-                    await _mark_chat_unreachable(chat_id, str(exc))
-                return False, last_error
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                log.exception("BROADCAST delivery unexpectedly failed job=%s chat=%s", job.get("job_id"), chat_id)
-                return False, last_error
-            finally:
-                if chat_lock and chat_lock.locked():
-                    chat_lock.release()
-                    chat_lock = None
-        return False, last_error
-    finally:
-        if chat_lock and chat_lock.locked():
-            chat_lock.release()
+    async def send_payload() -> None:
+        if job.get("payload_type") == "copy":
+            await bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=int(job["source_chat_id"]),
+                message_id=int(job["source_message_id"]),
+            )
+        else:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=str(job.get("text") or ""),
+                parse_mode=None,
+            )
+
+    sent, error = await _deliver_with_retry(send_payload, chat_id=chat_id, cancel_event=cancel_event)
+    if sent or error == "cancelled":
+        return sent, error
+    if is_send_permission_error(error) and chat_type in GROUP_CHAT_TYPES:
+        record = await bot_chats.find_one({"chat_id": chat_id}, {"title": 1, "username": 1})
+        chat = Chat(
+            id=chat_id,
+            type=chat_type,
+            title=str((record or {}).get("title") or "") or None,
+            username=str((record or {}).get("username") or "") or None,
+        )
+        await auto_leave_restricted_group(bot, chat, error)
+    elif any(
+        marker in str(error).lower()
+        for marker in ("bot was blocked by the user", "user is deactivated", "chat not found")
+    ):
+        await _mark_chat_unreachable(chat_id, str(error))
+    elif "bot was kicked" in str(error).lower() and chat_type in GROUP_CHAT_TYPES:
+        await _mark_chat_unreachable(chat_id, str(error))
+    return False, error
 
 
 
