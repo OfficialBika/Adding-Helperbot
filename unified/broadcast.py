@@ -1048,12 +1048,15 @@ async def _cancel_latest_broadcast(message: Message) -> None:
     # they no longer have a confirmation step.
     job_id = str(job["job_id"])
     if job.get("status") == "running":
-        await broadcast_jobs.update_one(
+        cancel_result = await broadcast_jobs.update_one(
             {"job_id": job_id, "status": "running"},
             {"$set": {"cancel_requested": True, "updated_at": _now()}},
         )
-        _cancel_events.setdefault(job_id, asyncio.Event()).set()
-        await message.reply(f"Cancellation requested for <code>{job_id[:8]}</code>.")
+        if cancel_result.modified_count:
+            _cancel_events.setdefault(job_id, asyncio.Event()).set()
+            await message.reply(f"Cancellation requested for <code>{job_id[:8]}</code>.")
+        else:
+            await message.reply("Broadcast state changed; check /broadcast status.")
     else:
         cancelled = await broadcast_jobs.update_one(
             {"job_id": job_id, "status": {"$in": ["pending_confirmation", "queued"]}},
