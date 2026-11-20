@@ -207,7 +207,7 @@ class HelperManager:
                     if not sender_ok:
                         sender_mismatch = True
                         continue
-                    candidate_text = "\\n".join(str(v) for v in (
+                    candidate_text = "\n".join(str(v) for v in (
                         getattr(candidate, "text", None), getattr(candidate, "caption", None)
                     ) if isinstance(v, str) and v.strip())
                     # The current numeric ID must occur as a standalone number.
