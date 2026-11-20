@@ -248,6 +248,55 @@ def _waifux_global_id(text: str) -> str | None:
             return m.group(1)
     return None
 
+def _waifu_cheat_name(text: str) -> str | None:
+    """Parse Waifu Cheat Bot cards whose first row starts with the flower emoji.
+
+    The character name is the complete text after 🌸 on the first non-empty
+    line. Bracketed suffixes such as [🍰] and [🤖] are intentionally preserved.
+    """
+    raw = norm(text)
+    if not raw:
+        return None
+
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    # Only accept a flower-prefixed first content row, not arbitrary later
+    # mentions of 🌸 in metadata or descriptive text.
+    first = re.match(r"^🌸\s*(.+?)\s*$", lines[0])
+    if not first:
+        return None
+
+    value = clean_name(first.group(1))
+    if not value:
+        return None
+    # A flower header is not sufficient on its own: require the matching
+    # emoji-prefixed numeric ID field somewhere in the same card.
+    if not _waifu_cheat_id(raw):
+        return None
+    return value
+
+
+def _waifu_cheat_id(text: str) -> str | None:
+    """Parse the numeric ID row from a Waifu Cheat Bot card."""
+    raw = norm(text)
+    if not raw:
+        return None
+
+    # Require the same card's 🌸 first content row to avoid treating an
+    # unrelated ID line as a Waifu Cheat Bot character.
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines or not re.match(r"^🌸\s*.+$", lines[0]):
+        return None
+
+    for line in lines[1:]:
+        match = re.match(r"^🆔(?:\ufe0f)?\s*(\d+)\s*$", line)
+        if match:
+            return match.group(1)
+    return None
+
+
 def _capture_name(text: str) -> str | None:
     """Parse CaptureCharacterBot's New Character Added card."""
     raw = norm(text)
@@ -400,6 +449,10 @@ def extract_character_id(text: str | None) -> str | None:
     if waifux_id:
         return waifux_id
 
+    waifu_cheat_id = _waifu_cheat_id(raw)
+    if waifu_cheat_id:
+        return waifu_cheat_id
+
     # Picker Database exposes two OwO ID layouts:
     #   🆔️30: Ayaka
     #   「 ID : 2601 Shanks ⛓️ 」
@@ -486,7 +539,7 @@ def extract_name(text: str | None) -> str | None:
     if not raw:
         return None
 
-    for parser in (_capture_name, _picker_name, _kairo_name, _catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
+    for parser in (_waifu_cheat_name, _capture_name, _picker_name, _kairo_name, _catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name
