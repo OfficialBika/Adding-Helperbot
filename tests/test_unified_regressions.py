@@ -906,3 +906,31 @@ class OwnerSuppliedHelperCommandWizardTests(unittest.TestCase):
         self.assertIn('DYNAMIC_DM_COMMANDS[', source)
         self.assertIn('DYNAMIC_FORWARD_COMMANDS[', source)
         self.assertNotIn('SOURCES[key] = (username, (f"/start{key}"', source)
+
+
+class DynamicHelperCommandIsolationTests(unittest.TestCase):
+    def test_dynamic_inline_uses_registered_bot_without_mutating_builtin_map(self):
+        from pathlib import Path
+        source = Path("helper/manager.py").read_text(encoding="utf-8")
+        self.assertIn("bot_override=None", source)
+        self.assertIn("bot = bot_override or SOURCES[key][0]", source)
+        self.assertNotIn('SOURCES[key] = (username, (str(item.get("helper_start_command")', source)
+
+    def test_dynamic_forward_uses_registered_chat_without_mutating_builtin_map(self):
+        from pathlib import Path
+        source = Path("helper/manager.py").read_text(encoding="utf-8")
+        self.assertIn("source_override=None", source)
+        self.assertIn("source = source_override or FORWARD_SOURCES.get(key)", source)
+        self.assertIn("start_forward(key, delay, count, source_override=source)", source)
+
+    def test_forward_only_wizard_skips_inline_dm_commands(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn('("helper_forward_start_command" if draft.get("mode") == "forward"', source)
+        self.assertIn('needs_helper = item.get("mode") in {"inline", "dm", "both"}', source)
+
+    def test_owner_commands_cannot_shadow_builtin_helper_commands(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn("builtin_commands", source)
+        self.assertIn("A helper command conflicts with an existing built-in Helper command.", source)
