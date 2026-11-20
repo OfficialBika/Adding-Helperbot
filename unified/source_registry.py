@@ -223,10 +223,21 @@ async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
     item["output_command"] = _command(item.get("output_command"))
     if not item["source_key"] or not item["output_command"]:
         raise ValueError("Invalid source key or output command.")
+    if item.get("mode") not in VALID_MODES:
+        raise ValueError("Invalid source mode.")
+    if item.get("mode") in {"inline", "both"} and not item.get("bot_username"):
+        raise ValueError("Inline mode requires a bot username.")
     if item.get("mode") in {"forward", "both"} and not item.get("forward_source"):
         raise ValueError("Forward source is required for this mode.")
-    if item.get("mode") == "dm" and not item.get("dm_command"):
-        raise ValueError("DM mode requires a DM command template.")
+    if item.get("mode") == "dm":
+        if not item.get("bot_username") or not item.get("dm_command"):
+            raise ValueError("DM mode requires a bot username and command template.")
+        if not 1 <= int(item.get("max_id") or 0) <= 10000000:
+            raise ValueError("DM mode requires a finite max_id between 1 and 10,000,000.")
+        if not 5 <= int(item.get("response_timeout") or 0) <= 120:
+            raise ValueError("DM response timeout must be 5-120 seconds.")
+        if not 1 <= int(item.get("max_no_response") or 0) <= 100:
+            raise ValueError("DM max_no_response must be 1-100.")
     if item.get("dm_command") and (
         "{id}" not in item["dm_command"]
         or not re.fullmatch(r"/[A-Za-z0-9_ ]*\{id\}[A-Za-z0-9_ ]*", item["dm_command"])
