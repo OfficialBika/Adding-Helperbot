@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from unified.store import db, characters
 from config import settings, BOT_SOURCE_COLLECTION
 
 router = Router(name="dynamic_source_registry")
+log = logging.getLogger("unified.source_registry")
 REGISTRY_KEY = "dynamic_source_registry_v1"
 PENDING_PREFIX = "dynamic_source_pending:"
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,47}$")
@@ -180,13 +182,30 @@ async def _source_key_status(key: str) -> tuple[str, str]:
     return "NEW", "no source key or character records found"
 
 async def _pending(owner_id: int) -> dict[str, Any] | None:
+    """Load a wizard draft and compare BSON datetimes safely in UTC.
+
+    PyMongo/Motor commonly decodes BSON dates as naive UTC datetimes unless
+    tz_aware=True. Comparing those with _now() (aware UTC) raises TypeError,
+    which previously caused every plain-text wizard answer to go unanswered.
+    """
     doc = await db.settings.find_one({"key": f"{PENDING_PREFIX}{int(owner_id)}"})
     if not doc:
         return None
     expiry = doc.get("expires_at")
-    if expiry and expiry < _now():
-        await db.settings.delete_one({"_id": doc["_id"]})
-        return None
+    if isinstance(expiry, datetime):
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        else:
+            expiry = expiry.astimezone(timezone.utc)
+        if expiry <= _now():
+            await db.settings.delete_one({"_id": doc["_id"]})
+            return None
+    elif expiry is not None:
+        log.warning(
+            "Ignoring malformed source-registration expiry owner_id=%s type=%s",
+            int(owner_id),
+            type(expiry).__name__,
+        )
     return doc
 
 async def _save_pending(owner_id: int, draft: dict[str, Any], step: str) -> None:
@@ -438,7 +457,18 @@ async def removebot(message: Message) -> None:
 async def source_registration_wizard(message: Message) -> None:
     if not _owner_dm(message) or not message.from_user:
         raise SkipHandler()
-    pending = await _pending(message.from_user.id)
+    try:
+        pending = await _pending(message.from_user.id)
+    except Exception:
+        log.exception(
+            "Source registration could not load pending wizard state owner_id=%s",
+            message.from_user.id,
+        )
+        await message.answer(
+            "⚠️ Registration state ကို database မှ ဖတ်မရသေးပါ။ "
+            "အရင်အချက်အလက် မဖျက်ထားပါ။ ခဏစောင့်ပြီး အဲဒီအဖြေကို ပြန်ပို့ပါ။"
+        )
+        return
     if not pending:
         raise SkipHandler()
     if pending.get("step") == "confirm":
@@ -573,3 +603,13 @@ async def source_registration_wizard(message: Message) -> None:
         await _ask(message, nxt)
     except ValueError as exc:
         await message.answer(f"❌ {_escape(exc)}\nTry again or /cancel.")
+    except Exception:
+        log.exception(
+            "Source registration wizard step failed owner_id=%s step=%s",
+            message.from_user.id,
+            step,
+        )
+        await message.answer(
+            "⚠️ ဒီအဆင့်ကို ဆက်လုပ်ရာမှာ ယာယီအမှားဖြစ်နေပါတယ်။ "
+            "သိမ်းထားတဲ့အချက်အလက်ကို မဖျက်ထားပါ။ အဖြေကို ပြန်ပို့ပါ။"
+        )
