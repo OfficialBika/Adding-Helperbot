@@ -93,6 +93,15 @@ def is_allowed_source(message: Any) -> bool:
     configured = _configured_sources()
     allowed = {_norm(x) for x in configured}
     allowed.update(EXPLICIT_FORWARD_SOURCE_ALIASES)
+    try:
+        from unified.source_registry import get_registered_sources_cached
+        for source in get_registered_sources_cached():
+            for field in ("bot_username", "forward_source"):
+                value = source.get(field)
+                if value:
+                    allowed.add(_norm(value))
+    except Exception:
+        pass
 
     origin_chat = forwarded_origin_chat(message)
     if origin_chat is not None:

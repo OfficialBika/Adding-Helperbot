@@ -36,6 +36,11 @@ from services.source_resolver import resolve_source_collection
 from utils.text import h, first_token
 from unified.status import build_ping_text, build_stats_text, build_status_text, metrics
 from unified.miniapp import register_miniapp
+from unified.source_registry import (
+    router as source_registry_router,
+    refresh_dynamic_source_registry,
+    dynamic_source_refresh_loop,
+)
 from unified.broadcast import (
     auto_leave_restricted_group,
     initialize_broadcast,
@@ -901,6 +906,13 @@ async def helper_commands(message: Message):
     await helper_manager.handle_command(message)
 
 
+@router.message(F.text.regexp(r"^/(?:start|resume)(?:fw|dm)?[a-zA-Z0-9_]+(?:@[A-Za-z0-9_]+)?(?:\s|$)"))
+async def dynamic_helper_commands(message: Message):
+    if not await has_admin_access(message):
+        return
+    await helper_manager.handle_command(message)
+
+
 async def cleanup(bot: Bot):
     await close()
     await bot.session.close()
@@ -929,6 +941,8 @@ async def run():
     await _start_uid_index_backfill()
     await _start_hash_index_warm()
     await ensure_auth_indexes()
+    await refresh_dynamic_source_registry()
+    registry_task = asyncio.create_task(dynamic_source_refresh_loop(), name="dynamic-source-refresh")
     await helper_userbot.start()
     helper_manager.bind()
 
@@ -958,6 +972,7 @@ async def run():
     install_broadcast(dp, router)
     start_broadcast_worker(bot)
     dp.include_router(force_join_router)
+    dp.include_router(source_registry_router)
     dp.include_router(router)
 
     if webhook:

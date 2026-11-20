@@ -206,11 +206,24 @@ async def ingest_message(
         ) if isinstance(x, str) and x.strip()
     )
 
-    name = str(override_name).strip() if override_name is not None else extract_name(text)
+    dynamic_source = None
+    dynamic_parsed = {}
+    try:
+        from unified.source_registry import find_dynamic_source_for_message, parse_dynamic_text
+        dynamic_source = find_dynamic_source_for_message(target)
+        if dynamic_source and str(dynamic_source.get("source_key") or "").lower() == source_key:
+            dynamic_parsed = parse_dynamic_text(dynamic_source, text)
+        else:
+            dynamic_source = None
+    except Exception:
+        log.exception("Dynamic source parser resolution failed source=%s", source_key)
+    name = (
+        str(override_name).strip() if override_name is not None
+        else dynamic_parsed.get("name") or extract_name(text)
+    )
     character_id = (
-        str(override_character_id).strip()
-        if override_character_id is not None
-        else extract_character_id(text)
+        str(override_character_id).strip() if override_character_id is not None
+        else dynamic_parsed.get("id") or extract_character_id(text)
     )
     anime = extract_anime(text)
     rarity = extract_rarity(text)
@@ -319,7 +332,11 @@ async def ingest_message(
             media_meta=media_meta,
             media_hash=hashed,
             source_origin=origin,
-            source_variant=source_variant,
+            source_variant=(
+                str(dynamic_source.get("registration_id"))
+                if dynamic_source and dynamic_source.get("registration_id")
+                else source_variant
+            ),
             source_signature=source_signature,
             archive=(message.chat.id, message.message_id),
         )

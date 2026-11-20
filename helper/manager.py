@@ -1255,6 +1255,22 @@ class HelperManager:
     async def handle_command(self, message):
         text = (message.text or "").strip()
         cmd = text.split()[0].split("@", 1)[0].lower() if text else ""
+        try:
+            from unified.source_registry import get_registered_sources
+            for item in await get_registered_sources(active_only=True):
+                key = str(item.get("source_key") or "").strip().lower()
+                username = str(item.get("bot_username") or "").strip()
+                mode = str(item.get("mode") or "")
+                if not key:
+                    continue
+                if mode in {"inline", "both"} and username:
+                    SOURCES[key] = (username, (f"/start{key}",), (f"/resume{key}",))
+                if mode in {"forward", "both"} and item.get("forward_source"):
+                    FORWARD_SOURCES[key] = str(item["forward_source"])
+                if mode == "dm" and username and item.get("dm_command"):
+                    DM_SOURCES[key] = (username, str(item["dm_command"]))
+        except Exception:
+            log.exception("Dynamic source map refresh failed")
         if cmd in {"/helperstatus", "/addhelperstatus"}:
             await message.reply(await self.status_text())
             return True

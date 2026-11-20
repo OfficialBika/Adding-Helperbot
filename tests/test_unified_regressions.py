@@ -521,3 +521,22 @@ class UIDIndexTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DynamicSourceRegistryHelpersTests(unittest.TestCase):
+    def test_source_key_validation(self):
+        from unified.source_registry import _source_key
+        self.assertEqual(_source_key("items_new_source"), "items_new_source")
+        self.assertEqual(_source_key("Items New Source"), "")
+        self.assertEqual(_source_key("1invalid"), "")
+
+    def test_dynamic_generic_parser_uses_safe_labels_only(self):
+        from unified.source_registry import parse_dynamic_text
+        source = {"parser_type": "generic", "parser_rules": {"name_label": "Character Name", "id_label": "ID"}}
+        parsed = parse_dynamic_text(source, "Character Name: Anya Forger\nID: 1368\nRarity: Premium")
+        self.assertEqual(parsed, {"name": "Anya Forger", "id": "1368"})
+
+    def test_builtin_parser_falls_back_to_existing_parser(self):
+        from unified.source_registry import parse_dynamic_text
+        self.assertEqual(parse_dynamic_text({"parser_type": "builtin"}, "Name: A"), {})
+
