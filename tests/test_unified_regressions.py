@@ -635,5 +635,5 @@ class BroadcastRegistryStatsTests(unittest.TestCase):
         from pathlib import Path
         source = Path("unified/broadcast.py").read_text(encoding="utf-8")
         handler = source.split("async def broadcast_confirmation_callback", 1)[1]
-        self.assertLess(handler.index('query.answer("Processing…")'), handler.index("broadcast_jobs.find_one("))
+        self.assertLess(handler.index("await query.answer()"), handler.index("broadcast_jobs.find_one("))
 
