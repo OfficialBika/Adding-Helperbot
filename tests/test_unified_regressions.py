@@ -876,3 +876,33 @@ class OrinXExistingSourceMappingTests(unittest.TestCase):
         caption = "🌸 Furina [🍰]\n📺 Genshin Impact\n🆔 2101"
         self.assertEqual(extract_name(caption), "Furina [🍰]")
         self.assertEqual(extract_character_id(caption), "2101")
+
+
+class OwnerSuppliedHelperCommandWizardTests(unittest.TestCase):
+    def test_helper_command_steps_are_explicit_after_parser(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        parser = source.split('elif step == "parser":', 1)[1].split('elif step == "name_label":', 1)[0]
+        self.assertIn('"helper_start_command"', parser)
+        self.assertIn('"helper_start_command": "Helper account', source)
+        self.assertIn('"helper_resume_command": "Helper account', source)
+
+    def test_inline_dm_only_need_two_owner_commands(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn('needs_helper = item.get("mode") in {"inline", "dm", "both", "forward"}', source)
+        self.assertIn('needs_forward_helper = item.get("mode") in {"forward", "both"}', source)
+
+    def test_forward_modes_require_two_separate_forward_commands(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn('"helper_forward_start_command"', source)
+        self.assertIn('"helper_forward_resume_command"', source)
+
+    def test_dynamic_manager_routes_owner_supplied_commands(self):
+        from pathlib import Path
+        source = Path("helper/manager.py").read_text(encoding="utf-8")
+        self.assertIn('DYNAMIC_INLINE_COMMANDS[', source)
+        self.assertIn('DYNAMIC_DM_COMMANDS[', source)
+        self.assertIn('DYNAMIC_FORWARD_COMMANDS[', source)
+        self.assertNotIn('SOURCES[key] = (username, (f"/start{key}"', source)
