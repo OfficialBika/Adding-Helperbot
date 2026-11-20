@@ -22,6 +22,7 @@ PENDING_PREFIX = "dynamic_source_pending:"
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,47}$")
 USERNAME_RE = re.compile(r"^@[A-Za-z0-9_]{5,32}$")
 COMMAND_RE = re.compile(r"^/[a-z][a-z0-9_]{1,31}$")
+HELPER_COMMAND_RE = re.compile(r"^/[a-z][a-z0-9_]{1,31}$")
 VALID_MODES = {"inline", "forward", "both", "dm", "manual"}
 VALID_PARSERS = {"builtin", "generic"}
 VALID_COLLECTIONS = frozenset({
@@ -58,6 +59,11 @@ def _source_key(value: str) -> str:
 def _command(value: str) -> str:
     value = str(value or "").strip().lower()
     return value if COMMAND_RE.fullmatch(value) else ""
+
+
+def _helper_command(value: str) -> str:
+    value = str(value or "").strip().lower()
+    return value if HELPER_COMMAND_RE.fullmatch(value) else ""
 
 def _owner_dm(message: Message) -> bool:
     return bool(message.chat.type == "private" and message.from_user and message.from_user.id in settings.owner_ids)
@@ -227,6 +233,10 @@ def _preview(draft: dict[str, Any]) -> str:
         f"Forward source: <code>{_escape(draft.get('forward_source'))}</code>",
         f"DM command: <code>{_escape(draft.get('dm_command'))}</code>",
         f"Parser: <code>{_escape(draft.get('parser_type'))}</code> / <code>{_escape(draft.get('parser_rules'))}</code>",
+        f"Helper start command: <code>{_escape(draft.get('helper_start_command'))}</code>",
+        f"Helper resume command: <code>{_escape(draft.get('helper_resume_command'))}</code>",
+        f"Forward start command: <code>{_escape(draft.get('helper_forward_start_command'))}</code>",
+        f"Forward resume command: <code>{_escape(draft.get('helper_forward_resume_command'))}</code>",
         "",
         "Correct: /confirm",
         "Cancel: /cancel",
@@ -248,6 +258,10 @@ async def _ask(message: Message, step: str) -> None:
         "parser": "Parser type: builtin / generic",
         "name_label": "Generic parser Name label ထည့်ပါ။ ဥပမာ Name",
         "id_label": "ID label ထည့်ပါ။ မရှိလျှင် -",
+        "helper_start_command": "Helper account ကို source bot စခိုင်းမယ့် command ထည့်ပါ။ ဥပမာ /startguessosbot",
+        "helper_resume_command": "Helper account ကို ဆက်လက်စခိုင်းမယ့် command ထည့်ပါ။ ဥပမာ /resumeguessosbot",
+        "helper_forward_start_command": "Forward source အတွက် Helper start command ထည့်ပါ။ ဥပမာ /startfwguessosbot",
+        "helper_forward_resume_command": "Forward source အတွက် Helper resume command ထည့်ပါ။ ဥပမာ /resumefwguessosbot",
     }
     await message.answer(prompts[step] + "\n/cancel ဖြင့် ပယ်ဖျက်နိုင်ပါတယ်။")
 
@@ -267,6 +281,19 @@ async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
         raise ValueError("Inline mode requires a bot username.")
     if item.get("mode") in {"forward", "both"} and not item.get("forward_source"):
         raise ValueError("Forward source is required for this mode.")
+    helper_start = _helper_command(item.get("helper_start_command"))
+    helper_resume = _helper_command(item.get("helper_resume_command"))
+    helper_fw_start = _helper_command(item.get("helper_forward_start_command"))
+    helper_fw_resume = _helper_command(item.get("helper_forward_resume_command"))
+    needs_helper = item.get("mode") in {"inline", "dm", "both", "forward"}
+    needs_forward_helper = item.get("mode") in {"forward", "both"}
+    if needs_helper and (not helper_start or not helper_resume):
+        raise ValueError("Helper start and resume commands are required for inline/DM collection.")
+    if needs_forward_helper and (not helper_fw_start or not helper_fw_resume):
+        raise ValueError("Forward mode requires its own helper forward start and resume commands.")
+    command_values = [x for x in (helper_start, helper_resume, helper_fw_start, helper_fw_resume) if x]
+    if len(command_values) != len(set(command_values)):
+        raise ValueError("Helper commands must be unique within this registration.")
     if item.get("mode") == "dm":
         if not item.get("bot_username") or not item.get("dm_command"):
             raise ValueError("DM mode requires a bot username and command template.")
@@ -281,6 +308,10 @@ async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
         or not re.fullmatch(r"/[A-Za-z0-9_ ]*\{id\}[A-Za-z0-9_ ]*", item["dm_command"])
     ):
         raise ValueError("Invalid DM command template.")
+    item["helper_start_command"] = helper_start
+    item["helper_resume_command"] = helper_resume
+    item["helper_forward_start_command"] = helper_fw_start if needs_forward_helper else ""
+    item["helper_forward_resume_command"] = helper_fw_resume if needs_forward_helper else ""
     if item.get("parser_type") == "generic":
         rules = item.get("parser_rules") or {}
         if not rules.get("name_label"):
@@ -577,7 +608,7 @@ async def source_registration_wizard(message: Message) -> None:
             if parser not in VALID_PARSERS:
                 raise ValueError("Choose builtin or generic.")
             draft["parser_type"] = parser
-            nxt = "name_label" if parser == "generic" else "finish"
+            nxt = "name_label" if parser == "generic" else "helper_start_command"
         elif step == "name_label":
             if not re.fullmatch(r"[A-Za-z0-9 _-]{1,40}", value):
                 raise ValueError("Name label must be simple text such as Name.")
@@ -588,6 +619,30 @@ async def source_registration_wizard(message: Message) -> None:
                 if not re.fullmatch(r"[A-Za-z0-9 _-]{1,40}", value):
                     raise ValueError("ID label must be simple text or -.")
                 draft.setdefault("parser_rules", {})["id_label"] = value
+            nxt = "helper_start_command"
+        elif step == "helper_start_command":
+            command = _helper_command(value)
+            if not command:
+                raise ValueError("Enter a valid helper command, e.g. /startguessosbot.")
+            draft["helper_start_command"] = command
+            nxt = "helper_resume_command"
+        elif step == "helper_resume_command":
+            command = _helper_command(value)
+            if not command:
+                raise ValueError("Enter a valid helper resume command, e.g. /resumeguessosbot.")
+            draft["helper_resume_command"] = command
+            nxt = "helper_forward_start_command" if draft.get("mode") in {"forward", "both"} else "finish"
+        elif step == "helper_forward_start_command":
+            command = _helper_command(value)
+            if not command:
+                raise ValueError("Enter a valid forward helper command, e.g. /startfwguessosbot.")
+            draft["helper_forward_start_command"] = command
+            nxt = "helper_forward_resume_command"
+        elif step == "helper_forward_resume_command":
+            command = _helper_command(value)
+            if not command:
+                raise ValueError("Enter a valid forward resume command, e.g. /resumefwguessosbot.")
+            draft["helper_forward_resume_command"] = command
             nxt = "finish"
         else:
             raise ValueError("Unknown wizard step. /cancel and start again.")
