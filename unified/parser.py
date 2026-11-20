@@ -5,9 +5,9 @@ import unicodedata
 
 
 LABEL_ALIASES = {
-    "name": r"(?:character\s*name|char\s*name|character|name)",
+    "name": r"(?:character\s*name|char\s*name|character|name)\s*(?:📛(?:\ufe0f)?)?",
     "anime": r"(?:anime|series|movie)",
-    "id": r"(?:character\s*)?id|item\s*id|card\s*id",
+    "id": r"(?:(?:character\s*)?id|item\s*id|card\s*id)\s*(?:🆔(?:\ufe0f)?)?",
     "rarity": r"rarity",
     "role": r"role",
 }
