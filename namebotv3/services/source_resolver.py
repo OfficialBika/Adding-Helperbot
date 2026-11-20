@@ -421,6 +421,45 @@ def resolve_trusted_inline_collection(message: Message) -> str | None:
     return None
 
 
+
+_BASE_BOT_SOURCE_COLLECTION = dict(BOT_SOURCE_COLLECTION)
+_BASE_BOT_SOURCE_OUTPUT_COMMAND = dict(BOT_SOURCE_OUTPUT_COMMAND)
+_BASE_BOT_SOURCE_CHAT_ID = dict(BOT_SOURCE_CHAT_ID)
+_BASE_COMMAND_TO_COLLECTIONS = {key: list(value) for key, value in COMMAND_TO_COLLECTIONS.items()}
+
+
+def install_dynamic_source_registry(sources: list[dict]) -> None:
+    BOT_SOURCE_COLLECTION.clear()
+    BOT_SOURCE_COLLECTION.update(_BASE_BOT_SOURCE_COLLECTION)
+    BOT_SOURCE_OUTPUT_COMMAND.clear()
+    BOT_SOURCE_OUTPUT_COMMAND.update(_BASE_BOT_SOURCE_OUTPUT_COMMAND)
+    BOT_SOURCE_CHAT_ID.clear()
+    BOT_SOURCE_CHAT_ID.update(_BASE_BOT_SOURCE_CHAT_ID)
+    COMMAND_TO_COLLECTIONS.clear()
+    COMMAND_TO_COLLECTIONS.update({key: list(value) for key, value in _BASE_COMMAND_TO_COLLECTIONS.items()})
+    for item in sources:
+        if not item.get("enabled", True):
+            continue
+        source_key = str(item.get("source_key") or "").strip().lower()
+        command = str(item.get("output_command") or "").strip().lower()
+        if not source_key or not command:
+            continue
+        values = COMMAND_TO_COLLECTIONS.setdefault(command, [])
+        if source_key not in values:
+            values.append(source_key)
+        for identity in (
+            str(item.get("bot_username") or "").strip().lower(),
+            str(item.get("forward_source") or "").strip().lower(),
+        ):
+            if not identity:
+                continue
+            if identity.startswith("@"):
+                BOT_SOURCE_COLLECTION[identity] = source_key
+                BOT_SOURCE_OUTPUT_COMMAND[identity] = command
+            elif identity.lstrip("-").isdigit():
+                BOT_SOURCE_CHAT_ID[int(identity)] = source_key
+
+
 def resolve_source_collection(message: Message) -> str | None:
     if is_blocked_source(message):
         return None
