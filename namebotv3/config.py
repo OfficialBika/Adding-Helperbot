@@ -104,7 +104,7 @@ def _supported_bots() -> list[tuple[str, str]]:
         ("@BikaCharacterBot", "/bika"),
         ("@SenpaiCatcherBot", "/pick"),
         ("@Super_zeko_bot", "/ziceko"),
-        ("@OrinX_Character_Bot", "/orin"),
+        ("@orinx_character_bot", "/orin"),
         ("@ImmortalDonghuaBot", "/dao"),
     ]
     raw = _csv("STATUS_SUPPORTED_BOTS")
@@ -195,7 +195,7 @@ BOT_SOURCE_COLLECTION: Dict[str, str] = {
     "@fafafawfawfa": "items_senpai_catcher",
     "@super_zeko_bot": "items_super_zeko",
     "@zicekodata_1": "items_super_zeko",
-    "@OrinX_Character_Bot": "items_orinx_waifu",
+    "@orinx_character_bot": "items_orinx_waifu",
     "@timunagalaya": "items_orinx_waifu",
     "@immortaldonghuabot": "items_immortal_donghua",
     # Both Grabber bots feed the same FW database channel/collection.
@@ -238,7 +238,7 @@ BOT_SOURCE_OUTPUT_COMMAND: Dict[str, str] = {
     "@characterlootbot": "/loot",
     "@super_zeko_bot": "/ziceko",
     "@zicekodata_1": "/ziceko",
-    "@OrinX_Character_Bot": "/orin",
+    "@orinx_character_bot": "/orin",
     "@timunagalaya": "/orin",
     "@immortaldonghuabot": "/dao",
     "@picker_database": "/pick",
