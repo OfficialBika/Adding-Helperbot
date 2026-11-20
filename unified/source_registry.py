@@ -211,18 +211,50 @@ async def _ask(message: Message, step: str) -> None:
     await message.answer(prompts[step] + "\n/cancel ဖြင့် ပယ်ဖျက်နိုင်ပါတယ်။")
 
 async def _save_source(draft: dict[str, Any], owner_id: int) -> None:
-    for field in ("bot_username", "forward_source"):
-        value = draft.get(field)
-        if value:
-            duplicate = await db.settings.find_one({"key": REGISTRY_KEY, "sources": {"$elemMatch": {field: value}}}, {"_id": 1})
-            if duplicate:
-                raise ValueError(f"Duplicate {field}; registration was not saved.")
+    """Atomically validate and append a registration without mutating existing entries."""
     item = dict(draft)
     for field in ("source_status", "source_status_reason", "reuse_existing"):
         item.pop(field, None)
+    item["source_key"] = _source_key(item.get("source_key"))
+    item["bot_username"] = _username(item.get("bot_username"))
+    item["output_command"] = _command(item.get("output_command"))
+    if not item["source_key"] or not item["output_command"]:
+        raise ValueError("Invalid source key or output command.")
+    if item.get("mode") in {"forward", "both"} and not item.get("forward_source"):
+        raise ValueError("Forward source is required for this mode.")
+    if item.get("mode") == "dm" and not item.get("dm_command"):
+        raise ValueError("DM mode requires a DM command template.")
+    if item.get("dm_command") and (
+        "{id}" not in item["dm_command"]
+        or not re.fullmatch(r"/[A-Za-z0-9_ ]*\\{id\\}[A-Za-z0-9_ ]*", item["dm_command"])
+    ):
+        raise ValueError("Invalid DM command template.")
+    if item.get("parser_type") == "generic":
+        rules = item.get("parser_rules") or {}
+        if not rules.get("name_label"):
+            raise ValueError("Generic parser requires a name label.")
+        item["parser_rules"] = {
+            "name_label": str(rules["name_label"])[:40],
+            "id_label": str(rules.get("id_label") or "ID")[:40],
+        }
     now = _now()
-    item.update({"enabled": True, "created_by": int(owner_id), "created_at": now, "updated_at": now, "version": 1, "registration_id": secrets.token_hex(8)})
-    await db.settings.update_one({"key": REGISTRY_KEY}, {"$push": {"sources": item}, "$setOnInsert": {"key": REGISTRY_KEY, "schema_version": 1}, "$set": {"updated_at": now}}, upsert=True)
+    item.update({
+        "enabled": True, "created_by": int(owner_id), "created_at": now,
+        "updated_at": now, "version": 1, "registration_id": secrets.token_hex(8),
+    })
+    # Atomic server-side guard: prevents concurrent duplicate registrations.
+    query = {"key": REGISTRY_KEY, "$nor": [
+        {"sources.source_key": item["source_key"]},
+        *([{"sources.bot_username": item["bot_username"]}] if item["bot_username"] else []),
+        *([{"sources.forward_source": item.get("forward_source")}] if item.get("forward_source") else []),
+    ]}
+    result = await db.settings.update_one(
+        query,
+        {"$push": {"sources": item}, "$setOnInsert": {"key": REGISTRY_KEY, "schema_version": 1}, "$set": {"updated_at": now}},
+        upsert=True,
+    )
+    if not result.matched_count and not result.upserted_id:
+        raise ValueError("Duplicate source key or bot identity; no registration was saved.")
     await refresh_dynamic_source_registry()
 
 @router.message(Command("addnewbot"))
