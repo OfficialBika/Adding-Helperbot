@@ -648,6 +648,40 @@ class SourceRegistryWizardExpiryTests(unittest.TestCase):
         delete_one.assert_not_awaited()
 
 
+    def test_plain_text_name_answer_advances_wizard_to_username_prompt(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.source_registry import source_registration_wizard
+
+        pending_doc = {
+            "_id": "pending-wizard",
+            "expires_at": datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10),
+            "step": "name",
+            "draft": {},
+        }
+        settings_find = AsyncMock(return_value=pending_doc)
+        settings_update = AsyncMock()
+        message = SimpleNamespace(
+            chat=SimpleNamespace(type="private"),
+            from_user=SimpleNamespace(id=12345),
+            text="Character Guess Bot",
+            answer=AsyncMock(),
+        )
+        with (
+            patch("unified.source_registry._owner_dm", return_value=True),
+            patch("unified.source_registry.db.settings.find_one", new=settings_find),
+            patch("unified.source_registry.db.settings.update_one", new=settings_update),
+        ):
+            asyncio.run(source_registration_wizard(message))
+
+        settings_update.assert_awaited_once()
+        update_call = settings_update.await_args
+        self.assertEqual(update_call.args[0], {"key": "dynamic_source_pending:12345"})
+        self.assertEqual(update_call.args[1]["$set"]["step"], "username")
+        self.assertEqual(update_call.args[1]["$set"]["draft"]["name"], "Character Guess Bot")
+        message.answer.assert_awaited_once()
+        self.assertIn("Bot username", message.answer.await_args.args[0])
+
+
 class BroadcastConcurrencyTests(unittest.TestCase):
     def test_broadcast_worker_count_is_bounded_for_vps(self):
         from unified.config import Settings
