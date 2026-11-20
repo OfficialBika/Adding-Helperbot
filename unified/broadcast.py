@@ -363,11 +363,21 @@ async def _handle_dispatch_error(event: ErrorEvent, bot: Bot) -> bool:
 
 
 def _target_query() -> dict[str, Any]:
+    """Return only currently eligible, opted-in chats from the Mongo registry."""
     return {
         "status": "active",
         "chat_type": {"$in": sorted(ACTIVE_CHAT_TYPES)},
         "chat_id": {"$nin": [int(value) for value in settings.owner_ids]},
     }
+
+
+def _target_query_for_type(chat_type: str | None = None) -> dict[str, Any]:
+    query = _target_query()
+    if chat_type == "private":
+        query["chat_type"] = "private"
+    elif chat_type == "group":
+        query["chat_type"] = {"$in": sorted(GROUP_CHAT_TYPES)}
+    return query
 
 
 def _format_progress(job: dict[str, Any]) -> str:
