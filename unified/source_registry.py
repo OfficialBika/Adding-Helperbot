@@ -244,6 +244,10 @@ def _preview(draft: dict[str, Any]) -> str:
 
 async def _ask(message: Message, step: str) -> None:
     prompts = {
+        "edit_helper_start": "ရှိပြီးသား Helper start command ထည့်ပါ။ မလိုလျှင် -",
+        "edit_helper_resume": "ရှိပြီးသား Helper resume command ထည့်ပါ။ မလိုလျှင် -",
+        "edit_helper_forward_start": "Forward Helper start command ထည့်ပါ။ မလိုလျှင် -",
+        "edit_helper_forward_resume": "Forward Helper resume command ထည့်ပါ။ မလိုလျှင် -",
         "name": "Bot display name ထည့်ပါ။",
         "username": "Bot username ထည့်ပါ။ ဥပမာ @NewSourceBot (မရှိလျှင် -)",
         "source_key": "Source Key ထည့်ပါ။ ဥပမာ items_new_source",
@@ -395,6 +399,16 @@ async def confirm_registration(message: Message) -> None:
     if not _owner_dm(message):
         return
     pending = await _pending(message.from_user.id)
+    if pending and pending.get("step") == "edit_confirm":
+        draft = dict(pending.get("draft") or {})
+        try:
+            await _save_helper_command_edit(draft)
+        except ValueError as exc:
+            await message.answer(f"❌ {_escape(exc)}")
+            return
+        await _clear_pending(message.from_user.id)
+        await message.answer("✅ Helper commands updated. Registration identity, source settings and existing records were retained.")
+        return
     if not pending or pending.get("step") != "confirm":
         await message.answer("No valid preview. Use /addnewbot.")
         return
@@ -409,6 +423,141 @@ async def confirm_registration(message: Message) -> None:
         return
     await _clear_pending(message.from_user.id)
     await message.answer("✅ Source registered. Adding and Lookup registry refresh automatically; existing records were not changed.")
+
+@router.message(Command("editbot"))
+async def editbot(message: Message) -> None:
+    """Begin a helper-command-only edit for one existing registration."""
+    if not _owner_dm(message):
+        return
+    parts = str(message.text or "").split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("Usage: /editbot source_key\\nExample: /editbot items_character_guessos")
+        return
+    key = _source_key(parts[1])
+    if not key:
+        await message.answer("Invalid source key.")
+        return
+    existing = await db.settings.find_one(
+        {"key": REGISTRY_KEY, "sources.source_key": key},
+        {"sources.$": 1},
+    )
+    if not existing or not existing.get("sources"):
+        await message.answer("Source key not found. Use /listbots.")
+        return
+    item = dict(existing["sources"][0])
+    if not item.get("registration_id"):
+        await message.answer("This registration has no stable ID; cannot safely edit it.")
+        return
+    draft = {
+        "source_key": key,
+        "registration_id": str(item["registration_id"]),
+        "original_version": int(item.get("version") or 0),
+        "mode": item.get("mode") or "manual",
+        "helper_start_command": str(item.get("helper_start_command") or ""),
+        "helper_resume_command": str(item.get("helper_resume_command") or ""),
+        "helper_forward_start_command": str(item.get("helper_forward_start_command") or ""),
+        "helper_forward_resume_command": str(item.get("helper_forward_resume_command") or ""),
+    }
+    await _save_pending(message.from_user.id, draft, "edit_helper_start")
+    await _ask(message, "edit_helper_start")
+
+
+def _helper_edit_preview(draft: dict[str, Any]) -> str:
+    return "\\n".join([
+        "🛠 <b>HELPER COMMAND EDIT PREVIEW</b>",
+        f"Source: <code>{_escape(draft.get('source_key'))}</code>",
+        f"Registration ID: <code>{_escape(draft.get('registration_id'))}</code>",
+        f"Mode: <code>{_escape(draft.get('mode'))}</code>",
+        f"Helper start: <code>{_escape(draft.get('helper_start_command'))}</code>",
+        f"Helper resume: <code>{_escape(draft.get('helper_resume_command'))}</code>",
+        f"Forward start: <code>{_escape(draft.get('helper_forward_start_command'))}</code>",
+        f"Forward resume: <code>{_escape(draft.get('helper_forward_resume_command'))}</code>",
+        "",
+        "Only helper command fields will be updated.",
+        "Save: /confirm",
+        "Cancel: /cancel",
+    ])
+
+
+async def _save_helper_command_edit(draft: dict[str, Any]) -> None:
+    """Atomically update only helper command fields on one existing registration."""
+    key = _source_key(draft.get("source_key"))
+    registration_id = str(draft.get("registration_id") or "")
+    original_version = int(draft.get("original_version") or 0)
+    mode = str(draft.get("mode") or "manual")
+    commands = {
+        "helper_start_command": _helper_command(draft.get("helper_start_command")),
+        "helper_resume_command": _helper_command(draft.get("helper_resume_command")),
+        "helper_forward_start_command": _helper_command(draft.get("helper_forward_start_command")),
+        "helper_forward_resume_command": _helper_command(draft.get("helper_forward_resume_command")),
+    }
+    needs_helper = mode in {"inline", "dm", "both"}
+    needs_forward = mode in {"forward", "both"}
+    if not key or not registration_id:
+        raise ValueError("Invalid edit target.")
+    if needs_helper and (not commands["helper_start_command"] or not commands["helper_resume_command"]):
+        raise ValueError("This source requires Helper start and resume commands.")
+    if needs_forward and (not commands["helper_forward_start_command"] or not commands["helper_forward_resume_command"]):
+        raise ValueError("This source requires Forward start and resume commands.")
+    configured = [value for value in commands.values() if value]
+    if len(configured) != len(set(configured)):
+        raise ValueError("Helper commands must be unique within this registration.")
+
+    existing_sources = await get_registered_sources(active_only=False)
+    target = next((
+        item for item in existing_sources
+        if item.get("source_key") == key
+        and str(item.get("registration_id") or "") == registration_id
+    ), None)
+    if not target:
+        raise ValueError("Registration changed or was removed. Run /editbot again.")
+    if int(target.get("version") or 0) != original_version:
+        raise ValueError("Registration changed during editing. No changes were saved; run /editbot again.")
+
+    for existing in existing_sources:
+        if str(existing.get("registration_id") or "") == registration_id:
+            continue
+        existing_commands = {
+            str(existing.get(field) or "").strip().lower()
+            for field in ("helper_start_command", "helper_resume_command", "helper_forward_start_command", "helper_forward_resume_command")
+        } - {""}
+        if set(configured) & existing_commands:
+            raise ValueError("A helper command is already assigned to another registered source.")
+
+    from helper.manager import SOURCES, FORWARD_SOURCES
+    builtin_commands = {
+        command.lower()
+        for _, starts, resumes in SOURCES.values()
+        for command in (*starts, *resumes)
+    }
+    builtin_commands.update(
+        command.lower()
+        for builtin_key in FORWARD_SOURCES
+        for command in (f"/startfw{builtin_key}bot", f"/startfw{builtin_key}", f"/resumefw{builtin_key}bot", f"/resumefw{builtin_key}")
+    )
+    if set(configured) & builtin_commands:
+        raise ValueError("A helper command conflicts with an existing built-in Helper command.")
+
+    update_fields = {
+        f"sources.$.{field}": value
+        for field, value in commands.items()
+    }
+    result = await db.settings.update_one(
+        {
+            "key": REGISTRY_KEY,
+            "sources.source_key": key,
+            "sources.registration_id": registration_id,
+            "sources.version": original_version,
+        },
+        {
+            "$set": {**update_fields, "sources.$.updated_at": _now()},
+            "$inc": {"sources.$.version": 1},
+        },
+    )
+    if not result.modified_count:
+        raise ValueError("Registration changed or update conflicted. No changes were saved; run /editbot again.")
+    await refresh_dynamic_source_registry()
+
 
 @router.message(Command("listbots"))
 async def listbots(message: Message) -> None:
@@ -535,6 +684,32 @@ async def source_registration_wizard(message: Message) -> None:
     draft = dict(pending.get("draft") or {})
     step = pending.get("step")
     try:
+        if step == "edit_helper_start":
+            command = _helper_command(value) if value != "-" else ""
+            if value != "-" and not command:
+                raise ValueError("Enter a valid helper command or -.")
+            draft["helper_start_command"] = command
+            nxt = "edit_helper_resume"
+        elif step == "edit_helper_resume":
+            command = _helper_command(value) if value != "-" else ""
+            if value != "-" and not command:
+                raise ValueError("Enter a valid helper command or -.")
+            draft["helper_resume_command"] = command
+            nxt = "edit_helper_forward_start"
+        elif step == "edit_helper_forward_start":
+            command = _helper_command(value) if value != "-" else ""
+            if value != "-" and not command:
+                raise ValueError("Enter a valid forward helper command or -.")
+            draft["helper_forward_start_command"] = command
+            nxt = "edit_helper_forward_resume"
+        elif step == "edit_helper_forward_resume":
+            command = _helper_command(value) if value != "-" else ""
+            if value != "-" and not command:
+                raise ValueError("Enter a valid forward helper resume command or -.")
+            draft["helper_forward_resume_command"] = command
+            await _save_pending(message.from_user.id, draft, "edit_confirm")
+            await message.answer(_helper_edit_preview(draft))
+            return
         if step == "name":
             draft["name"] = value[:80]
             nxt = "username"
