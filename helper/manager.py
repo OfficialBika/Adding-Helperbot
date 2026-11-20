@@ -13,6 +13,9 @@ log = logging.getLogger("helper-manager")
 STATE_PATH = Path("addhelper_state.json")
 DEFAULT_DELAY = 5
 MAX_DELAY = 30
+DYNAMIC_INLINE_COMMANDS: dict[str, tuple[str, str]] = {}
+DYNAMIC_DM_COMMANDS: dict[str, tuple[dict, str]] = {}
+DYNAMIC_FORWARD_COMMANDS: dict[str, tuple[str, str]] = {}
 CATCH_YOUR_WAIFU_RESPONSE_TIMEOUT = 10
 CATCH_YOUR_WAIFU_MAX_MISSES = 20
 
@@ -126,8 +129,153 @@ class HelperManager:
             uid = str(getattr(user, "id", "") or "")
             for key, (bot, _) in DM_SOURCES.items():
                 if username == bot.lstrip("@").lower() or uid == self._bot_id_for(key):
-                    q = self.responses.setdefault(key, asyncio.Queue())
-                    await q.put(message)
+                    await self.responses.setdefault(key, asyncio.Queue()).put(message)
+            try:
+                sources = await self._dynamic_registry_snapshot()
+                for item in sources:
+                    if item.get("mode") != "dm":
+                        continue
+                    expected_username = str(item.get("bot_username") or "").lstrip("@").lower()
+                    expected_uid = str(item.get("bot_user_id") or "")
+                    if not ((expected_username and username == expected_username) or (expected_uid and uid == expected_uid)):
+                        continue
+                    registration_id = str(item.get("registration_id") or "")
+                    if registration_id:
+                        await self.responses.setdefault(f"dynamic:{registration_id}", asyncio.Queue()).put(message)
+            except Exception:
+                log.exception("Dynamic DM response dispatch failed")
+
+    async def _dynamic_registry_snapshot(self):
+        try:
+            from unified.source_registry import get_registered_sources
+            return await get_registered_sources(active_only=True)
+        except Exception:
+            log.exception("Unable to load dynamic source registry")
+            return []
+
+    async def _run_dynamic_dm(self, item, start_id, delay):
+        """Bounded collector; sender and request correlation are fail-closed."""
+        from pyrogram.errors import FloodWait
+        registration_id = str(item.get("registration_id") or "")
+        key = str(item.get("source_key") or "").strip().lower()
+        bot = str(item.get("bot_username") or "").strip()
+        template = str(item.get("dm_command") or "")
+        if not registration_id or not key or not bot or "{id}" not in template:
+            raise ValueError("Invalid dynamic DM registration")
+        max_id = int(item.get("max_id") or 0)
+        if not (1 <= start_id <= max_id <= 10000000):
+            raise ValueError("Invalid dynamic DM ID range.")
+        max_misses = max(1, min(int(item.get("max_no_response", 10)), 100))
+        timeout = max(5, min(int(item.get("response_timeout", 30)), 120))
+        delay = max(1, min(int(delay), MAX_DELAY))
+        runner_key = f"dynamic:{registration_id}"
+        q = self.responses.setdefault(runner_key, asyncio.Queue())
+        progress = self._state.setdefault("dynamic_dm_progress", {}).setdefault(registration_id, {})
+        current_id = max(start_id, int(progress.get("pending_id") or progress.get("next_id") or start_id))
+        misses = int(progress.get("consecutive_no_response", 0) or 0)
+        try:
+            while current_id <= max_id:
+                active_item = await self._dynamic_registry_snapshot()
+                if not any(
+                    str(source.get("registration_id") or "") == registration_id
+                    and source.get("enabled", True)
+                    for source in active_item
+                ):
+                    progress["last_error"] = "registration disabled or removed; worker stopped"
+                    break
+                progress.update({"source_key": key, "pending_id": current_id, "next_id": current_id, "running": True})
+                self._save()
+                command = template.replace("{id}", str(current_id))
+                try:
+                    sent = await self.client.send_message(bot, command)
+                except FloodWait as exc:
+                    pause = max(1, min(int(getattr(exc, "value", 1) or 1), 3600))
+                    progress.update({"pending_id": current_id, "next_id": current_id, "last_error": f"FloodWait {pause}s"})
+                    self._save()
+                    await asyncio.sleep(pause)
+                    continue
+                # Telegram source bots typically reply to the command message.
+                # Require the reply's reply_to_message_id to point to the exact
+                # command. No ID-in-text heuristic is considered safe enough.
+                sent_id = int(getattr(sent, "id", 0) or 0)
+                deadline = asyncio.get_running_loop().time() + timeout
+                response = None
+                while sent_id:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        candidate = await asyncio.wait_for(q.get(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    user = getattr(candidate, "from_user", None)
+                    candidate_username = (getattr(user, "username", "") or "").lower()
+                    candidate_uid = str(getattr(user, "id", "") or "")
+                    expected_username = bot.lstrip("@").lower()
+                    expected_uid = str(item.get("bot_user_id") or "")
+                    sender_ok = (
+                        (expected_username and candidate_username == expected_username)
+                        or (expected_uid and candidate_uid == expected_uid)
+                    )
+                    reply_id = (
+                        getattr(candidate, "reply_to_message_id", None)
+                        or getattr(getattr(candidate, "reply_to_message", None), "id", None)
+                    )
+                    if sender_ok and int(reply_id or 0) == sent_id:
+                        response = candidate
+                        break
+                if response is None:
+                    misses += 1
+                    progress.update({
+                        "pending_id": None, "last_checked_id": current_id,
+                        "next_id": current_id + 1, "consecutive_no_response": misses,
+                        "last_error": "no reply correlated to the exact command",
+                    })
+                    self._save()
+                    if misses >= max_misses:
+                        break
+                    current_id += 1
+                    await asyncio.sleep(delay)
+                    continue
+                has_media = any(getattr(response, name, None) for name in ("photo", "video", "animation", "document"))
+                if has_media:
+                    await self.client.forward_messages(self.runtime.adding_chat_id, response.chat.id, response.id)
+                else:
+                    log.info("Dynamic DM text-only reply skipped key=%s id=%s", key, current_id)
+                misses = 0
+                progress.update({
+                    "pending_id": None, "last_checked_id": current_id,
+                    "next_id": current_id + 1, "consecutive_no_response": 0,
+                    "last_error": None,
+                })
+                self._save()
+                current_id += 1
+                await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            progress["last_error"] = str(exc)
+            log.exception("Dynamic DM worker failed key=%s", key)
+        finally:
+            progress["running"] = False
+            self._save()
+            self.runners.pop(runner_key, None)
+
+    async def _start_dynamic_dm(self, item, start_id=None, delay=DEFAULT_DELAY):
+        registration_id = str(item.get("registration_id") or "")
+        runner_key = f"dynamic:{registration_id}"
+        if not registration_id:
+            raise ValueError("Invalid registration ID")
+        current = self.runners.get(runner_key)
+        if current and not current.task.done():
+            raise RuntimeError("Dynamic source is already running")
+        progress = (self._state.get("dynamic_dm_progress") or {}).get(registration_id) or {}
+        initial = int(start_id or progress.get("pending_id") or progress.get("next_id") or 1)
+        max_id = int(item.get("max_id") or 0)
+        if not 1 <= initial <= max_id:
+            raise ValueError(f"start_id must be between 1 and configured max_id ({max_id}).")
+        task = asyncio.create_task(self._run_dynamic_dm(item, initial, delay), name=runner_key)
+        self.runners[runner_key] = Runner(task, str(item.get("source_key") or runner_key), "dynamic_dm")
 
     def _bot_id_for(self, key):
         return str(self._state.get("dm_bot_ids", {}).get(key, ""))
@@ -437,12 +585,13 @@ class HelperManager:
         resume=False,
         resume_count=None,
         prefer_checkpoint=True,
+        bot_override=None,
     ):
         """Run an inline source with per-source, restart-safe pagination checkpoints."""
         if key in self.runners and not self.runners[key].task.done():
             raise RuntimeError(f"{key} is already running")
 
-        bot, _, _ = SOURCES[key]
+        bot = bot_override or SOURCES[key][0]
         delay = max(1, min(int(delay), MAX_DELAY))
         progress = self._inline_progress(key)
 
@@ -961,8 +1110,9 @@ class HelperManager:
         delay=DEFAULT_DELAY,
         resume_count=None,
         media_filter=None,
+        source_override=None,
     ):
-        source = FORWARD_SOURCES.get(key)
+        source = source_override or FORWARD_SOURCES.get(key)
         if not source:
             raise RuntimeError(f"No forward source configured for {key}")
         if key in self.runners and not self.runners[key].task.done():
@@ -1255,6 +1405,37 @@ class HelperManager:
     async def handle_command(self, message):
         text = (message.text or "").strip()
         cmd = text.split()[0].split("@", 1)[0].lower() if text else ""
+        try:
+            from unified.source_registry import get_registered_sources
+            DYNAMIC_INLINE_COMMANDS.clear()
+            DYNAMIC_DM_COMMANDS.clear()
+            DYNAMIC_FORWARD_COMMANDS.clear()
+            for item in await get_registered_sources(active_only=True):
+                key = str(item.get("source_key") or "").strip().lower()
+                username = str(item.get("bot_username") or "").strip()
+                mode = str(item.get("mode") or "")
+                if not key:
+                    continue
+                if mode == "dm" and username and item.get("dm_command"):
+                    if item.get("helper_start_command"):
+                        DYNAMIC_DM_COMMANDS[str(item["helper_start_command"]).lower()] = (item, "start")
+                    if item.get("helper_resume_command"):
+                        DYNAMIC_DM_COMMANDS[str(item["helper_resume_command"]).lower()] = (item, "resume")
+                if mode in {"forward", "both"}:
+                    if item.get("helper_forward_start_command"):
+                        DYNAMIC_FORWARD_COMMANDS[str(item["helper_forward_start_command"]).lower()] = (key, "start", str(item["forward_source"]))
+                    if item.get("helper_forward_resume_command"):
+                        DYNAMIC_FORWARD_COMMANDS[str(item["helper_forward_resume_command"]).lower()] = (key, "resume", str(item["forward_source"]))
+                if mode in {"inline", "both"}:
+                    if item.get("helper_start_command"):
+                        DYNAMIC_INLINE_COMMANDS[str(item["helper_start_command"]).lower()] = (key, "start")
+                    if item.get("helper_resume_command"):
+                        DYNAMIC_INLINE_COMMANDS[str(item["helper_resume_command"]).lower()] = (key, "resume")
+                # Keep the DM worker's exact registration metadata available.
+                if mode == "dm":
+                    self._state.setdefault("dynamic_dm_sources", {})[str(item.get("registration_id") or "")] = dict(item)
+        except Exception:
+            log.exception("Dynamic source map refresh failed")
         if cmd in {"/helperstatus", "/addhelperstatus"}:
             await message.reply(await self.status_text())
             return True
@@ -1302,6 +1483,50 @@ class HelperManager:
                 )
             except Exception as exc:
                 await message.reply(f"Catch Your Waifu helper error: {exc}")
+            return True
+
+        if cmd in DYNAMIC_DM_COMMANDS:
+            item, kind = DYNAMIC_DM_COMMANDS[cmd]
+            try:
+                registration_id = str(item.get("registration_id") or "")
+                progress = (self._state.get("dynamic_dm_progress") or {}).get(registration_id) or {}
+                start_id = 1 if kind == "start" else int(progress.get("pending_id") or progress.get("next_id") or 1)
+                await self._start_dynamic_dm(item, start_id, self._start_delay(text))
+                action = "Started" if kind == "start" else "Resumed"
+                await message.reply(f"✅ {action} dynamic DM source {item.get('source_key')} from ID {start_id}.")
+            except Exception as exc:
+                await message.reply(f"Dynamic DM helper error: {exc}")
+            return True
+
+        if cmd in DYNAMIC_INLINE_COMMANDS:
+            key, kind = DYNAMIC_INLINE_COMMANDS[cmd]
+            try:
+                delay = self._start_delay(text)
+                source_item = next((x for x in await self._dynamic_registry_snapshot() if x.get("source_key") == key), None)
+                bot_override = (source_item or {}).get("bot_username")
+                if kind == "resume":
+                    await self.start_inline(key, delay, resume=True, prefer_checkpoint=True, bot_override=bot_override)
+                    detail = "saved checkpoint"
+                else:
+                    await self.start_inline(key, delay, resume=False, bot_override=bot_override)
+                    detail = "from start"
+                await message.reply(f"✅ {kind.title()} dynamic inline source {key} ({detail}), delay={delay}s.")
+            except Exception as exc:
+                await message.reply(f"Dynamic inline helper error: {exc}")
+            return True
+
+        if cmd in DYNAMIC_FORWARD_COMMANDS:
+            key, kind, source = DYNAMIC_FORWARD_COMMANDS[cmd]
+            try:
+                delay = self._start_delay(text)
+                saved = (self._state.get("forward_progress") or {}).get(key) or {}
+                count = None if kind == "start" else max(0, int(saved.get("current_index", 0) or 0))
+                if kind == "resume":
+                    delay = max(1, min(int(saved.get("delay", delay) or delay), MAX_DELAY))
+                await self.start_forward(key, delay, count, source_override=source)
+                await message.reply(f"✅ {kind.title()} dynamic forward source {key}, delay={delay}s.")
+            except Exception as exc:
+                await message.reply(f"Dynamic forward helper error: {exc}")
             return True
 
         key, kind = self._source_for_command(cmd)
@@ -1353,6 +1578,40 @@ class HelperManager:
             except Exception as exc:
                 await message.reply(f"Helper error: {exc}")
             return True
+        if cmd in {"/startdm", "/resumedm", "/stopdm"}:
+            parts = text.split()
+            if len(parts) < 2:
+                await message.reply("Usage: /startdm|/resumedm|/stopdm source_key [start_id] [delay]")
+                return True
+            key = parts[1].strip().lower()
+            items = await self._dynamic_registry_snapshot()
+            item = next((x for x in items if str(x.get("source_key") or "").lower() == key and x.get("mode") == "dm"), None)
+            if item is None:
+                await message.reply("Enabled dynamic DM source not found.")
+                return True
+            registration_id = str(item.get("registration_id") or "")
+            runner_key = f"dynamic:{registration_id}"
+            if cmd == "/stopdm":
+                runner = self.runners.get(runner_key)
+                if runner and not runner.task.done():
+                    runner.task.cancel()
+                    await asyncio.gather(runner.task, return_exceptions=True)
+                    await message.reply(f"Stopped dynamic DM source {key}; in-flight ID checkpoint retained.")
+                else:
+                    await message.reply(f"Dynamic DM source {key} is not running.")
+                return True
+            try:
+                start_id = int(parts[2]) if len(parts) >= 3 else None
+                if start_id is not None and start_id < 1:
+                    raise ValueError("start_id must be >= 1")
+                delay = max(1, min(int(parts[3]), MAX_DELAY)) if len(parts) >= 4 else DEFAULT_DELAY
+                await self._start_dynamic_dm(item, start_id, delay)
+                action = "Started" if cmd == "/startdm" else "Resumed"
+                await message.reply(f"✅ {action} dynamic DM source {key}; delay={delay}s; max_id={item.get('max_id')}.")
+            except Exception as exc:
+                await message.reply(f"Dynamic DM helper error: {exc}")
+            return True
+
         # Catch FW video-only backfill. This is deliberately separate from
         # the normal Catch FW command so /startfwcatchbot keeps its exact behavior.
         if cmd == "/startfwcatchbotvd":

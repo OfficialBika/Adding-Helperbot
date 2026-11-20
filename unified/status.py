@@ -204,6 +204,24 @@ async def build_status_text(message: Message) -> str:
     )
 
 
+async def _broadcast_registry_stats() -> dict[str, int | bool]:
+    """Read audience totals from the exact Mongo recipient query used by broadcast."""
+    try:
+        from unified.broadcast import get_broadcast_audience_counts
+
+        counts = await get_broadcast_audience_counts()
+        return {"ok": True, **counts}
+    except Exception:
+        return {
+            "ok": False,
+            "eligible_users": 0,
+            "eligible_groups": 0,
+            "eligible_total": 0,
+            "registered_users": 0,
+            "registered_groups": 0,
+        }
+
+
 async def build_stats_text(message: Message, *, helper_state: str) -> str:
     async def safe_count() -> int:
         try:
@@ -211,10 +229,11 @@ async def build_stats_text(message: Message, *, helper_state: str) -> str:
         except Exception:
             return 0
 
-    db_ping, bot_ping, count = await asyncio.gather(
+    db_ping, bot_ping, count, audience = await asyncio.gather(
         _ping_db(),
         _ping_bot(message),
         safe_count(),
+        _broadcast_registry_stats(),
     )
     used, available, total = _ram_info()
     snap = metrics.snapshot()
@@ -245,6 +264,13 @@ async def build_stats_text(message: Message, *, helper_state: str) -> str:
         f"‣ Total Ingests : <code>{_fmt_int(snap['ingest_total'])}</code>\n"
         f"‣ New Records : <code>{_fmt_int(snap['ingest_saved'])}</code>\n"
         f"‣ Updated Records : <code>{_fmt_int(snap['ingest_updated'])}</code>\n\n"
+        "👥 <b>USER & GROUP REGISTRY (MongoDB)</b>\n"
+        f"‣ Eligible Users : <code>{_fmt_int(audience['eligible_users'])}</code>\n"
+        f"‣ Eligible Groups : <code>{_fmt_int(audience['eligible_groups'])}</code>\n"
+        f"‣ Eligible Broadcast Total : <code>{_fmt_int(audience['eligible_total'])}</code>\n"
+        f"‣ Registered Users : <code>{_fmt_int(audience['registered_users'])}</code>\n"
+        f"‣ Registered Groups : <code>{_fmt_int(audience['registered_groups'])}</code>\n"
+        f"‣ Registry : <code>{'READY' if audience['ok'] else 'DEGRADED'}</code>\n\n"
         "🗄 <b>DATABASE</b>\n"
         f"‣ Characters : <code>{_fmt_int(count)}</code>\n"
         f"‣ DB : <code>{settings.db_name}</code>\n"

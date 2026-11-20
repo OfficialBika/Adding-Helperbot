@@ -5,9 +5,9 @@ import unicodedata
 
 
 LABEL_ALIASES = {
-    "name": r"(?:character\s*name|char\s*name|character|name)",
+    "name": r"(?:character\s*name|char\s*name|character|name)\s*(?:📛(?:\ufe0f)?)?",
     "anime": r"(?:anime|series|movie)",
-    "id": r"(?:character\s*)?id|item\s*id|card\s*id",
+    "id": r"(?:(?:character\s*)?id|item\s*id|card\s*id)\s*(?:🆔(?:\ufe0f)?)?",
     "rarity": r"rarity",
     "role": r"role",
 }
@@ -25,9 +25,16 @@ NOISE_RE = re.compile(
 
 
 def norm(text: str | None) -> str:
-    text = unicodedata.normalize("NFKC", text or "")
-    text = text.replace("\r", "\n")
-    text = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", text)
+    """Normalize spacing without rewriting source-provided Unicode/emoji.
+
+    Emoji may be multi-codepoint grapheme clusters (ZWJ sequences,
+    variation selectors, skin-tone modifiers and keycaps). Avoid
+    compatibility normalization so those exact sequences are retained.
+    """
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    # Remove formatting controls only; retain ZWJ U+200D, variation
+    # selectors U+FE0E/U+FE0F, and keycap U+20E3.
+    text = re.sub(r"[\u200b\u200e\u200f\u2060\ufeff]", "", text)
     return re.sub(r"[ \t]+", " ", text).strip()
 
 
@@ -40,9 +47,9 @@ def strip_symbols(value: str) -> str:
 
 
 def clean_name(value: str) -> str:
+    """Remove field wrappers while preserving source name and emoji content."""
     value = norm(value)
-    # Telegram source bots may wrap field values in Markdown code ticks.
-    # The ticks are formatting only and must never become part of the stored name.
+    # Source bots may wrap the value in Markdown code ticks.
     value = re.sub(r"^\s*`+(.*?)`+\s*$", r"\1", value, flags=re.S).strip()
     value = re.sub(r"^(?:📛|👤|🆔|⭐|💠|🎬|🎭|📤)+\s*", "", value)
     value = re.sub(r"^(?:name|character\s*name|char\s*name)\s*[:：•\-=]\s*", "", value, flags=re.I)
@@ -54,7 +61,8 @@ def clean_name(value: str) -> str:
     )[0]
     value = re.sub(r"\s*[-–—|]+\s*(?:rarity|anime|id|role)\b.*$", "", value, flags=re.I)
     value = strip_symbols(value)
-    return re.sub(r"\s+", " ", value).strip() or None
+    # Collapse ordinary whitespace only; do not normalize emoji sequences.
+    return re.sub(r"[ \t]+", " ", value).strip() or None
 
 
 def _label_value(text: str, label: str) -> str | None:
@@ -68,9 +76,15 @@ def _label_value(text: str, label: str) -> str | None:
 
 
 def _line_label_value(line: str, label: str) -> str | None:
-    m = re.search(rf"(?:[^\w\n\r:：•\-=]{{0,8}}){label}\s*[:：•\-=]\s*(.+?)\s*$", line, re.I)
+    # Accept decorative emoji between the source label and delimiter, e.g.
+    # `Name 🔥 : value` or `Name 📛 : value`, without consuming value emoji.
+    separator = r"[:：•=-]"
+    decoration = r"(?:\s+[^\w\s]{1,4})?\s*"
+    m = re.search(rf"^\s*{label}{decoration}{separator}\s*(.*?)\s*$", line, re.I)
+    if not m:
+        # Some sources prefix the whole field label with decorative symbols.
+        m = re.search(rf"^\s*[^\w\s]{{1,3}}\s*{label}{decoration}{separator}\s*(.*?)\s*$", line, re.I)
     return clean_name(m.group(1)) if m else None
-
 
 def _myanmar_name(text: str) -> str | None:
     for line in norm(text).splitlines():
@@ -248,6 +262,55 @@ def _waifux_global_id(text: str) -> str | None:
             return m.group(1)
     return None
 
+def _waifu_cheat_name(text: str) -> str | None:
+    """Parse Waifu Cheat Bot cards whose first row starts with the flower emoji.
+
+    The character name is the complete text after 🌸 on the first non-empty
+    line. Bracketed suffixes such as [🍰] and [🤖] are intentionally preserved.
+    """
+    raw = norm(text)
+    if not raw:
+        return None
+
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    # Only accept a flower-prefixed first content row, not arbitrary later
+    # mentions of 🌸 in metadata or descriptive text.
+    first = re.match(r"^🌸\s*(.+?)\s*$", lines[0])
+    if not first:
+        return None
+
+    value = clean_name(first.group(1))
+    if not value:
+        return None
+    # A flower header is not sufficient on its own: require the matching
+    # emoji-prefixed numeric ID field somewhere in the same card.
+    if not _waifu_cheat_id(raw):
+        return None
+    return value
+
+
+def _waifu_cheat_id(text: str) -> str | None:
+    """Parse the numeric ID row from a Waifu Cheat Bot card."""
+    raw = norm(text)
+    if not raw:
+        return None
+
+    # Require the same card's 🌸 first content row to avoid treating an
+    # unrelated ID line as a Waifu Cheat Bot character.
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines or not re.match(r"^🌸\s*.+$", lines[0]):
+        return None
+
+    for line in lines[1:]:
+        match = re.match(r"^🆔(?:\ufe0f)?\s*(\d+)\s*$", line)
+        if match:
+            return match.group(1)
+    return None
+
+
 def _capture_name(text: str) -> str | None:
     """Parse CaptureCharacterBot's New Character Added card."""
     raw = norm(text)
@@ -400,6 +463,10 @@ def extract_character_id(text: str | None) -> str | None:
     if waifux_id:
         return waifux_id
 
+    waifu_cheat_id = _waifu_cheat_id(raw)
+    if waifu_cheat_id:
+        return waifu_cheat_id
+
     # Picker Database exposes two OwO ID layouts:
     #   🆔️30: Ayaka
     #   「 ID : 2601 Shanks ⛓️ 」
@@ -486,7 +553,7 @@ def extract_name(text: str | None) -> str | None:
     if not raw:
         return None
 
-    for parser in (_capture_name, _picker_name, _kairo_name, _catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
+    for parser in (_waifu_cheat_name, _capture_name, _picker_name, _kairo_name, _catch_your_waifu_name, _waifux_global_name, _catch_log_name, _senpai_inline_name, _senpai_name, _myanmar_name, _smash_name):
         name = parser(raw)
         if name:
             return name

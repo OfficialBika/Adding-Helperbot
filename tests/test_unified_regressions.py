@@ -519,5 +519,484 @@ class UIDIndexTests(unittest.TestCase):
                 self.assertEqual(sqlite_doc["name"], "Rin Xi")
 
 
+def _ensure_test_import_paths() -> None:
+    """Expose the same import roots used by CI for direct VPS unittest runs."""
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for candidate in (str(root), str(root / "namebotv3")):
+        if candidate not in sys.path:
+            sys.path.insert(0, candidate)
+
+
+_ensure_test_import_paths()
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class DynamicSourceRegistryHelpersTests(unittest.TestCase):
+    def test_source_key_validation(self):
+        from unified.source_registry import _source_key
+        self.assertEqual(_source_key("items_new_source"), "items_new_source")
+        self.assertEqual(_source_key("Items New Source"), "")
+        self.assertEqual(_source_key("1invalid"), "")
+
+    def test_dynamic_generic_parser_uses_safe_labels_only(self):
+        from unified.source_registry import parse_dynamic_text
+        source = {"parser_type": "generic", "parser_rules": {"name_label": "Character Name", "id_label": "ID"}}
+        parsed = parse_dynamic_text(source, "Character Name: Anya Forger\nID: 1368\nRarity: Premium")
+        self.assertEqual(parsed, {"name": "Anya Forger", "id": "1368"})
+
+    def test_builtin_parser_falls_back_to_existing_parser(self):
+        from unified.source_registry import parse_dynamic_text
+        self.assertEqual(parse_dynamic_text({"parser_type": "builtin"}, "Name: A"), {})
+
+
+    def test_dm_command_template_requires_placeholder(self):
+        import re
+        good = "/check {id}"
+        bad = "/check 123"
+        pattern = r"/[A-Za-z0-9_ ]*\{id\}[A-Za-z0-9_ ]*"
+        self.assertRegex(good, pattern)
+        self.assertNotRegex(bad, pattern)
+
+    def test_dm_reply_must_reference_exact_command_message(self):
+        sent_message_id = 771
+        matching_reply_id = 771
+        unrelated_reply_id = 772
+        self.assertEqual(matching_reply_id, sent_message_id)
+        self.assertNotEqual(unrelated_reply_id, sent_message_id)
+
+    def test_dynamic_registry_worker_has_disable_guard_and_exact_reply_correlation(self):
+        from pathlib import Path
+        manager_source = Path("helper/manager.py").read_text(encoding="utf-8")
+        self.assertIn('source.get("registration_id") or "") == registration_id', manager_source)
+        self.assertIn('int(reply_id or 0) == sent_id', manager_source)
+        self.assertIn('registration disabled or removed; worker stopped', manager_source)
+
+    def test_registry_updates_are_scoped_to_registry_key(self):
+        from pathlib import Path
+        registry_source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn('{"key": REGISTRY_KEY}', registry_source)
+        self.assertIn('"$pull": {"sources": {"source_key": key}}', registry_source)
+
+    def test_dynamic_resolver_preserves_builtin_source_maps(self):
+        from pathlib import Path
+        resolver_source = Path("namebotv3/services/source_resolver.py").read_text(encoding="utf-8")
+        self.assertIn("_BASE_BOT_SOURCE_COLLECTION", resolver_source)
+        self.assertIn("Replace module maps only after the complete next generation is built.", resolver_source)
+        self.assertNotIn("BOT_SOURCE_USER_ID.clear()", resolver_source)
+
+class SourceRegistryWizardExpiryTests(unittest.TestCase):
+    def test_pending_wizard_accepts_future_naive_bson_datetime(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.source_registry import _pending
+
+        doc = {
+            "_id": "pending-1",
+            "expires_at": datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10),
+            "step": "username",
+            "draft": {"name": "Character Guess Bot"},
+        }
+        fake_settings = SimpleNamespace(
+            find_one=AsyncMock(return_value=doc),
+            delete_one=AsyncMock(),
+        )
+        with patch("unified.source_registry.db", SimpleNamespace(settings=fake_settings)):
+            result = asyncio.run(_pending(12345))
+        delete_one = fake_settings.delete_one
+
+        self.assertEqual(result["step"], "username")
+        self.assertEqual(result["draft"]["name"], "Character Guess Bot")
+        delete_one.assert_not_awaited()
+
+    def test_pending_wizard_deletes_expired_naive_bson_datetime(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.source_registry import _pending
+
+        doc = {
+            "_id": "pending-expired",
+            "expires_at": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1),
+            "step": "username",
+        }
+        fake_settings = SimpleNamespace(
+            find_one=AsyncMock(return_value=doc),
+            delete_one=AsyncMock(),
+        )
+        with patch("unified.source_registry.db", SimpleNamespace(settings=fake_settings)):
+            result = asyncio.run(_pending(12345))
+        delete_one = fake_settings.delete_one
+
+        self.assertIsNone(result)
+        delete_one.assert_awaited_once_with({"_id": "pending-expired"})
+
+    def test_pending_wizard_accepts_future_aware_datetime(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.source_registry import _pending
+
+        doc = {
+            "_id": "pending-aware",
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
+            "step": "username",
+        }
+        fake_settings = SimpleNamespace(
+            find_one=AsyncMock(return_value=doc),
+            delete_one=AsyncMock(),
+        )
+        with patch("unified.source_registry.db", SimpleNamespace(settings=fake_settings)):
+            result = asyncio.run(_pending(12345))
+        delete_one = fake_settings.delete_one
+
+        self.assertEqual(result["step"], "username")
+        delete_one.assert_not_awaited()
+
+
+    def test_plain_text_name_answer_advances_wizard_to_username_prompt(self):
+        from datetime import datetime, timedelta, timezone
+        from unified.source_registry import source_registration_wizard
+
+        pending_doc = {
+            "_id": "pending-wizard",
+            "expires_at": datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10),
+            "step": "name",
+            "draft": {},
+        }
+        settings_find = AsyncMock(return_value=pending_doc)
+        settings_update = AsyncMock()
+        message = SimpleNamespace(
+            chat=SimpleNamespace(type="private"),
+            from_user=SimpleNamespace(id=12345),
+            text="Character Guess Bot",
+            answer=AsyncMock(),
+        )
+        fake_settings = SimpleNamespace(
+            find_one=settings_find,
+            update_one=settings_update,
+            delete_one=AsyncMock(),
+        )
+        with (
+            patch("unified.source_registry._owner_dm", return_value=True),
+            patch("unified.source_registry.db", SimpleNamespace(settings=fake_settings)),
+        ):
+            asyncio.run(source_registration_wizard(message))
+
+        settings_update.assert_awaited_once()
+        update_call = settings_update.await_args
+        self.assertEqual(update_call.args[0], {"key": "dynamic_source_pending:12345"})
+        self.assertEqual(update_call.args[1]["$set"]["step"], "username")
+        self.assertEqual(update_call.args[1]["$set"]["draft"]["name"], "Character Guess Bot")
+        message.answer.assert_awaited_once()
+        self.assertIn("Bot username", message.answer.await_args.args[0])
+
+
+class BroadcastConcurrencyTests(unittest.TestCase):
+    def test_broadcast_worker_count_is_bounded_for_vps(self):
+        from unified.config import Settings
+        self.assertGreaterEqual(Settings.broadcast_workers, 1)
+        self.assertLessEqual(Settings.broadcast_workers, 24)
+
+    def test_broadcast_rate_and_chat_interval_are_bounded(self):
+        from unified.config import Settings
+        self.assertGreaterEqual(Settings.broadcast_rate_per_second, 1.0)
+        self.assertLessEqual(Settings.broadcast_rate_per_second, 27.0)
+        self.assertGreaterEqual(Settings.broadcast_chat_interval_ms, 1000)
+        self.assertLessEqual(Settings.broadcast_chat_interval_ms, 10000)
+
+    def test_broadcast_progress_updates_are_throttled(self):
+        from unified.config import Settings
+        self.assertGreaterEqual(Settings.broadcast_progress_update_every, 50)
+        self.assertLessEqual(Settings.broadcast_progress_update_every, 500)
+
+    def test_broadcast_worker_pool_uses_configured_limit(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn('range(BROADCAST_CONCURRENCY)', source)
+        self.assertIn('getattr(settings, "broadcast_workers", 20)', source)
+
+    def test_broadcast_429_updates_global_and_chat_pacing(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn('_rate_limiter.defer(float(exc.retry_after))', source)
+        self.assertIn('_chat_rate_limiter.defer(chat_id, float(exc.retry_after))', source)
+
+    def test_broadcast_per_chat_sends_are_serialized(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn('lock = await _chat_rate_limiter.acquire(chat_id)', source)
+        self.assertIn('if lock and lock.locked():', source)
+
+class BroadcastRegistryStatsTests(unittest.TestCase):
+    def test_broadcast_audience_counts_use_shared_eligibility_query(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn("async def get_broadcast_audience_counts()", source)
+        self.assertIn('bot_chats.count_documents(_target_query_for_type("private"))', source)
+        self.assertIn('bot_chats.count_documents(_target_query_for_type("group"))', source)
+        self.assertIn('bot_chats.count_documents(_target_query())', source)
+
+    def test_stats_displays_eligible_and_registered_user_group_counts(self):
+        from pathlib import Path
+        source = Path("unified/status.py").read_text(encoding="utf-8")
+        self.assertIn("get_broadcast_audience_counts", source)
+        self.assertIn("Eligible Users", source)
+        self.assertIn("Eligible Groups", source)
+        self.assertIn("Registered Users", source)
+        self.assertIn("Registered Groups", source)
+
+    def test_broadcast_starts_queued_without_confirmation_keyboard(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        staging = source.split("async def _stage_broadcast", 1)[1].split("async def _send_broadcast_status", 1)[0]
+        self.assertIn('"status": "queued"', staging)
+        self.assertIn('"immediate_start": True', staging)
+        self.assertIn("_wakeup.set()", staging)
+        self.assertNotIn("InlineKeyboardButton", staging)
+        self.assertNotIn("pending_confirmation", staging)
+
+    def test_immediate_broadcast_has_no_inline_callback_route(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertNotIn('@broadcast_router.callback_query(F.data.startswith("bc:"))', source)
+        self.assertNotIn("async def broadcast_confirmation_callback", source)
+
+    def test_copy_mode_retains_source_chat_and_message_ids(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        staging = source.split("async def _stage_broadcast", 1)[1].split("async def _send_broadcast_status", 1)[0]
+        self.assertIn('"source_chat_id": int(replied.chat.id)', staging)
+        self.assertIn('"source_message_id": int(replied.message_id)', staging)
+        delivery = source.split("async def _deliver_to_chat", 1)[1].split("async def _initialize_job_deliveries", 1)[0]
+        self.assertIn("await bot.copy_message(", delivery)
+
+    def test_immediate_broadcast_records_control_message_for_progress(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        staging = source.split("async def _stage_broadcast", 1)[1].split("async def _send_broadcast_status", 1)[0]
+        self.assertIn('"control_chat_id": int(progress_message.chat.id)', staging)
+        self.assertIn('"control_message_id": int(progress_message.message_id)', staging)
+
+
+    def test_broadcast_reply_payload_uses_copy_message_path(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn('"payload_type": payload_type', source)
+        self.assertIn('"source_chat_id": int(replied.chat.id)', source)
+        self.assertIn('"source_message_id": int(replied.message_id)', source)
+        self.assertIn("await bot.copy_message(", source)
+
+
+
+
+class WaifuCheatBuiltinParserTests(unittest.TestCase):
+    def test_extracts_name_and_id_from_card_header_and_id_row(self):
+        from unified.parser import extract_name, extract_character_id
+
+        card = (
+            "🌸 Furina [🍰]\n"
+            "📺 Genshin Impact [🎮]\n"
+            "💎 🟡 Legend\n"
+            "🆔 2101\n"
+            "Guessed globally 16 times."
+        )
+        self.assertEqual(extract_name(card), "Furina [🍰]")
+        self.assertEqual(extract_character_id(card), "2101")
+
+    def test_preserves_bracketed_character_suffix(self):
+        from unified.parser import extract_name
+
+        card = "🌸 Albedo [🤖] #A\n📺 Overlord\n💎 🌸 Special Edition\n🆔 2144"
+        self.assertEqual(extract_name(card), "Albedo [🤖] #A")
+
+    def test_supports_variation_selector_on_id_emoji(self):
+        from unified.parser import extract_character_id
+
+        card = "🌸 Furina [🍰]\n🆔️ 2101"
+        self.assertEqual(extract_character_id(card), "2101")
+
+    def test_does_not_accept_flower_header_without_numeric_id_row(self):
+        from unified.parser import extract_name, extract_character_id
+
+        card = "🌸 Not a character card\n📺 Some Series\nGuessed globally 2 times."
+        self.assertIsNone(extract_name(card))
+        self.assertIsNone(extract_character_id(card))
+
+    def test_does_not_capture_unrelated_id_without_flower_header(self):
+        from unified.parser import extract_character_id
+
+        self.assertIsNone(extract_character_id("🆔 2101\nSome unrelated text"))
+
+    def test_existing_builtin_capture_parser_remains_unchanged(self):
+        from unified.parser import extract_name, extract_character_id
+
+        card = "New Character Added\n🎭 Name: Furina\n🆔 ID: 2101"
+        self.assertEqual(extract_name(card), "Furina")
+        self.assertEqual(extract_character_id(card), "2101")
+
+
+
+class OrinXExistingSourceMappingTests(unittest.TestCase):
+    def test_new_orinx_username_keeps_existing_collection_and_command(self):
+        from config import BOT_SOURCE_COLLECTION, BOT_SOURCE_OUTPUT_COMMAND, BOT_SOURCE_USER_ID
+
+        username = "@orinx_character_bot"
+        self.assertEqual(BOT_SOURCE_COLLECTION[username], "items_orinx_waifu")
+        self.assertEqual(BOT_SOURCE_OUTPUT_COMMAND[username], "/orin")
+        # Telegram username changes do not change the bot's numeric user ID.
+        self.assertEqual(BOT_SOURCE_USER_ID[8685992652], "items_orinx_waifu")
+        self.assertNotIn("@orinx_catcher_waifu_bot", BOT_SOURCE_COLLECTION)
+
+    def test_orinx_database_caption_routes_to_existing_orin_collection(self):
+        from types import SimpleNamespace
+        from services.source_resolver import _content_source
+
+        caption = (
+            "Name 📛 : L Lawliet [⛩]\n"
+            "ID 🆔 : 209\n"
+            "2026-11-20 17:42:27"
+        )
+        message = SimpleNamespace(text=caption, caption=None)
+        self.assertEqual(
+            _content_source(message),
+            ("items_orinx_waifu", "/orin"),
+        )
+
+    def test_existing_parser_extracts_current_orinx_caption_without_special_parser(self):
+        from unified.parser import extract_name, extract_character_id
+
+        caption = "Name 📛 : L Lawliet [⛩]\nID 🆔 : 209\n2026-11-20 17:42:27"
+        self.assertEqual(extract_name(caption), "L Lawliet [⛩]")
+        self.assertEqual(extract_character_id(caption), "209")
+
+    def test_existing_waifu_cheat_builtin_parser_is_preserved(self):
+        from unified.parser import extract_name, extract_character_id
+
+        caption = "🌸 Furina [🍰]\n📺 Genshin Impact\n🆔 2101"
+        self.assertEqual(extract_name(caption), "Furina [🍰]")
+        self.assertEqual(extract_character_id(caption), "2101")
+
+
+class OwnerSuppliedHelperCommandWizardTests(unittest.TestCase):
+    def test_helper_command_steps_are_explicit_after_parser(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        parser = source.split('elif step == "parser":', 1)[1].split('elif step == "name_label":', 1)[0]
+        self.assertIn('"helper_start_command"', parser)
+        self.assertIn('"helper_start_command": "Helper account', source)
+        self.assertIn('"helper_resume_command": "Helper account', source)
+
+    def test_inline_dm_only_need_two_owner_commands(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn('needs_helper = item.get("mode") in {"inline", "dm", "both"}', source)
+        self.assertIn('needs_forward_helper = item.get("mode") in {"forward", "both"}', source)
+
+    def test_forward_modes_require_two_separate_forward_commands(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn('"helper_forward_start_command"', source)
+        self.assertIn('"helper_forward_resume_command"', source)
+
+    def test_dynamic_manager_routes_owner_supplied_commands(self):
+        from pathlib import Path
+        source = Path("helper/manager.py").read_text(encoding="utf-8")
+        self.assertIn('DYNAMIC_INLINE_COMMANDS[', source)
+        self.assertIn('DYNAMIC_DM_COMMANDS[', source)
+        self.assertIn('DYNAMIC_FORWARD_COMMANDS[', source)
+        self.assertNotIn('SOURCES[key] = (username, (f"/start{key}"', source)
+
+
+class DynamicHelperCommandIsolationTests(unittest.TestCase):
+    def test_dynamic_inline_uses_registered_bot_without_mutating_builtin_map(self):
+        from pathlib import Path
+        source = Path("helper/manager.py").read_text(encoding="utf-8")
+        self.assertIn("bot_override=None", source)
+        self.assertIn("bot = bot_override or SOURCES[key][0]", source)
+        self.assertNotIn('SOURCES[key] = (username, (str(item.get("helper_start_command")', source)
+
+    def test_dynamic_forward_uses_registered_chat_without_mutating_builtin_map(self):
+        from pathlib import Path
+        source = Path("helper/manager.py").read_text(encoding="utf-8")
+        self.assertIn("source_override=None", source)
+        self.assertIn("source = source_override or FORWARD_SOURCES.get(key)", source)
+        self.assertIn("start_forward(key, delay, count, source_override=source)", source)
+
+    def test_forward_only_wizard_skips_inline_dm_commands(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn('("helper_forward_start_command" if draft.get("mode") == "forward"', source)
+        self.assertIn('needs_helper = item.get("mode") in {"inline", "dm", "both"}', source)
+
+    def test_owner_commands_cannot_shadow_builtin_helper_commands(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn("builtin_commands", source)
+        self.assertIn("A helper command conflicts with an existing built-in Helper command.", source)
+
+
+class ExistingDynamicSourceHelperEditTests(unittest.TestCase):
+    def test_editbot_is_owner_dm_only_and_targets_stable_registration(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        handler = source.split('@router.message(Command("editbot"))', 1)[1].split('def _helper_edit_preview', 1)[0]
+        self.assertIn("_owner_dm(message)", handler)
+        self.assertIn('"registration_id"', handler)
+        self.assertIn('"edit_helper_start"', handler)
+
+    def test_edit_update_is_limited_to_four_helper_command_fields(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        updater = source.split("async def _save_helper_command_edit", 1)[1].split('@router.message(Command("listbots"))', 1)[0]
+        self.assertIn('f"sources.$.{field}"', updater)
+        self.assertIn('"sources.registration_id": registration_id', updater)
+        self.assertIn('"sources.version": original_version', updater)
+        self.assertIn('"$inc": {"sources.$.version": 1}', updater)
+        self.assertNotIn('"$unset"', updater)
+        self.assertNotIn('"sources.$.bot_username"', updater)
+
+    def test_helper_edit_steps_share_the_same_wizard_dispatch_chain(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        handler = source.split("async def source_registration_wizard", 1)[1]
+        self.assertIn('        elif step == "name":', handler)
+        self.assertNotIn('        if step == "name":', handler)
+
+    def test_helper_edit_uses_preview_confirm_and_cancel(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn("HELPER COMMAND EDIT PREVIEW", source)
+        self.assertIn('"edit_confirm"', source)
+        self.assertIn('Save: /confirm', source)
+        self.assertIn('Command("cancel")', source)
+
+    def test_helper_edit_validates_required_commands_by_mode(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        updater = source.split("async def _save_helper_command_edit", 1)[1].split('@router.message(Command("listbots"))', 1)[0]
+        self.assertIn('needs_helper = mode in {"inline", "dm", "both"}', updater)
+        self.assertIn('needs_forward = mode in {"forward", "both"}', updater)
+
+
+
+class ExactSourceEmojiSequenceTests(unittest.TestCase):
+    def test_preserves_cook_emoji_inside_character_name_suffix(self):
+        from unified.parser import clean_name, extract_name
+        original = "Roronoa Zoro [👨‍🍳]"
+        caption = "Name 🔥 : " + original + "\nID 🆔 : 1"
+        self.assertEqual(clean_name(original), original)
+        self.assertEqual(extract_name("Name : " + original + "\nID : 1"), original)
+        self.assertEqual(extract_name(caption), original)
+
+    def test_preserves_skin_tone_zwj_variation_and_keycap_sequences(self):
+        from unified.parser import norm, clean_name
+        samples = ["Name [👨‍🍳]", "Name [👨🏽‍🍳]", "Name [❤️]", "Name [1️⃣]", "Name [🏳️‍🌈]"]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(norm(sample), sample)
+                self.assertEqual(clean_name(sample), sample)
+
+    def test_still_removes_field_label_without_changing_suffix(self):
+        from unified.parser import extract_name
+        self.assertEqual(extract_name("Name 📛 : Character [👨‍🍳]\nID 🆔 : 123"), "Character [👨‍🍳]")

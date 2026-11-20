@@ -111,12 +111,20 @@ class Settings:
     bot_api_session_limit: int = max(32, min(500, _int("BOT_API_SESSION_LIMIT", 100)))
     # Retain terminal broadcast jobs and delivery history for this many days.
     broadcast_data_retention_days: int = max(1, min(365, _int("BROADCAST_DATA_RETENTION_DAYS", 30)))
+    # 12-vCPU VPS broadcast profile: enough concurrent I/O workers to keep
+    # the conservative Telegram-wide rate gate busy without exceeding API limits.
+    broadcast_workers: int = max(1, min(24, _int("BROADCAST_WORKERS", 20)))
+    # Telegram's free bulk limit is about 30 messages/sec; keep a safety margin.
+    broadcast_rate_per_second: float = max(1.0, min(27.0, float(os.getenv("BROADCAST_RATE_PER_SECOND", "25.0") or 25.0)))
+    broadcast_delivery_batch_size: int = max(100, min(1000, _int("BROADCAST_DELIVERY_BATCH_SIZE", 800)))
+    broadcast_chat_interval_ms: int = max(1000, min(10000, _int("BROADCAST_CHAT_INTERVAL_MS", 1000)))
+    broadcast_progress_update_every: int = max(50, min(500, _int("BROADCAST_PROGRESS_UPDATE_EVERY", 100)))
     # VPS/Mongo latency tuning; all values remain environment-configurable.
     mongo_server_selection_timeout_ms: int = _int("MONGO_SERVER_SELECTION_TIMEOUT_MS", 2500)
     mongo_connect_timeout_ms: int = _int("MONGO_CONNECT_TIMEOUT_MS", 2500)
     mongo_socket_timeout_ms: int = _int("MONGO_SOCKET_TIMEOUT_MS", 8000)
-    mongo_min_pool_size: int = _int("MONGO_MIN_POOL_SIZE", 2)
-    mongo_max_pool_size: int = _int("MONGO_MAX_POOL_SIZE", 24)
+    mongo_min_pool_size: int = _int("MONGO_MIN_POOL_SIZE", 4)
+    mongo_max_pool_size: int = _int("MONGO_MAX_POOL_SIZE", 32)
     mongo_max_idle_time_ms: int = _int("MONGO_MAX_IDLE_TIME_MS", 120000)
 
 

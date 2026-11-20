@@ -253,6 +253,10 @@ async def save_character(
             }
         else:
             key = None
+    elif character_id and source_variant:
+        # A shared lookup source_key may host several bots. Keep their native
+        # numeric IDs isolated so equal IDs cannot overwrite sibling records.
+        key = {"source_key": source_key, "source_variant": source_variant, "character_id": character_id}
     elif character_id:
         key = {"source_key": source_key, "character_id": character_id}
     elif sha:
@@ -315,6 +319,8 @@ async def save_character(
     }
     if character_id is None:
         media_fields.pop("character_id", None)
+    if source_variant and source_key != "items_grabber_fw":
+        media_fields["source_variant"] = source_variant
     if source_key == "items_grabber_fw":
         # Keep known bot variants stable. Unknown bot identity stays UID/SHA/
         # origin-based for upserts; this variant is only an index discriminator.

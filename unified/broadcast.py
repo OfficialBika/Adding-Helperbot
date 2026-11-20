@@ -40,12 +40,14 @@ ACTIVE_CHAT_TYPES = frozenset({"private", "group", "supergroup"})
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
 BROADCAST_CONFIRM_TTL = timedelta(minutes=15)
 BROADCAST_MAX_ATTEMPTS = 4
-BROADCAST_CONCURRENCY = 4
-BROADCAST_RATE_PER_SECOND = 18.0
-BROADCAST_DELIVERY_BATCH_SIZE = 400
+# Telegram's global limits vary by chat type/method. Keep a conservative
+# process-wide pace and bound worker parallelism separately via environment.
+BROADCAST_CONCURRENCY = max(1, min(24, int(getattr(settings, "broadcast_workers", 20))))
+BROADCAST_RATE_PER_SECOND = float(getattr(settings, "broadcast_rate_per_second", 25.0))
+BROADCAST_DELIVERY_BATCH_SIZE = max(100, min(1000, int(getattr(settings, "broadcast_delivery_batch_size", 800))))
 CHAT_REGISTRY_TOUCH_SECONDS = 600.0
 CHAT_REGISTRY_MAX_MEMORY_ENTRIES = 50_000
-PROGRESS_UPDATE_EVERY = 25
+PROGRESS_UPDATE_EVERY = max(50, min(500, int(getattr(settings, "broadcast_progress_update_every", 100))))
 
 bot_chats = db.bot_chats
 broadcast_jobs = db.broadcast_jobs
@@ -361,10 +363,38 @@ async def _handle_dispatch_error(event: ErrorEvent, bot: Bot) -> bool:
 
 
 def _target_query() -> dict[str, Any]:
+    """Return only currently eligible, opted-in chats from the Mongo registry."""
     return {
         "status": "active",
         "chat_type": {"$in": sorted(ACTIVE_CHAT_TYPES)},
         "chat_id": {"$nin": [int(value) for value in settings.owner_ids]},
+    }
+
+
+def _target_query_for_type(chat_type: str | None = None) -> dict[str, Any]:
+    query = _target_query()
+    if chat_type == "private":
+        query["chat_type"] = "private"
+    elif chat_type == "group":
+        query["chat_type"] = {"$in": sorted(GROUP_CHAT_TYPES)}
+    return query
+
+
+async def get_broadcast_audience_counts() -> dict[str, int]:
+    """Return MongoDB counts using the exact eligibility filter used for delivery."""
+    users, groups, total, registered_users, registered_groups = await asyncio.gather(
+        bot_chats.count_documents(_target_query_for_type("private")),
+        bot_chats.count_documents(_target_query_for_type("group")),
+        bot_chats.count_documents(_target_query()),
+        bot_chats.count_documents({"chat_type": "private"}),
+        bot_chats.count_documents({"chat_type": {"$in": sorted(GROUP_CHAT_TYPES)}}),
+    )
+    return {
+        "eligible_users": int(users),
+        "eligible_groups": int(groups),
+        "eligible_total": int(total),
+        "registered_users": int(registered_users),
+        "registered_groups": int(registered_groups),
     }
 
 
@@ -413,24 +443,136 @@ async def _edit_control_message(bot: Bot, job: dict[str, Any]) -> None:
 
 
 class _RateLimiter:
-    """A shared pacing gate across concurrent broadcast workers."""
+    """Shared monotonic rate gate with dynamic 429 backoff."""
 
     def __init__(self, rate_per_second: float) -> None:
         self._interval = 1.0 / max(rate_per_second, 1.0)
         self._next_at = 0.0
+        self._blocked_until = 0.0
         self._lock = asyncio.Lock()
 
     async def wait(self) -> None:
-        async with self._lock:
-            now = time.monotonic()
-            slot = max(now, self._next_at)
-            self._next_at = slot + self._interval
-            delay = slot - now
-        if delay > 0:
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                slot = max(now, self._next_at, self._blocked_until)
+                self._next_at = slot + self._interval
+                delay = slot - now
+            if delay <= 0:
+                return
             await asyncio.sleep(delay)
+
+    async def defer(self, seconds: float) -> None:
+        """Pause all workers after Telegram signals a global rate limit."""
+        delay = max(1.0, min(float(seconds), 3600.0))
+        async with self._lock:
+            self._blocked_until = max(self._blocked_until, time.monotonic() + delay)
+
+
+class _ChatRateLimiter:
+    """Serialize sends to a chat and respect a chat-specific RetryAfter pause."""
+
+    def __init__(self, interval_seconds: float) -> None:
+        self.interval = max(1.0, float(interval_seconds))
+        self._next_at: dict[int, float] = {}
+        self._locks: dict[int, asyncio.Lock] = {}
+        self._guard = asyncio.Lock()
+
+    def _lock_for(self, chat_id: int) -> asyncio.Lock:
+        return self._locks.setdefault(int(chat_id), asyncio.Lock())
+
+    def _prune(self) -> None:
+        # Keep memory bounded for bots that have seen very large chat counts.
+        if len(self._locks) <= 50000:
+            return
+        removable = [chat_id for chat_id, lock in self._locks.items() if not lock.locked()]
+        for chat_id in removable[: len(self._locks) - 40000]:
+            self._locks.pop(chat_id, None)
+            self._next_at.pop(chat_id, None)
+
+    async def acquire(self, chat_id: int) -> asyncio.Lock:
+        lock = self._lock_for(chat_id)
+        await lock.acquire()
+        self._prune()
+        try:
+            wait = self._next_at.get(int(chat_id), 0.0) - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._next_at[int(chat_id)] = time.monotonic() + self.interval
+            return lock
+        except BaseException:
+            lock.release()
+            raise
+
+    async def defer(self, chat_id: int, seconds: float) -> None:
+        pause_until = time.monotonic() + max(1.0, min(float(seconds), 3600.0))
+        async with self._lock_for(chat_id):
+            self._next_at[int(chat_id)] = max(self._next_at.get(int(chat_id), 0.0), pause_until)
 
 
 _rate_limiter = _RateLimiter(BROADCAST_RATE_PER_SECOND)
+_chat_rate_limiter = _ChatRateLimiter(settings.broadcast_chat_interval_ms / 1000.0)
+
+
+def _broadcast_metrics_snapshot() -> dict[str, int | float]:
+    """Small in-process operational snapshot for logs and staging tests."""
+    return {
+        "workers": BROADCAST_CONCURRENCY,
+        "rate_per_second": BROADCAST_RATE_PER_SECOND,
+        "delivery_batch_size": BROADCAST_DELIVERY_BATCH_SIZE,
+        "chat_interval_ms": settings.broadcast_chat_interval_ms,
+        "active_jobs": sum(1 for task in (_worker_task,) if task is not None and not task.done()),
+    }
+
+
+async def _deliver_with_retry(
+    send_operation,
+    *,
+    chat_id: int,
+    cancel_event: asyncio.Event,
+) -> tuple[bool, str]:
+    """Send once at a time; retry only classified transient Telegram failures."""
+    last_error = "Unknown error"
+    for attempt in range(1, BROADCAST_MAX_ATTEMPTS + 1):
+        if cancel_event.is_set():
+            return False, "cancelled"
+        await _rate_limiter.wait()
+        if cancel_event.is_set():
+            return False, "cancelled"
+        lock: asyncio.Lock | None = None
+        try:
+            lock = await _chat_rate_limiter.acquire(chat_id)
+            if cancel_event.is_set():
+                return False, "cancelled"
+            await send_operation()
+            return True, ""
+        except TelegramRetryAfter as exc:
+            last_error = f"rate limited; retry_after={exc.retry_after}s"
+            await _rate_limiter.defer(float(exc.retry_after))
+            if lock and lock.locked():
+                lock.release()
+                lock = None
+            await _chat_rate_limiter.defer(chat_id, float(exc.retry_after))
+            if attempt >= BROADCAST_MAX_ATTEMPTS:
+                break
+            try:
+                await asyncio.wait_for(cancel_event.wait(), timeout=max(float(exc.retry_after), 1.0))
+                return False, "cancelled"
+            except TimeoutError:
+                pass
+        except (TelegramNetworkError, aiohttp.ClientError, TimeoutError, OSError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if attempt >= BROADCAST_MAX_ATTEMPTS:
+                break
+            try:
+                await asyncio.wait_for(cancel_event.wait(), timeout=min(2 ** (attempt - 1), 8))
+                return False, "cancelled"
+            except TimeoutError:
+                pass
+        finally:
+            if lock and lock.locked():
+                lock.release()
+    return False, last_error
 
 
 async def _mark_chat_unreachable(chat_id: int, reason: str) -> None:
@@ -457,79 +599,42 @@ async def _deliver_to_chat(
 ) -> tuple[bool, str]:
     chat_id = int(delivery["chat_id"])
     chat_type = str(delivery.get("chat_type") or "")
-    last_error = "Unknown error"
 
-    for attempt in range(1, BROADCAST_MAX_ATTEMPTS + 1):
-        if cancel_event.is_set():
-            return False, "cancelled"
-        await _rate_limiter.wait()
-        if cancel_event.is_set():
-            return False, "cancelled"
-        try:
-            if job.get("payload_type") == "copy":
-                await bot.copy_message(
-                    chat_id=chat_id,
-                    from_chat_id=int(job["source_chat_id"]),
-                    message_id=int(job["source_message_id"]),
-                )
-            else:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=str(job.get("text") or ""),
-                    parse_mode=None,
-                )
-            return True, ""
-        except TelegramRetryAfter as exc:
-            last_error = f"rate limited; retry_after={exc.retry_after}s"
-            if attempt >= BROADCAST_MAX_ATTEMPTS:
-                break
-            try:
-                await asyncio.wait_for(
-                    cancel_event.wait(),
-                    timeout=max(float(exc.retry_after), 1.0),
-                )
-                return False, "cancelled"
-            except TimeoutError:
-                pass
-        except (TelegramNetworkError, aiohttp.ClientError, TimeoutError, OSError) as exc:
-            last_error = f"{type(exc).__name__}: {exc}"
-            if attempt >= BROADCAST_MAX_ATTEMPTS:
-                break
-            try:
-                await asyncio.wait_for(
-                    cancel_event.wait(),
-                    timeout=min(2 ** (attempt - 1), 8),
-                )
-                return False, "cancelled"
-            except TimeoutError:
-                pass
-        except (TelegramBadRequest, TelegramForbiddenError) as exc:
-            last_error = f"{type(exc).__name__}: {exc}"
-            if is_send_permission_error(exc) and chat_type in GROUP_CHAT_TYPES:
-                record = await bot_chats.find_one({"chat_id": chat_id}, {"title": 1, "username": 1})
-                chat = Chat(
-                    id=chat_id,
-                    type=chat_type,
-                    title=str((record or {}).get("title") or "") or None,
-                    username=str((record or {}).get("username") or "") or None,
-                )
-                await auto_leave_restricted_group(bot, chat, exc)
-            elif any(
-                marker in str(exc).lower()
-                for marker in ("bot was blocked by the user", "user is deactivated", "chat not found")
-            ):
-                await _mark_chat_unreachable(chat_id, str(exc))
-            elif "bot was kicked" in str(exc).lower() and chat_type in GROUP_CHAT_TYPES:
-                await _mark_chat_unreachable(chat_id, str(exc))
-            return False, last_error
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            last_error = f"{type(exc).__name__}: {exc}"
-            log.exception("BROADCAST delivery unexpectedly failed job=%s chat=%s", job.get("job_id"), chat_id)
-            return False, last_error
+    async def send_payload() -> None:
+        if job.get("payload_type") == "copy":
+            await bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=int(job["source_chat_id"]),
+                message_id=int(job["source_message_id"]),
+            )
+        else:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=str(job.get("text") or ""),
+                parse_mode=None,
+            )
 
-    return False, last_error
+    sent, error = await _deliver_with_retry(send_payload, chat_id=chat_id, cancel_event=cancel_event)
+    if sent or error == "cancelled":
+        return sent, error
+    if is_send_permission_error(error) and chat_type in GROUP_CHAT_TYPES:
+        record = await bot_chats.find_one({"chat_id": chat_id}, {"title": 1, "username": 1})
+        chat = Chat(
+            id=chat_id,
+            type=chat_type,
+            title=str((record or {}).get("title") or "") or None,
+            username=str((record or {}).get("username") or "") or None,
+        )
+        await auto_leave_restricted_group(bot, chat, error)
+    elif any(
+        marker in str(error).lower()
+        for marker in ("bot was blocked by the user", "user is deactivated", "chat not found")
+    ):
+        await _mark_chat_unreachable(chat_id, str(error))
+    elif "bot was kicked" in str(error).lower() and chat_type in GROUP_CHAT_TYPES:
+        await _mark_chat_unreachable(chat_id, str(error))
+    return False, error
+
 
 
 async def _initialize_job_deliveries(job: dict[str, Any]) -> int:
@@ -823,6 +928,7 @@ async def stop_broadcast_worker() -> None:
 
 
 async def _stage_broadcast(message: Message, command: CommandObject) -> None:
+    """Start an owner broadcast immediately; reply payloads are copied, never re-uploaded."""
     if not message.from_user or message.from_user.id not in settings.owner_ids:
         return
     if _enum_value(message.chat.type) != "private":
@@ -830,11 +936,11 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
         return
 
     args = str(command.args or "").strip()
-    if args.lower() in {"status", "cancel"}:
-        if args.lower() == "status":
-            await _send_broadcast_status(message)
-        else:
-            await _cancel_latest_broadcast(message)
+    if args.lower() == "status":
+        await _send_broadcast_status(message)
+        return
+    if args.lower() == "cancel":
+        await _cancel_latest_broadcast(message)
         return
 
     replied = getattr(message, "reply_to_message", None)
@@ -851,7 +957,7 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
         await message.reply(
             "Usage:\n"
             "• Send <code>/broadcast Your announcement</code> for plain text.\n"
-            "• Reply to a message with <code>/broadcast</code> to copy text or media.\n"
+            "• Reply to a message with <code>/broadcast</code> to copy text or media immediately.\n"
             "• <code>/broadcast status</code> to view recent jobs.\n"
             "• <code>/broadcast cancel</code> to cancel the latest active job."
         )
@@ -867,12 +973,12 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
     job = {
         "job_id": job_id,
         "creator_id": int(message.from_user.id),
-        "status": "pending_confirmation",
+        "status": "queued",
         "payload_type": payload_type,
         **payload,
         "created_at": now,
         "updated_at": now,
-        "expires_at": now + BROADCAST_CONFIRM_TTL,
+        "queued_at": now,
         "target_count": 0,
         "sent_count": 0,
         "failed_count": 0,
@@ -880,43 +986,29 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
         "skipped_count": 0,
         "targets_initialized": False,
         "cancel_requested": False,
+        "immediate_start": True,
     }
     await broadcast_jobs.insert_one(job)
-
-    preview_text = (
-        "⚠️ <b>Confirm broadcast</b>\n\n"
-        f"Current eligible destinations: <code>{recipients}</code>\n"
-        f"Payload: <code>{'text' if payload_type == 'text' else 'copied message/media'}</code>\n"
-        "Recipients are active chats the bot has seen or groups where it is a member. "
-        "Private chats opted out of broadcasts are excluded.\n\n"
-        "This action sends to every eligible destination. Confirm within 15 minutes."
-    )
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Confirm", callback_data=f"bc:confirm:{job_id}"),
-                InlineKeyboardButton(text="✖ Cancel", callback_data=f"bc:cancel:{job_id}"),
-            ]
-        ]
-    )
+    progress_message = None
     try:
-        preview = await message.reply(preview_text, reply_markup=keyboard)
+        progress_message = await message.reply(
+            "🚀 <b>Broadcast started</b>\n\n"
+            f"Job: <code>{job_id}</code>\n"
+            f"Eligible destinations: <code>{recipients:,}</code>\n"
+            f"Payload: <code>{'text' if payload_type == 'text' else 'copied message/media'}</code>\n"
+            "The message is being copied to eligible chats.\n"
+            "Use <code>/broadcast status</code> to monitor or <code>/broadcast cancel</code> to stop."
+        )
         await broadcast_jobs.update_one(
             {"job_id": job_id},
-            {
-                "$set": {
-                    "control_chat_id": int(preview.chat.id),
-                    "control_message_id": int(preview.message_id),
-                    "updated_at": _now(),
-                }
-            },
+            {"$set": {
+                "control_chat_id": int(progress_message.chat.id),
+                "control_message_id": int(progress_message.message_id),
+            }},
         )
     except Exception:
-        await broadcast_jobs.update_one(
-            {"job_id": job_id},
-            {"$set": {"status": "failed_preview", "updated_at": _now()}},
-        )
-        raise
+        log.exception("BROADCAST start notice failed job=%s; queued job remains recoverable", job_id)
+    _wakeup.set()
 
 
 async def _send_broadcast_status(message: Message) -> None:
@@ -952,20 +1044,33 @@ async def _cancel_latest_broadcast(message: Message) -> None:
         await message.reply("No active broadcast job to cancel.")
         return
 
+    # Immediate-start jobs can be cancelled only while still queued/running;
+    # they no longer have a confirmation step.
     job_id = str(job["job_id"])
     if job.get("status") == "running":
-        await broadcast_jobs.update_one(
+        cancel_result = await broadcast_jobs.update_one(
             {"job_id": job_id, "status": "running"},
             {"$set": {"cancel_requested": True, "updated_at": _now()}},
         )
-        _cancel_events.setdefault(job_id, asyncio.Event()).set()
-        await message.reply(f"Cancellation requested for <code>{job_id[:8]}</code>.")
+        if cancel_result.modified_count:
+            _cancel_events.setdefault(job_id, asyncio.Event()).set()
+            await message.reply(f"Cancellation requested for <code>{job_id[:8]}</code>.")
+        else:
+            await message.reply("Broadcast state changed; check /broadcast status.")
     else:
-        await broadcast_jobs.update_one(
+        cancelled = await broadcast_jobs.update_one(
             {"job_id": job_id, "status": {"$in": ["pending_confirmation", "queued"]}},
             {"$set": {"status": "cancelled", "completed_at": _now(), "updated_at": _now()}},
         )
-        await message.reply(f"Broadcast <code>{job_id[:8]}</code> cancelled.")
+        if cancelled.modified_count:
+            await broadcast_deliveries.update_many(
+                {"job_id": job_id, "status": "pending"},
+                {"$set": {"status": "skipped", "last_error": "Cancelled before delivery", "updated_at": _now()}},
+            )
+            await _reconcile_job_counts(job_id)
+            await message.reply(f"Broadcast <code>{job_id[:8]}</code> cancelled.")
+        else:
+            await message.reply("Broadcast has already started or finished; check /broadcast status.")
 
 
 @broadcast_router.message(Command("broadcast"))
@@ -1013,88 +1118,10 @@ async def startbroadcast_command(message: Message) -> None:
     await message.reply("✅ You have opted in to bot broadcasts again.")
 
 
-@broadcast_router.callback_query(F.data.startswith("bc:"))
-async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
-    if not query.from_user or query.from_user.id not in settings.owner_ids:
-        await query.answer("Not authorized.", show_alert=True)
-        return
-
-    parts = str(query.data or "").split(":")
-    if len(parts) != 3 or parts[1] not in {"confirm", "cancel"}:
-        await query.answer("Invalid broadcast action.", show_alert=True)
-        return
-    action, job_id = parts[1], parts[2]
-    job = await broadcast_jobs.find_one(
-        {"job_id": job_id, "creator_id": int(query.from_user.id)},
-        {"_id": 0},
-    )
-    if not job:
-        await query.answer("Broadcast job was not found.", show_alert=True)
-        return
-    if job.get("status") != "pending_confirmation":
-        await query.answer(f"Already {str(job.get('status') or 'handled').replace('_', ' ')}.", show_alert=True)
-        return
-    if job.get("expires_at") and job["expires_at"] <= _now():
-        await broadcast_jobs.update_one(
-            {"job_id": job_id, "status": "pending_confirmation"},
-            {"$set": {"status": "expired", "updated_at": _now()}},
-        )
-        await query.answer("Confirmation expired. Create a new broadcast.", show_alert=True)
-        try:
-            if query.message:
-                await query.message.edit_text("⌛ Broadcast confirmation expired.")
-        except Exception:
-            log.exception("BROADCAST expiry message edit failed job=%s", job_id)
-        return
-
-    if action == "cancel":
-        cancelled = await broadcast_jobs.update_one(
-            {"job_id": job_id, "status": "pending_confirmation"},
-            {"$set": {"status": "cancelled", "completed_at": _now(), "updated_at": _now()}},
-        )
-        if not cancelled.modified_count:
-            await query.answer("This broadcast was already handled.", show_alert=True)
-            return
-        await query.answer("Broadcast cancelled.")
-        try:
-            if query.message:
-                await query.message.edit_text("✖ Broadcast cancelled.")
-        except Exception:
-            log.exception("BROADCAST cancel message edit failed job=%s", job_id)
-        return
-
-    updated = await broadcast_jobs.find_one_and_update(
-        {"job_id": job_id, "status": "pending_confirmation"},
-        {
-            "$set": {
-                "status": "queued",
-                "confirmed_at": _now(),
-                "updated_at": _now(),
-                "control_chat_id": int(query.message.chat.id) if query.message else None,
-                "control_message_id": int(query.message.message_id) if query.message else None,
-            }
-        },
-        return_document=ReturnDocument.AFTER,
-    )
-    if not updated:
-        await query.answer("This broadcast was already handled.", show_alert=True)
-        return
-    try:
-        await query.answer("Broadcast queued.")
-        if query.message:
-            await query.message.edit_text(
-                "📣 <b>Broadcast queued</b>\n\n"
-                f"Job: <code>{job_id}</code>\n"
-                "Use <code>/broadcast status</code> to check progress or "
-                "<code>/broadcast cancel</code> to request cancellation."
-            )
-    except Exception:
-        log.exception("BROADCAST queue message edit failed job=%s", job_id)
-    finally:
-        # Update the confirmation message before the worker can edit progress.
-        _wakeup.set()
 
 
+# Keep this as the final broadcast-router handler: callback updates must be
+# routed before the catch-all chat/member update fallback.
 @broadcast_router.my_chat_member()
 async def bot_membership_updated(event: ChatMemberUpdated) -> None:
     # ChatRegistryMiddleware records membership state; this handler enables

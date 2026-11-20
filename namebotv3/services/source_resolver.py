@@ -123,6 +123,7 @@ TITLE_SOURCE_COLLECTION: dict[str, str] = {
     "ziceko data": "items_super_zeko",
     "orinx waifu": "items_orinx_waifu",
     "orinx waifu bot": "items_orinx_waifu",
+    "orinx character database": "items_orinx_waifu",
     "timunagalaya": "items_orinx_waifu",
     "immortal donghua": "items_immortal_donghua",
     "donghua database": "items_immortal_donghua",
@@ -144,6 +145,7 @@ TITLE_OUTPUT_COMMAND: dict[str, str] = {
     "myanmar character": "/ziceko",
     "super zeko": "/ziceko",
     "orinx waifu": "/orin",
+    "orinx character database": "/orin",
     "timunagalaya": "/orin",
     "immortal donghua": "/dao",
     "donghua database": "/dao",
@@ -167,6 +169,9 @@ CONTENT_SOURCE_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
     (re.compile(r"media\s*\+\s*.*?name\s*:.*(?:\n|$).*rarity\s*:.*(?:\n|$).*anime\s*:.*(?:\n|$).*id\s*:", re.I | re.S), "items_grab_your_waifu", "/grab"),
     (re.compile(r"new\s+waifu\s+added|item\s*id\s*[:：].*\bname\b\s*[:：].*\brarity\b\s*[:：]|waifuxgrab", re.I | re.S), "items_waifux_grab", "/grab"),
     (re.compile(r"new\s+character\s+added\s+to\s+the\s+bot|char\s*id\s*[:：].*\bname\b\s*[:：].*\banime\b\s*[:：].*\brarity\b\s*[:：]", re.I | re.S), "items_senpai_catcher", "/pick"),
+    # OrinX Character Database: current forwarded Name/ID caption format.
+    (re.compile(r"(?:^|\n)\s*Name\s+📛(?:\ufe0f)?\s*[:：]\s*.+?(?:\n|$).*?(?:^|\n)\s*ID\s+🆔(?:\ufe0f)?\s*[:：]\s*\d+(?:\n|$)", re.I | re.S | re.M), "items_orinx_waifu", "/orin"),
+    # Keep recognition of older OrinX database cards during transition.
     (re.compile(r"character\s+database.*\bid\b\s*[:：].*\bname\b\s*[:：].*\bseries\b\s*[:：].*\brarity\b", re.I | re.S), "items_orinx_waifu", "/orin"),
     (re.compile(r"card\s+drop|myanmar\s+character|/ziceko|တင်ပြီးပြီ|uploaded\s*\(/?li\)|📛.*name|⭐.*rarity", re.I | re.S), "items_super_zeko", "/ziceko"),
     (re.compile(r"(?:saved|updated).*\bname\b\s*[:：].*\bid\b\s*[:：].*\brarity\b\s*[:：].*\banime\b\s*[:：]", re.I | re.S), "items_immortal_donghua", "/dao"),
@@ -419,6 +424,60 @@ def resolve_trusted_inline_collection(message: Message) -> str | None:
     if re.search(r"media\s*\+\s*.*?name\s*:.*(?:rarity|anime).*🆔\s*:?", text, re.I | re.S):
         return "items_grab_your_waifu"
     return None
+
+
+
+_BASE_BOT_SOURCE_COLLECTION = dict(BOT_SOURCE_COLLECTION)
+_BASE_BOT_SOURCE_OUTPUT_COMMAND = dict(BOT_SOURCE_OUTPUT_COMMAND)
+_BASE_BOT_SOURCE_CHAT_ID = dict(BOT_SOURCE_CHAT_ID)
+_BASE_COMMAND_TO_COLLECTIONS = {key: list(value) for key, value in COMMAND_TO_COLLECTIONS.items()}
+
+
+def install_dynamic_source_registry(sources: list[dict]) -> None:
+    """Rebuild dynamic maps atomically while preserving every built-in mapping."""
+    bot_collection = dict(_BASE_BOT_SOURCE_COLLECTION)
+    bot_output = dict(_BASE_BOT_SOURCE_OUTPUT_COMMAND)
+    bot_chat = dict(_BASE_BOT_SOURCE_CHAT_ID)
+    command_map = {key: list(value) for key, value in _BASE_COMMAND_TO_COLLECTIONS.items()}
+    for item in sources:
+        if not item.get("enabled", True):
+            continue
+        source_key = str(item.get("source_key") or "").strip().lower()
+        command = str(item.get("output_command") or "").strip().lower()
+        if not source_key or not command:
+            continue
+        values = command_map.setdefault(command, [])
+        if source_key not in values:
+            values.append(source_key)
+        username = str(item.get("bot_username") or "").strip().lower()
+        if username:
+            # A built-in bot identity is immutable through dynamic registration.
+            base_key = _BASE_BOT_SOURCE_COLLECTION.get(username)
+            if base_key and base_key != source_key:
+                continue
+            if username not in _BASE_BOT_SOURCE_COLLECTION:
+                bot_collection[username] = source_key
+                bot_output[username] = command
+        forward_source = str(item.get("forward_source") or "").strip().lower()
+        if forward_source:
+            if forward_source.startswith("@"):
+                # Forward channel usernames use the same resolver source map.
+                if forward_source not in _BASE_BOT_SOURCE_COLLECTION:
+                    bot_collection[forward_source] = source_key
+                    bot_output[forward_source] = command
+            elif forward_source.lstrip("-").isdigit():
+                chat_id = int(forward_source)
+                if chat_id not in _BASE_BOT_SOURCE_CHAT_ID:
+                    bot_chat[chat_id] = source_key
+    # Replace module maps only after the complete next generation is built.
+    BOT_SOURCE_COLLECTION.clear()
+    BOT_SOURCE_COLLECTION.update(bot_collection)
+    BOT_SOURCE_OUTPUT_COMMAND.clear()
+    BOT_SOURCE_OUTPUT_COMMAND.update(bot_output)
+    BOT_SOURCE_CHAT_ID.clear()
+    BOT_SOURCE_CHAT_ID.update(bot_chat)
+    COMMAND_TO_COLLECTIONS.clear()
+    COMMAND_TO_COLLECTIONS.update(command_map)
 
 
 def resolve_source_collection(message: Message) -> str | None:
