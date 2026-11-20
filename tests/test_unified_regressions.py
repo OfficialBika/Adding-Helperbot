@@ -956,6 +956,13 @@ class ExistingDynamicSourceHelperEditTests(unittest.TestCase):
         self.assertNotIn('"$unset"', updater)
         self.assertNotIn('"sources.$.bot_username"', updater)
 
+    def test_helper_edit_steps_share_the_same_wizard_dispatch_chain(self):
+        from pathlib import Path
+        source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        handler = source.split("async def _handle_pending", 1)[1]
+        self.assertIn('        elif step == "name":', handler)
+        self.assertNotIn('        if step == "name":', handler)
+
     def test_helper_edit_uses_preview_confirm_and_cancel(self):
         from pathlib import Path
         source = Path("unified/source_registry.py").read_text(encoding="utf-8")
