@@ -429,14 +429,11 @@ _BASE_COMMAND_TO_COLLECTIONS = {key: list(value) for key, value in COMMAND_TO_CO
 
 
 def install_dynamic_source_registry(sources: list[dict]) -> None:
-    BOT_SOURCE_COLLECTION.clear()
-    BOT_SOURCE_COLLECTION.update(_BASE_BOT_SOURCE_COLLECTION)
-    BOT_SOURCE_OUTPUT_COMMAND.clear()
-    BOT_SOURCE_OUTPUT_COMMAND.update(_BASE_BOT_SOURCE_OUTPUT_COMMAND)
-    BOT_SOURCE_CHAT_ID.clear()
-    BOT_SOURCE_CHAT_ID.update(_BASE_BOT_SOURCE_CHAT_ID)
-    COMMAND_TO_COLLECTIONS.clear()
-    COMMAND_TO_COLLECTIONS.update({key: list(value) for key, value in _BASE_COMMAND_TO_COLLECTIONS.items()})
+    """Rebuild dynamic maps atomically while preserving every built-in mapping."""
+    bot_collection = dict(_BASE_BOT_SOURCE_COLLECTION)
+    bot_output = dict(_BASE_BOT_SOURCE_OUTPUT_COMMAND)
+    bot_chat = dict(_BASE_BOT_SOURCE_CHAT_ID)
+    command_map = {key: list(value) for key, value in _BASE_COMMAND_TO_COLLECTIONS.items()}
     for item in sources:
         if not item.get("enabled", True):
             continue
@@ -444,20 +441,38 @@ def install_dynamic_source_registry(sources: list[dict]) -> None:
         command = str(item.get("output_command") or "").strip().lower()
         if not source_key or not command:
             continue
-        values = COMMAND_TO_COLLECTIONS.setdefault(command, [])
+        values = command_map.setdefault(command, [])
         if source_key not in values:
             values.append(source_key)
-        for identity in (
-            str(item.get("bot_username") or "").strip().lower(),
-            str(item.get("forward_source") or "").strip().lower(),
-        ):
-            if not identity:
+        username = str(item.get("bot_username") or "").strip().lower()
+        if username:
+            # A built-in bot identity is immutable through dynamic registration.
+            base_key = _BASE_BOT_SOURCE_COLLECTION.get(username)
+            if base_key and base_key != source_key:
                 continue
-            if identity.startswith("@"):
-                BOT_SOURCE_COLLECTION[identity] = source_key
-                BOT_SOURCE_OUTPUT_COMMAND[identity] = command
-            elif identity.lstrip("-").isdigit():
-                BOT_SOURCE_CHAT_ID[int(identity)] = source_key
+            if username not in _BASE_BOT_SOURCE_COLLECTION:
+                bot_collection[username] = source_key
+                bot_output[username] = command
+        forward_source = str(item.get("forward_source") or "").strip().lower()
+        if forward_source:
+            if forward_source.startswith("@"):
+                # Forward channel usernames use the same resolver source map.
+                if forward_source not in _BASE_BOT_SOURCE_COLLECTION:
+                    bot_collection[forward_source] = source_key
+                    bot_output[forward_source] = command
+            elif forward_source.lstrip("-").isdigit():
+                chat_id = int(forward_source)
+                if chat_id not in _BASE_BOT_SOURCE_CHAT_ID:
+                    bot_chat[chat_id] = source_key
+    # Replace module maps only after the complete next generation is built.
+    BOT_SOURCE_COLLECTION.clear()
+    BOT_SOURCE_COLLECTION.update(bot_collection)
+    BOT_SOURCE_OUTPUT_COMMAND.clear()
+    BOT_SOURCE_OUTPUT_COMMAND.update(bot_output)
+    BOT_SOURCE_CHAT_ID.clear()
+    BOT_SOURCE_CHAT_ID.update(bot_chat)
+    COMMAND_TO_COLLECTIONS.clear()
+    COMMAND_TO_COLLECTIONS.update(command_map)
 
 
 def resolve_source_collection(message: Message) -> str | None:
