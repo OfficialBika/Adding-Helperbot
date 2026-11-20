@@ -415,24 +415,57 @@ async def _edit_control_message(bot: Bot, job: dict[str, Any]) -> None:
 
 
 class _RateLimiter:
-    """A shared pacing gate across concurrent broadcast workers."""
+    """Shared monotonic rate gate with dynamic 429 backoff."""
 
     def __init__(self, rate_per_second: float) -> None:
         self._interval = 1.0 / max(rate_per_second, 1.0)
         self._next_at = 0.0
+        self._blocked_until = 0.0
         self._lock = asyncio.Lock()
 
     async def wait(self) -> None:
-        async with self._lock:
-            now = time.monotonic()
-            slot = max(now, self._next_at)
-            self._next_at = slot + self._interval
-            delay = slot - now
-        if delay > 0:
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                slot = max(now, self._next_at, self._blocked_until)
+                self._next_at = slot + self._interval
+                delay = slot - now
+            if delay <= 0:
+                return
             await asyncio.sleep(delay)
+
+    async def defer(self, seconds: float) -> None:
+        """Pause all workers after Telegram signals a global rate limit."""
+        delay = max(1.0, min(float(seconds), 3600.0))
+        async with self._lock:
+            self._blocked_until = max(self._blocked_until, time.monotonic() + delay)
+
+
+class _ChatRateLimiter:
+    """Serialize sends to one chat and enforce a minimum per-chat interval."""
+
+    def __init__(self, interval_seconds: float) -> None:
+        self.interval = max(1.0, float(interval_seconds))
+        self._next_at: dict[int, float] = {}
+        self._locks: dict[int, asyncio.Lock] = {}
+
+    async def acquire(self, chat_id: int) -> asyncio.Lock:
+        lock = self._locks.setdefault(int(chat_id), asyncio.Lock())
+        await lock.acquire()
+        try:
+            now = time.monotonic()
+            wait = self._next_at.get(int(chat_id), 0.0) - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._next_at[int(chat_id)] = time.monotonic() + self.interval
+            return lock
+        except BaseException:
+            lock.release()
+            raise
 
 
 _rate_limiter = _RateLimiter(BROADCAST_RATE_PER_SECOND)
+_chat_rate_limiter = _ChatRateLimiter(settings.broadcast_chat_interval_ms / 1000.0)
 
 
 async def _mark_chat_unreachable(chat_id: int, reason: str) -> None:
