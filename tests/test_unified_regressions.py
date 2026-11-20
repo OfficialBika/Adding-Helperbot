@@ -575,3 +575,35 @@ class DynamicSourceRegistryHelpersTests(unittest.TestCase):
         self.assertIn("_BASE_BOT_SOURCE_COLLECTION", resolver_source)
         self.assertIn("Replace module maps only after the complete next generation is built.", resolver_source)
         self.assertNotIn("BOT_SOURCE_USER_ID.clear()", resolver_source)
+
+class BroadcastConcurrencyTests(unittest.TestCase):
+    def test_broadcast_worker_count_is_bounded_by_fifteen(self):
+        from unified.config import Settings
+        self.assertGreaterEqual(Settings.broadcast_workers, 1)
+        self.assertLessEqual(Settings.broadcast_workers, 15)
+
+    def test_broadcast_rate_and_chat_interval_are_bounded(self):
+        from unified.config import Settings
+        self.assertGreaterEqual(Settings.broadcast_rate_per_second, 1.0)
+        self.assertLessEqual(Settings.broadcast_rate_per_second, 25.0)
+        self.assertGreaterEqual(Settings.broadcast_chat_interval_ms, 1000)
+        self.assertLessEqual(Settings.broadcast_chat_interval_ms, 10000)
+
+    def test_broadcast_worker_pool_uses_configured_limit(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn('range(BROADCAST_CONCURRENCY)', source)
+        self.assertIn('getattr(settings, "broadcast_workers", 15)', source)
+
+    def test_broadcast_429_updates_global_and_chat_pacing(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn('_rate_limiter.defer(float(exc.retry_after))', source)
+        self.assertIn('_chat_rate_limiter.defer(chat_id, float(exc.retry_after))', source)
+
+    def test_broadcast_per_chat_sends_are_serialized(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn('lock = await _chat_rate_limiter.acquire(chat_id)', source)
+        self.assertIn('if lock and lock.locked():', source)
+
