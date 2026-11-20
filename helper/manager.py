@@ -1399,6 +1399,9 @@ class HelperManager:
                     FORWARD_SOURCES[key] = str(item["forward_source"])
                 if mode == "dm" and username and item.get("dm_command"):
                     DM_SOURCES[key] = (username, str(item["dm_command"]))
+                # Keep the DM worker's exact registration metadata available.
+                if mode == "dm":
+                    self._state.setdefault("dynamic_dm_sources", {})[str(item.get("registration_id") or "")] = dict(item)
         except Exception:
             log.exception("Dynamic source map refresh failed")
         if cmd in {"/helperstatus", "/addhelperstatus"}:
