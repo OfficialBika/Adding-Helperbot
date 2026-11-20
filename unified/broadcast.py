@@ -40,9 +40,11 @@ ACTIVE_CHAT_TYPES = frozenset({"private", "group", "supergroup"})
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
 BROADCAST_CONFIRM_TTL = timedelta(minutes=15)
 BROADCAST_MAX_ATTEMPTS = 4
-BROADCAST_CONCURRENCY = 4
-BROADCAST_RATE_PER_SECOND = 18.0
-BROADCAST_DELIVERY_BATCH_SIZE = 400
+# Telegram's global limits vary by chat type/method. Keep a conservative
+# process-wide pace and bound worker parallelism separately via environment.
+BROADCAST_CONCURRENCY = max(1, min(15, int(getattr(settings, "broadcast_workers", 15))))
+BROADCAST_RATE_PER_SECOND = float(getattr(settings, "broadcast_rate_per_second", 18.0))
+BROADCAST_DELIVERY_BATCH_SIZE = max(50, min(1000, int(getattr(settings, "broadcast_delivery_batch_size", 400))))
 CHAT_REGISTRY_TOUCH_SECONDS = 600.0
 CHAT_REGISTRY_MAX_MEMORY_ENTRIES = 50_000
 PROGRESS_UPDATE_EVERY = 25
