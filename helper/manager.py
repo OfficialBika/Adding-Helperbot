@@ -150,7 +150,7 @@ class HelperManager:
             return []
 
     async def _run_dynamic_dm(self, item, start_id, delay):
-        """Bounded, checkpointed DM collector for one approved registration."""
+        """Bounded, checkpointed collector. Any uncertain reply is retried, not forwarded."""
         from pyrogram.errors import FloodWait
         registration_id = str(item.get("registration_id") or "")
         key = str(item.get("source_key") or "").strip().lower()
@@ -158,11 +158,9 @@ class HelperManager:
         template = str(item.get("dm_command") or "")
         if not registration_id or not key or not bot or "{id}" not in template:
             raise ValueError("Invalid dynamic DM registration")
-        # A finite cap is mandatory. This avoids accidentally running an
-        # unbounded crawler against a third-party bot.
         max_id = int(item.get("max_id") or 0)
         if max_id < start_id:
-            raise ValueError("This source has no valid max_id configured; update its registration first.")
+            raise ValueError("This source has no valid max_id configured.")
         max_misses = max(1, min(int(item.get("max_no_response", 10)), 100))
         timeout = max(5, min(int(item.get("response_timeout", 30)), 120))
         delay = max(1, min(int(delay), MAX_DELAY))
@@ -173,64 +171,75 @@ class HelperManager:
         misses = int(progress.get("consecutive_no_response", 0) or 0)
         try:
             while current_id <= max_id:
-                while not q.empty():
-                    try:
-                        q.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
+                # Do not drain replies at the next iteration: the queue is
+                # consumed only for the in-flight ID and all replies are checked.
                 progress.update({"source_key": key, "pending_id": current_id, "next_id": current_id, "running": True})
                 self._save()
                 command = template.replace("{id}", str(current_id))
                 try:
                     await self.client.send_message(bot, command)
-                    response = await asyncio.wait_for(q.get(), timeout=timeout)
                 except FloodWait as exc:
                     pause = max(1, min(int(getattr(exc, "value", 1) or 1), 3600))
                     progress.update({"pending_id": current_id, "next_id": current_id, "last_error": f"FloodWait {pause}s"})
                     self._save()
                     await asyncio.sleep(pause)
                     continue
-                except asyncio.TimeoutError:
+                deadline = asyncio.get_running_loop().time() + timeout
+                response = None
+                sender_mismatch = False
+                while True:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        candidate = await asyncio.wait_for(q.get(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    user = getattr(candidate, "from_user", None)
+                    candidate_username = (getattr(user, "username", "") or "").lower()
+                    candidate_uid = str(getattr(user, "id", "") or "")
+                    expected_username = bot.lstrip("@").lower()
+                    expected_uid = str(item.get("bot_user_id") or "")
+                    sender_ok = (
+                        (expected_username and candidate_username == expected_username)
+                        or (expected_uid and candidate_uid == expected_uid)
+                    )
+                    if not sender_ok:
+                        sender_mismatch = True
+                        continue
+                    candidate_text = "\\n".join(str(v) for v in (
+                        getattr(candidate, "text", None), getattr(candidate, "caption", None)
+                    ) if isinstance(v, str) and v.strip())
+                    # The current numeric ID must occur as a standalone number.
+                    # Do not accept unrelated/late replies or IDs embedded in a
+                    # larger identifier; retain the checkpoint for a safe retry.
+                    if not re.search(rf"(?<!\\d){current_id}(?!\\d)", candidate_text):
+                        continue
+                    response = candidate
+                    break
+                if response is None:
                     misses += 1
-                    progress.update({"pending_id": None, "last_checked_id": current_id, "next_id": current_id + 1, "consecutive_no_response": misses})
+                    progress.update({
+                        "pending_id": None, "last_checked_id": current_id,
+                        "next_id": current_id + 1, "consecutive_no_response": misses,
+                        "last_error": "sender mismatch or response timeout" if sender_mismatch else "response timeout",
+                    })
                     self._save()
                     if misses >= max_misses:
                         break
                     current_id += 1
                     await asyncio.sleep(delay)
                     continue
-
-                # Accept only the registered bot's direct reply and only a
-                # media-bearing response; text-only status/errors are ignored.
-                response_user = getattr(response, "from_user", None)
-                response_username = (getattr(response_user, "username", "") or "").lower()
-                response_uid = str(getattr(response_user, "id", "") or "")
-                expected_username = bot.lstrip("@").lower()
-                expected_uid = str(item.get("bot_user_id") or "")
-                sender_matches = (
-                    (expected_username and response_username == expected_username)
-                    or (expected_uid and response_uid == expected_uid)
-                )
-                response_text = "\n".join(str(v) for v in (getattr(response, "text", None), getattr(response, "caption", None)) if v)
-                # Correlate to the exact requested numeric ID whenever the bot
-                # includes it in its reply. Unrelated or stale replies stay out
-                # of the Adding pipeline and do not advance the checkpoint.
-                id_patterns = (
-                    rf"(?i)\\b(?:id|no\\.?|number)\\s*[:#-]?\\s*{current_id}\\b",
-                    rf"(?<!\\d){current_id}(?!\\d)",
-                )
-                id_matches = any(re.search(pattern, response_text) for pattern in id_patterns)
-                if not sender_matches or not id_matches:
-                    progress.update({"pending_id": current_id, "next_id": current_id, "last_error": "response sender or ID mismatch"})
-                    self._save()
-                    continue
                 has_media = any(getattr(response, name, None) for name in ("photo", "video", "animation", "document"))
                 if has_media:
                     await self.client.forward_messages(self.runtime.adding_chat_id, response.chat.id, response.id)
                 else:
-                    log.info("Dynamic DM text-only response skipped key=%s id=%s text=%r", key, current_id, response_text[:160])
+                    log.info("Dynamic DM text-only reply skipped key=%s id=%s", key, current_id)
                 misses = 0
-                progress.update({"pending_id": None, "last_checked_id": current_id, "next_id": current_id + 1, "consecutive_no_response": 0})
+                progress.update({
+                    "pending_id": None, "last_checked_id": current_id,
+                    "next_id": current_id + 1, "consecutive_no_response": 0,
+                })
                 self._save()
                 current_id += 1
                 await asyncio.sleep(delay)
@@ -241,23 +250,21 @@ class HelperManager:
             log.exception("Dynamic DM worker failed key=%s", key)
         finally:
             progress["running"] = False
-            # Keep pending_id intact when cancelled/error occurs so resume retries
-            # the same ID rather than skipping the in-flight request.
             self._save()
             self.runners.pop(runner_key, None)
 
     async def _start_dynamic_dm(self, item, start_id=None, delay=DEFAULT_DELAY):
         registration_id = str(item.get("registration_id") or "")
-        key = f"dynamic:{registration_id}"
+        runner_key = f"dynamic:{registration_id}"
         if not registration_id:
             raise ValueError("Invalid registration ID")
-        current = self.runners.get(key)
+        current = self.runners.get(runner_key)
         if current and not current.task.done():
             raise RuntimeError("Dynamic source is already running")
         progress = (self._state.get("dynamic_dm_progress") or {}).get(registration_id) or {}
         initial = int(start_id or progress.get("pending_id") or progress.get("next_id") or 1)
-        task = asyncio.create_task(self._run_dynamic_dm(item, initial, delay), name=key)
-        self.runners[key] = Runner(task, str(item.get("source_key") or key), "dynamic_dm")
+        task = asyncio.create_task(self._run_dynamic_dm(item, initial, delay), name=runner_key)
+        self.runners[runner_key] = Runner(task, str(item.get("source_key") or runner_key), "dynamic_dm")
 
     def _bot_id_for(self, key):
         return str(self._state.get("dm_bot_ids", {}).get(key, ""))
