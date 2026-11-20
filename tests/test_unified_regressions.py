@@ -788,3 +788,49 @@ class BroadcastRegistryStatsTests(unittest.TestCase):
         self.assertIn("await bot.copy_message(", source)
 
 
+
+
+class WaifuCheatBuiltinParserTests(unittest.TestCase):
+    def test_extracts_name_and_id_from_card_header_and_id_row(self):
+        from unified.parser import extract_name, extract_character_id
+
+        card = (
+            "🌸 Furina [🍰]\n"
+            "📺 Genshin Impact [🎮]\n"
+            "💎 🟡 Legend\n"
+            "🆔 2101\n"
+            "Guessed globally 16 times."
+        )
+        self.assertEqual(extract_name(card), "Furina [🍰]")
+        self.assertEqual(extract_character_id(card), "2101")
+
+    def test_preserves_bracketed_character_suffix(self):
+        from unified.parser import extract_name
+
+        card = "🌸 Albedo [🤖] #A\n📺 Overlord\n💎 🌸 Special Edition\n🆔 2144"
+        self.assertEqual(extract_name(card), "Albedo [🤖] #A")
+
+    def test_supports_variation_selector_on_id_emoji(self):
+        from unified.parser import extract_character_id
+
+        card = "🌸 Furina [🍰]\n🆔️ 2101"
+        self.assertEqual(extract_character_id(card), "2101")
+
+    def test_does_not_accept_flower_header_without_numeric_id_row(self):
+        from unified.parser import extract_name, extract_character_id
+
+        card = "🌸 Not a character card\n📺 Some Series\nGuessed globally 2 times."
+        self.assertIsNone(extract_name(card))
+        self.assertIsNone(extract_character_id(card))
+
+    def test_does_not_capture_unrelated_id_without_flower_header(self):
+        from unified.parser import extract_character_id
+
+        self.assertIsNone(extract_character_id("🆔 2101\nSome unrelated text"))
+
+    def test_existing_builtin_capture_parser_remains_unchanged(self):
+        from unified.parser import extract_name, extract_character_id
+
+        card = "New Character Added\n🎭 Name: Furina\n🆔 ID: 2101"
+        self.assertEqual(extract_name(card), "Furina")
+        self.assertEqual(extract_character_id(card), "2101")
