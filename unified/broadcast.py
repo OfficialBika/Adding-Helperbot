@@ -1126,18 +1126,18 @@ async def broadcast_confirmation_callback(query: CallbackQuery) -> None:
         await query.answer("Not authorized.", show_alert=True)
         return
 
-    try:
-        await query.answer()
-    except Exception:
-        # A stale callback can no longer be answered by Telegram. Continue
-        # checking durable job state so the owner still gets a clear result.
-        log.warning("BROADCAST callback acknowledgement failed; continuing state check job_data=%s", bool(query.data))
-
     parts = str(query.data or "").split(":")
     if len(parts) != 3 or parts[1] not in {"confirm", "cancel"}:
         await query.answer("Invalid broadcast action.", show_alert=True)
         return
     action, job_id = parts[1], parts[2]
+    try:
+        await query.answer()
+    except Exception:
+        # A stale callback can no longer be answered by Telegram. Continue
+        # checking durable job state so the owner still gets a clear result.
+        log.warning("BROADCAST callback acknowledgement failed; continuing state check job=%s", job_id)
+
     job = await broadcast_jobs.find_one(
         {"job_id": job_id, "creator_id": int(query.from_user.id)},
         {"_id": 0},
