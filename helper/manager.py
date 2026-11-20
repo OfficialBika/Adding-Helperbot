@@ -204,12 +204,27 @@ class HelperManager:
                 # media-bearing response; text-only status/errors are ignored.
                 response_user = getattr(response, "from_user", None)
                 response_username = (getattr(response_user, "username", "") or "").lower()
-                if response_username != bot.lstrip("@").lower():
-                    progress.update({"pending_id": current_id, "next_id": current_id, "last_error": "response sender mismatch"})
+                response_uid = str(getattr(response_user, "id", "") or "")
+                expected_username = bot.lstrip("@").lower()
+                expected_uid = str(item.get("bot_user_id") or "")
+                sender_matches = (
+                    (expected_username and response_username == expected_username)
+                    or (expected_uid and response_uid == expected_uid)
+                )
+                response_text = "\n".join(str(v) for v in (getattr(response, "text", None), getattr(response, "caption", None)) if v)
+                # Correlate to the exact requested numeric ID whenever the bot
+                # includes it in its reply. Unrelated or stale replies stay out
+                # of the Adding pipeline and do not advance the checkpoint.
+                id_patterns = (
+                    rf"(?i)\\b(?:id|no\\.?|number)\\s*[:#-]?\\s*{current_id}\\b",
+                    rf"(?<!\\d){current_id}(?!\\d)",
+                )
+                id_matches = any(re.search(pattern, response_text) for pattern in id_patterns)
+                if not sender_matches or not id_matches:
+                    progress.update({"pending_id": current_id, "next_id": current_id, "last_error": "response sender or ID mismatch"})
                     self._save()
                     continue
                 has_media = any(getattr(response, name, None) for name in ("photo", "video", "animation", "document"))
-                response_text = "\n".join(str(v) for v in (getattr(response, "text", None), getattr(response, "caption", None)) if v)
                 if has_media:
                     await self.client.forward_messages(self.runtime.adding_chat_id, response.chat.id, response.id)
                 else:
