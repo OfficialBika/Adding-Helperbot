@@ -989,14 +989,25 @@ async def _stage_broadcast(message: Message, command: CommandObject) -> None:
         "immediate_start": True,
     }
     await broadcast_jobs.insert_one(job)
-    await message.reply(
-        "🚀 <b>Broadcast started</b>\n\n"
-        f"Job: <code>{job_id}</code>\n"
-        f"Eligible destinations: <code>{recipients:,}</code>\n"
-        f"Payload: <code>{'text' if payload_type == 'text' else 'copied message/media'}</code>\n"
-        "The message is being copied to eligible chats.\n"
-        "Use <code>/broadcast status</code> to monitor or <code>/broadcast cancel</code> to stop."
-    )
+    progress_message = None
+    try:
+        progress_message = await message.reply(
+            "🚀 <b>Broadcast started</b>\n\n"
+            f"Job: <code>{job_id}</code>\n"
+            f"Eligible destinations: <code>{recipients:,}</code>\n"
+            f"Payload: <code>{'text' if payload_type == 'text' else 'copied message/media'}</code>\n"
+            "The message is being copied to eligible chats.\n"
+            "Use <code>/broadcast status</code> to monitor or <code>/broadcast cancel</code> to stop."
+        )
+        await broadcast_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {
+                "control_chat_id": int(progress_message.chat.id),
+                "control_message_id": int(progress_message.message_id),
+            }},
+        )
+    except Exception:
+        log.exception("BROADCAST start notice failed job=%s; queued job remains recoverable", job_id)
     _wakeup.set()
 
 
