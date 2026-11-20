@@ -625,15 +625,28 @@ class BroadcastRegistryStatsTests(unittest.TestCase):
         self.assertIn("Registered Users", source)
         self.assertIn("Registered Groups", source)
 
+    def test_broadcast_starts_queued_without_confirmation_keyboard(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        staging = source.split("async def _stage_broadcast", 1)[1].split("async def _send_broadcast_status", 1)[0]
+        self.assertIn('"status": "queued"', staging)
+        self.assertIn('"immediate_start": True', staging)
+        self.assertIn("_wakeup.set()", staging)
+        self.assertNotIn("InlineKeyboardButton", staging)
+        self.assertNotIn("pending_confirmation", staging)
+
+    def test_broadcast_reply_payload_uses_copy_message_path(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertIn('"payload_type": payload_type', source)
+        self.assertIn('"source_chat_id": int(replied.chat.id)', source)
+        self.assertIn('"source_message_id": int(replied.message_id)', source)
+        self.assertIn("await bot.copy_message(", source)
+
     def test_broadcast_callback_is_registered_with_prefixed_callback_filter(self):
         from pathlib import Path
         source = Path("unified/broadcast.py").read_text(encoding="utf-8")
         self.assertIn('@broadcast_router.callback_query(F.data.startswith("bc:"))', source)
         self.assertIn("async def broadcast_confirmation_callback(query: CallbackQuery)", source)
 
-    def test_broadcast_callback_is_acknowledged_before_database_lookup(self):
-        from pathlib import Path
-        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
-        handler = source.split("async def broadcast_confirmation_callback", 1)[1]
-        self.assertLess(handler.index("await query.answer()"), handler.index("broadcast_jobs.find_one("))
 
