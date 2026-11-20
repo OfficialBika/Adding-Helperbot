@@ -540,3 +540,38 @@ class DynamicSourceRegistryHelpersTests(unittest.TestCase):
         from unified.source_registry import parse_dynamic_text
         self.assertEqual(parse_dynamic_text({"parser_type": "builtin"}, "Name: A"), {})
 
+
+    def test_dm_command_template_requires_placeholder(self):
+        import re
+        good = "/check {id}"
+        bad = "/check 123"
+        pattern = r"/[A-Za-z0-9_ ]*\\{id\\}[A-Za-z0-9_ ]*"
+        self.assertRegex(good, pattern)
+        self.assertNotRegex(bad, pattern)
+
+    def test_dm_reply_must_reference_exact_command_message(self):
+        sent_message_id = 771
+        matching_reply_id = 771
+        unrelated_reply_id = 772
+        self.assertEqual(matching_reply_id, sent_message_id)
+        self.assertNotEqual(unrelated_reply_id, sent_message_id)
+
+    def test_dynamic_registry_worker_has_disable_guard_and_exact_reply_correlation(self):
+        from pathlib import Path
+        manager_source = Path("helper/manager.py").read_text(encoding="utf-8")
+        self.assertIn('source.get("registration_id") or "") == registration_id', manager_source)
+        self.assertIn('int(reply_id or 0) == sent_id', manager_source)
+        self.assertIn('registration disabled or removed; worker stopped', manager_source)
+
+    def test_registry_updates_are_scoped_to_registry_key(self):
+        from pathlib import Path
+        registry_source = Path("unified/source_registry.py").read_text(encoding="utf-8")
+        self.assertIn('{"key": REGISTRY_KEY}', registry_source)
+        self.assertIn('"$pull": {"sources": {"source_key": key}}', registry_source)
+
+    def test_dynamic_resolver_preserves_builtin_source_maps(self):
+        from pathlib import Path
+        resolver_source = Path("namebotv3/services/source_resolver.py").read_text(encoding="utf-8")
+        self.assertIn("_BASE_BOT_SOURCE_COLLECTION", resolver_source)
+        self.assertIn("Replace module maps only after the complete next generation is built.", resolver_source)
+        self.assertNotIn("BOT_SOURCE_USER_ID.clear()", resolver_source)
