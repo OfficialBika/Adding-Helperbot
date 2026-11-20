@@ -380,6 +380,24 @@ def _target_query_for_type(chat_type: str | None = None) -> dict[str, Any]:
     return query
 
 
+async def get_broadcast_audience_counts() -> dict[str, int]:
+    """Return MongoDB counts using the exact eligibility filter used for delivery."""
+    users, groups, total, registered_users, registered_groups = await asyncio.gather(
+        bot_chats.count_documents(_target_query_for_type("private")),
+        bot_chats.count_documents(_target_query_for_type("group")),
+        bot_chats.count_documents(_target_query()),
+        bot_chats.count_documents({"chat_type": "private"}),
+        bot_chats.count_documents({"chat_type": {"$in": sorted(GROUP_CHAT_TYPES)}}),
+    )
+    return {
+        "eligible_users": int(users),
+        "eligible_groups": int(groups),
+        "eligible_total": int(total),
+        "registered_users": int(registered_users),
+        "registered_groups": int(registered_groups),
+    }
+
+
 def _format_progress(job: dict[str, Any]) -> str:
     status = str(job.get("status") or "unknown")
     sent = int(job.get("sent_count") or 0)
