@@ -635,6 +635,29 @@ class BroadcastRegistryStatsTests(unittest.TestCase):
         self.assertNotIn("InlineKeyboardButton", staging)
         self.assertNotIn("pending_confirmation", staging)
 
+    def test_immediate_broadcast_has_no_inline_callback_route(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        self.assertNotIn('@broadcast_router.callback_query(F.data.startswith("bc:"))', source)
+        self.assertNotIn("async def broadcast_confirmation_callback", source)
+
+    def test_copy_mode_retains_source_chat_and_message_ids(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        staging = source.split("async def _stage_broadcast", 1)[1].split("async def _send_broadcast_status", 1)[0]
+        self.assertIn('"source_chat_id": int(replied.chat.id)', staging)
+        self.assertIn('"source_message_id": int(replied.message_id)', staging)
+        delivery = source.split("async def _deliver_to_chat", 1)[1].split("async def _initialize_job_deliveries", 1)[0]
+        self.assertIn("await bot.copy_message(", delivery)
+
+    def test_immediate_broadcast_records_control_message_for_progress(self):
+        from pathlib import Path
+        source = Path("unified/broadcast.py").read_text(encoding="utf-8")
+        staging = source.split("async def _stage_broadcast", 1)[1].split("async def _send_broadcast_status", 1)[0]
+        self.assertIn('"control_chat_id": int(progress_message.chat.id)', staging)
+        self.assertIn('"control_message_id": int(progress_message.message_id)', staging)
+
+
     def test_broadcast_reply_payload_uses_copy_message_path(self):
         from pathlib import Path
         source = Path("unified/broadcast.py").read_text(encoding="utf-8")
